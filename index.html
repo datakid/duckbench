@@ -3,16 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Duckbench — a duck-powered data workbench</title>
+<title>Duckbench</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-/* ============================================================
-   Duckbench — design tokens
-   Colors are stored as R,G,B triples so rgba(var(--x-rgb),a) works
-   for tints/glows in both themes without hardcoding hex per-theme.
-   ============================================================ */
 :root{
   --ink-0-rgb: 20,23,28;      --ink-0: rgb(var(--ink-0-rgb));
   --ink-1-rgb: 27,32,40;      --ink-1: rgb(var(--ink-1-rgb));
@@ -42,12 +37,12 @@
   --font-body: "IBM Plex Sans", -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", "SF Mono", monospace;
 
-  --radius-s: 3px;
-  --radius-m: 5px;
+  --radius-s: 6px;
+  --radius-m: 10px;
+  --radius-l: 16px;
   --shadow-panel: 0 8px 28px rgba(0,0,0,var(--shadow-strength));
 }
 
-/* ---- Light theme: "morning pond" — warm paper, not stark white ---- */
 :root[data-theme="light"]{
   --ink-0-rgb: 246,243,234;
   --ink-1-rgb: 255,253,247;
@@ -100,9 +95,6 @@ button{font-family:inherit;}
 
 #app{min-height:100vh;display:flex;flex-direction:column;}
 
-/* ============================================================
-   Masthead
-   ============================================================ */
 .masthead{
   display:flex;align-items:center;justify-content:space-between;
   padding:18px 28px;
@@ -123,6 +115,59 @@ button{font-family:inherit;}
 .tagline{margin:1px 0 0;font-size:11.5px;color:var(--muted);letter-spacing:0.02em;}
 .masthead-right{display:flex;align-items:center;gap:16px;}
 .engine-status{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);}
+.engine-version-btn{
+  background:none;border:1px solid var(--line);color:var(--muted);
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.03em;
+  padding:5px 10px;border-radius:var(--radius-s);cursor:pointer;transition:border-color .15s,color .15s;
+}
+.engine-version-btn:hover{border-color:var(--brass-dim);color:var(--paper);}
+.version-box{width:380px;}
+.version-box-title{margin:0 0 14px;font-family:var(--font-display);font-size:16px;font-weight:500;color:var(--paper);}
+.version-rows{display:flex;flex-direction:column;gap:7px;font-size:12.5px;}
+.version-row{display:flex;justify-content:space-between;gap:12px;color:var(--paper-dim);}
+.version-row strong{color:var(--brass-bright);font-family:var(--font-mono);font-weight:500;}
+
+.palette-overlay{
+  position:fixed;inset:0;background:rgba(var(--ink-0-rgb),0.55);backdrop-filter:blur(3px);
+  display:flex;align-items:flex-start;justify-content:center;padding-top:14vh;z-index:70;
+}
+.palette-box{
+  width:560px;max-width:92vw;max-height:64vh;display:flex;flex-direction:column;
+  background:var(--ink-1);border:1px solid var(--line);border-radius:var(--radius-l);
+  box-shadow:var(--shadow-panel);overflow:hidden;animation:riseIn .16s cubic-bezier(.2,.8,.3,1);
+}
+.palette-search-row{
+  display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line-soft);flex-shrink:0;
+}
+.palette-search-icon{width:17px;height:17px;color:var(--muted);flex-shrink:0;}
+.palette-input{
+  flex:1;background:none;border:none;outline:none;color:var(--paper);
+  font-family:var(--font-body);font-size:14.5px;
+}
+.palette-input::placeholder{color:var(--muted);}
+.palette-kbd{
+  font-family:var(--font-mono);font-size:10px;color:var(--muted);border:1px solid var(--line);
+  border-radius:4px;padding:2px 6px;letter-spacing:0.04em;flex-shrink:0;
+}
+.palette-results{overflow-y:auto;padding:8px;}
+.palette-section-label{
+  font-family:var(--font-mono);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;
+  color:var(--muted);padding:10px 10px 6px;
+}
+.palette-item{
+  display:flex;align-items:center;gap:11px;width:100%;text-align:left;
+  background:none;border:none;border-left:3px solid transparent;border-radius:var(--radius-s);
+  padding:9px 10px;cursor:pointer;color:var(--paper-dim);
+}
+.palette-item.cat-row{border-left-color:var(--brass-dim);}
+.palette-item.cat-column{border-left-color:rgba(var(--verdigris-rgb),0.55);}
+.palette-item.cat-aggregate{border-left-color:rgba(var(--rust-rgb),0.55);}
+.palette-item.cat-shape{border-left-color:rgba(var(--plum-rgb),0.55);}
+.palette-item.is-active{background:var(--ink-3);color:var(--paper);}
+.palette-item-text{display:flex;flex-direction:column;gap:1px;min-width:0;}
+.palette-item-text strong{font-size:13px;font-weight:500;color:var(--paper);}
+.palette-item-text span{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.palette-empty{padding:24px 10px;text-align:center;color:var(--muted);font-size:13px;}
 .status-dot{
   position:relative;width:7px;height:7px;border-radius:50%;background:var(--brass-dim);transition:background .3s;
 }
@@ -152,9 +197,6 @@ button{font-family:inherit;}
 .theme-toggle-track{position:absolute;inset:0;display:flex;align-items:center;justify-content:space-between;padding:0 6px;color:var(--muted);}
 .theme-toggle-track svg{width:11px;height:11px;}
 
-/* ============================================================
-   Import screen
-   ============================================================ */
 .import-screen{
   flex:1;display:flex;align-items:center;justify-content:center;padding:40px;position:relative;
 }
@@ -206,14 +248,10 @@ button{font-family:inherit;}
   color:var(--rust-text);font-size:12.5px;
 }
 
-/* ============================================================
-   Workbench layout
-   ============================================================ */
 .workbench{
   flex:1;display:grid;grid-template-columns:280px 1fr;min-height:0;
 }
 
-/* ---- Steps rail ---- */
 .steps-rail{
   border-right:1px solid var(--line-soft);
   background:var(--ink-1);
@@ -230,7 +268,7 @@ button{font-family:inherit;}
 .rail-source{padding:0 16px;}
 .rail-node{
   display:flex;gap:10px;align-items:flex-start;
-  padding:10px 10px;border-radius:var(--radius-s);
+  padding:12px 12px;border-radius:var(--radius-m);
   background:var(--ink-2);border:1px solid var(--line-soft);
   border-left:3px solid var(--brass-dim);
 }
@@ -256,7 +294,7 @@ button{font-family:inherit;}
   animation:riseIn .35s cubic-bezier(.2,.8,.3,1) backwards;
 }
 .step-card{
-  padding:10px 10px;border-radius:var(--radius-s);
+  padding:12px 12px;border-radius:var(--radius-m);
   background:var(--ink-2);border:1px solid var(--line-soft);
   border-left:3px solid var(--line);
   cursor:pointer;transition:border-color .15s, transform .1s;
@@ -264,7 +302,6 @@ button{font-family:inherit;}
 .step-card:hover{border-color:var(--brass-dim);}
 .step-card.is-selected{border-color:var(--brass);box-shadow:0 0 0 1px rgba(var(--brass-rgb),0.25);}
 
-/* category accents — row ops (brass), column ops (verdigris), aggregation (rust) */
 .step-card.cat-row{border-left-color:var(--brass-dim);}
 .step-card.cat-column{border-left-color:rgba(var(--verdigris-rgb),0.55);}
 .step-card.cat-aggregate{border-left-color:rgba(var(--rust-rgb),0.55);}
@@ -278,7 +315,7 @@ button{font-family:inherit;}
 .step-num{font-family:var(--font-mono);font-size:10px;color:var(--muted);letter-spacing:0.04em;}
 .step-code{
   font-family:var(--font-mono);font-size:9.5px;letter-spacing:0.06em;font-weight:500;
-  padding:1px 6px;border-radius:2px;border:1px solid currentColor;
+  padding:1px 6px;border-radius:4px;border:1px solid currentColor;
 }
 .code-row{color:var(--brass-bright);border-color:var(--brass-dim);background:rgba(var(--brass-rgb),0.08);}
 .code-column{color:var(--verdigris-text);border-color:rgba(var(--verdigris-rgb),0.5);background:rgba(var(--verdigris-rgb),0.08);}
@@ -295,7 +332,7 @@ button{font-family:inherit;}
 .step-row-actions{display:flex;gap:4px;margin-top:6px;}
 .step-mini-btn{
   background:none;border:none;color:var(--muted);font-size:10.5px;cursor:pointer;
-  padding:2px 5px;border-radius:2px;font-family:var(--font-mono);
+  padding:3px 6px;border-radius:5px;font-family:var(--font-mono);
 }
 .step-mini-btn:hover{color:var(--paper);background:var(--ink-3);}
 .step-mini-btn:disabled{opacity:0.3;cursor:not-allowed;}
@@ -303,13 +340,10 @@ button{font-family:inherit;}
 
 .rail-foot{padding:10px 16px 16px;border-top:1px solid var(--line-soft);}
 
-/* ============================================================
-   Bench main (preview / editor)
-   ============================================================ */
 .bench-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
 .bench-toolbar{
   display:flex;align-items:center;justify-content:space-between;
-  padding:10px 22px;border-bottom:1px solid var(--line-soft);flex-shrink:0;
+  padding:12px 24px;border-bottom:1px solid var(--line-soft);flex-shrink:0;
 }
 .toolbar-tabs{display:flex;gap:4px;}
 .tab-btn{
@@ -325,19 +359,38 @@ button{font-family:inherit;}
 .pane{display:none;flex:1;min-height:0;flex-direction:column;}
 .pane.is-active{display:flex;}
 
-/* ---- Preview table ---- */
 .preview-table-wrap{flex:1;overflow:auto;}
 .preview-table{border-collapse:collapse;width:100%;font-size:12.5px;font-family:var(--font-mono);}
 .preview-table thead th{
   position:sticky;top:0;background:var(--ink-1);
-  text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);
+  text-align:left;padding:10px 16px;border-bottom:1px solid var(--line);
   color:var(--brass-bright);font-weight:500;white-space:nowrap;
 }
 .preview-table th.col-numeric, .preview-table td.col-numeric{text-align:right;}
 .th-name{display:block;font-size:11px;letter-spacing:0.02em;}
 .th-type{display:block;font-size:9px;color:var(--muted);font-weight:400;letter-spacing:0.06em;margin-top:2px;}
+.th-quality{
+  display:flex;height:4px;border-radius:2px;overflow:hidden;margin-top:7px;
+  background:var(--ink-3);cursor:default;
+}
+.th-quality-valid{background:rgba(var(--verdigris-rgb),0.75);}
+.th-quality-empty{background:rgba(var(--muted-rgb),0.4);}
+.preview-table:not(.show-quality) .th-quality{display:none;}
+.preview-table th{cursor:pointer;}
+.preview-table th:hover{background:rgba(var(--paper-rgb),0.04);}
+.preview-table th.is-stats-active{background:rgba(var(--verdigris-rgb),0.1);}
+.column-stats{
+  display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+  padding:10px 16px;border-top:1px solid var(--line-soft);
+  background:rgba(var(--paper-rgb),0.02);font-family:var(--font-mono);font-size:11.5px;flex-shrink:0;
+}
+.column-stats-name{color:var(--paper);font-weight:500;}
+.column-stats-item{display:flex;gap:5px;color:var(--muted);}
+.column-stats-item strong{color:var(--verdigris-text);font-weight:500;}
+.column-stats-close{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;}
+.column-stats-close:hover{color:var(--paper);}
 .preview-table tbody td{
-  padding:7px 14px;border-bottom:1px solid var(--line-soft);
+  padding:8px 16px;border-bottom:1px solid var(--line-soft);
   color:var(--paper-dim);white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;
 }
 .null-cell{color:var(--muted);}
@@ -345,7 +398,6 @@ button{font-family:inherit;}
 .preview-table tbody tr:nth-child(even) td{background:rgba(var(--paper-rgb),0.02);}
 .preview-empty{margin:auto;color:var(--muted);font-size:13px;}
 
-/* ---- SQL editor pane ---- */
 .editor-notice{
   padding:12px 22px;font-size:12px;color:var(--muted);
   border-bottom:1px solid var(--line-soft);line-height:1.5;
@@ -364,9 +416,6 @@ button{font-family:inherit;}
 .editor-status.is-error{color:var(--rust-text);}
 .editor-status.is-ok{color:var(--verdigris);}
 
-/* ============================================================
-   Buttons
-   ============================================================ */
 .btn-solid{
   background:var(--brass);color:var(--ink-0);border:none;
   font-weight:600;border-radius:var(--radius-s);cursor:pointer;
@@ -380,16 +429,13 @@ button{font-family:inherit;}
   border-radius:var(--radius-s);cursor:pointer;transition:border-color .15s, color .15s;
 }
 .btn-ghost:hover{border-color:var(--brass-dim);color:var(--paper);}
+.btn-ghost.is-active{background:rgba(var(--verdigris-rgb),0.14);color:var(--verdigris-text);border-color:rgba(var(--verdigris-rgb),0.45);}
 .btn-small{padding:6px 12px;font-size:12px;}
 .btn-icon{
   background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;
   width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
 }
 .btn-icon:hover{color:var(--paper);background:var(--ink-3);}
-
-/* ============================================================
-   Step drawer
-   ============================================================ */
 .drawer-overlay{
   position:fixed;inset:0;background:rgba(var(--ink-0-rgb),0.55);backdrop-filter:blur(2px);
   display:flex;justify-content:flex-end;z-index:50;
@@ -419,8 +465,8 @@ button{font-family:inherit;}
 .field textarea{font-family:var(--font-mono);resize:vertical;min-height:70px;}
 .field select:focus, .field input:focus, .field textarea:focus{border-color:var(--brass-dim);}
 .field-hint{font-size:11px;color:var(--muted);line-height:1.6;}
-.field-hint code{font-family:var(--font-mono);background:var(--ink-2);padding:1px 4px;border-radius:2px;color:var(--paper-dim);}
-.checkbox-list{display:flex;flex-direction:column;gap:7px;max-height:220px;overflow-y:auto;padding:4px 2px;}
+.field-hint code{font-family:var(--font-mono);background:var(--ink-2);padding:1px 5px;border-radius:4px;color:var(--paper-dim);}
+.checkbox-list{display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;padding:4px 2px;}
 .checkbox-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--paper-dim);}
 .checkbox-row input{accent-color:var(--brass);}
 .agg-row{display:flex;gap:6px;align-items:center;}
@@ -434,21 +480,6 @@ button{font-family:inherit;}
 }
 .type-picker button:hover{border-color:var(--brass-dim);color:var(--paper);}
 .type-picker button.is-selected{border-color:var(--brass);color:var(--brass-bright);background:rgba(var(--brass-rgb),0.1);}
-.type-pick-list{display:flex;flex-direction:column;gap:8px;}
-.type-pick-btn{
-  display:flex;gap:10px;align-items:flex-start;text-align:left;width:100%;
-  padding:11px 12px;border-radius:var(--radius-s);
-  background:var(--ink-2);border:1px solid var(--line-soft);border-left:3px solid var(--line);
-  cursor:pointer;transition:border-color .15s;
-}
-.type-pick-btn:hover{border-color:var(--brass-dim);}
-.type-pick-btn.cat-row{border-left-color:var(--brass-dim);}
-.type-pick-btn.cat-column{border-left-color:rgba(var(--verdigris-rgb),0.55);}
-.type-pick-btn.cat-aggregate{border-left-color:rgba(var(--rust-rgb),0.55);}
-.type-pick-btn.cat-shape{border-left-color:rgba(var(--plum-rgb),0.55);}
-.type-pick-text{display:flex;flex-direction:column;gap:2px;padding-top:1px;}
-.type-pick-text strong{font-size:12.5px;color:var(--paper);font-weight:500;}
-.type-pick-text span{font-size:11px;color:var(--muted);}
 .drawer-error{
   padding:12px 14px;border-radius:var(--radius-s);
   background:rgba(var(--rust-rgb),0.1);border:1px solid rgba(var(--rust-rgb),0.3);
@@ -461,25 +492,38 @@ button{font-family:inherit;}
   color:var(--rust-text);font-size:12px;line-height:1.5;
   animation:riseIn .18s cubic-bezier(.2,.8,.3,1);
 }
+.drawer-preview{
+  margin:4px 20px 14px;border:1px solid var(--line-soft);border-radius:var(--radius-m);
+  background:rgba(var(--paper-rgb),0.02);overflow:hidden;
+}
+.drawer-preview-head{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:8px 12px;font-family:var(--font-mono);font-size:11px;color:var(--muted);
+  border-bottom:1px solid var(--line-soft);
+}
+.drawer-preview-count{color:var(--verdigris-text);font-weight:500;}
+.drawer-preview-hint{margin:0;padding:12px;font-size:12px;color:var(--muted);text-align:center;}
+.drawer-preview-table{width:100%;border-collapse:collapse;font-size:11px;font-family:var(--font-mono);}
+.drawer-preview-table th{
+  text-align:left;padding:6px 10px;color:var(--muted);font-weight:500;
+  border-bottom:1px solid var(--line-soft);white-space:nowrap;
+}
+.drawer-preview-table td{padding:5px 10px;color:var(--paper-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;}
+.drawer-preview-table tr:nth-child(even) td{background:rgba(var(--paper-rgb),0.02);}
+.drawer-preview-more{padding:6px 12px;font-size:10.5px;color:var(--muted);text-align:center;border-top:1px solid var(--line-soft);}
 
-/* ============================================================
-   Confirm dialog (themed replacement for window.confirm)
-   ============================================================ */
 .confirm-overlay{
   position:fixed;inset:0;background:rgba(var(--ink-0-rgb),0.55);backdrop-filter:blur(2px);
   display:flex;align-items:center;justify-content:center;z-index:60;
 }
 .confirm-box{
   width:320px;max-width:90vw;background:var(--ink-1);border:1px solid var(--line);
-  border-radius:var(--radius-m);box-shadow:var(--shadow-panel);padding:20px;
+  border-radius:var(--radius-l);box-shadow:var(--shadow-panel);padding:20px;
   animation:riseIn .2s cubic-bezier(.2,.8,.3,1);
 }
 .confirm-box p{margin:0 0 18px;font-size:13px;color:var(--paper);line-height:1.55;}
 .confirm-actions{display:flex;justify-content:flex-end;gap:10px;}
 
-/* ============================================================
-   Responsive
-   ============================================================ */
 @media (max-width: 860px){
   .workbench{grid-template-columns:1fr;}
   .steps-rail{border-right:none;border-bottom:1px solid var(--line-soft);max-height:260px;}
@@ -502,7 +546,6 @@ button{font-family:inherit;}
 
 <div id="app">
 
-  <!-- ===== Header ===== -->
   <header class="masthead">
     <div class="masthead-left">
       <span class="mark" aria-hidden="true">
@@ -531,10 +574,10 @@ button{font-family:inherit;}
         <span class="status-dot"></span>
         <span class="status-label">warming up the duck…</span>
       </span>
+      <button id="engineVersionBtn" class="engine-version-btn" title="View or switch the DuckDB engine version">DuckDB —</button>
     </div>
   </header>
 
-  <!-- ===== Empty state / import ===== -->
   <section id="importScreen" class="import-screen">
     <svg class="pond-decoration" viewBox="0 0 800 220" preserveAspectRatio="none" aria-hidden="true">
       <path d="M0 120 Q 50 100 100 120 T 200 120 T 300 120 T 400 120 T 500 120 T 600 120 T 700 120 T 800 120" stroke="currentColor" stroke-width="1" fill="none" opacity="0.5"/>
@@ -560,14 +603,12 @@ button{font-family:inherit;}
     </div>
   </section>
 
-  <!-- ===== Workbench ===== -->
   <main id="workbench" class="workbench" hidden>
 
-    <!-- Left: applied steps rail -->
     <aside class="steps-rail">
       <div class="rail-head">
         <h2>Applied steps</h2>
-        <button id="addStepBtn" class="btn-ghost btn-small" title="Add a step">+ Step</button>
+        <button id="addStepBtn" class="btn-ghost btn-small" title="Add a step (⌘K)">+ Step <kbd class="palette-kbd">⌘K</kbd></button>
       </div>
 
       <div class="rail-source" id="railSource"></div>
@@ -579,7 +620,6 @@ button{font-family:inherit;}
       </div>
     </aside>
 
-    <!-- Right: preview + editor -->
     <section class="bench-main">
 
       <div class="bench-toolbar">
@@ -589,11 +629,11 @@ button{font-family:inherit;}
         </div>
         <div class="toolbar-actions">
           <span id="rowCountLabel" class="row-count-label"></span>
+          <button id="qualityToggleBtn" class="btn-ghost btn-small" title="Show the valid/empty ratio under each column, like Power Query's Column Quality view">Column quality</button>
           <button id="exportBtn" class="btn-solid btn-small">Export CSV</button>
         </div>
       </div>
 
-      <!-- Preview pane -->
       <div id="previewPane" class="pane is-active">
         <div id="previewTableWrap" class="preview-table-wrap">
           <table id="previewTable" class="preview-table">
@@ -602,9 +642,9 @@ button{font-family:inherit;}
           </table>
         </div>
         <p id="previewEmpty" class="preview-empty" hidden>No rows to show at this step.</p>
+        <div id="columnStats" class="column-stats" hidden></div>
       </div>
 
-      <!-- Advanced editor pane -->
       <div id="editorPane" class="pane">
         <div class="editor-notice">
           <span>This is the SQL Duckbench builds from your steps. Edit it directly — this becomes the source of truth until you clear it.</span>
@@ -620,7 +660,6 @@ button{font-family:inherit;}
     </section>
   </main>
 
-  <!-- ===== Step editor drawer ===== -->
   <div id="stepDrawerOverlay" class="drawer-overlay" hidden>
     <div id="stepDrawer" class="step-drawer">
       <div class="drawer-head">
@@ -628,6 +667,7 @@ button{font-family:inherit;}
         <button id="drawerClose" class="btn-icon" aria-label="Close">✕</button>
       </div>
       <div id="drawerBody" class="drawer-body"></div>
+      <div id="drawerPreview" class="drawer-preview" hidden></div>
       <div id="drawerValidation" class="drawer-validation" hidden></div>
       <div class="drawer-foot">
         <button id="drawerCancel" class="btn-ghost btn-small">Cancel</button>
@@ -636,7 +676,6 @@ button{font-family:inherit;}
     </div>
   </div>
 
-  <!-- ===== Themed confirm dialog ===== -->
   <div id="confirmOverlay" class="confirm-overlay" hidden>
     <div class="confirm-box">
       <p id="confirmMessage"></p>
@@ -647,19 +686,57 @@ button{font-family:inherit;}
     </div>
   </div>
 
+  <div id="versionOverlay" class="confirm-overlay" hidden>
+    <div class="confirm-box version-box">
+      <h3 class="version-box-title">DuckDB engine</h3>
+      <div class="version-rows">
+        <div class="version-row"><span>Engine (DuckDB core)</span><strong id="versionCoreLabel">—</strong></div>
+        <div class="version-row"><span>duckdb-wasm package</span><strong id="versionPackageLabel">—</strong></div>
+      </div>
+      <div class="field" style="margin-top:16px;">
+        <label>Switch to a different duckdb-wasm version</label>
+        <input type="text" id="versionInput" placeholder="e.g. 1.29.0">
+        <p class="field-hint">Pins an exact release from <a href="https://www.npmjs.com/package/@duckdb/duckdb-wasm?activeTab=versions" target="_blank" rel="noopener">npm's version list</a>. This package has had compromised versions published under its name before (npm pulled them within hours, but check the version you're about to load isn't one people were warned about) — never use "latest". Your loaded file is re-imported automatically after the switch.</p>
+      </div>
+      <div id="versionError" class="drawer-error" hidden></div>
+      <div class="confirm-actions" style="margin-top:16px;">
+        <button id="versionCancelBtn" class="btn-ghost btn-small">Close</button>
+        <button id="versionApplyBtn" class="btn-solid btn-small">Switch version</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="commandPalette" class="palette-overlay" hidden>
+    <div class="palette-box">
+      <div class="palette-search-row">
+        <svg class="palette-search-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="1.7"/><path d="M20 20L15.5 15.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        <input type="text" id="paletteInput" class="palette-input" placeholder="Search transformations…" autocomplete="off" spellcheck="false">
+        <kbd class="palette-kbd">esc</kbd>
+      </div>
+      <div id="paletteResults" class="palette-results"></div>
+    </div>
+  </div>
+
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script type="module">
+const DEFAULT_DUCKDB_VERSION = '1.29.0';
+let duckdb = null;              
+let currentDuckdbVersion = null;
+let lastImportedFile = null;    
 
-// ===== engine.js =====
-// engine.js — wraps DuckDB-WASM: init, file import (csv/xlsx), query, export.
-import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+async function loadDuckdbModule(version) {
+  const url = `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${version}/+esm`;
+  return import(url);
+}
 
 let db = null;
 let conn = null;
 
-async function initEngine() {
+async function initEngine(version = DEFAULT_DUCKDB_VERSION) {
+  duckdb = await loadDuckdbModule(version);
+  currentDuckdbVersion = version;
   const bundles = duckdb.getJsDelivrBundles();
   const bundle = await duckdb.selectBundle(bundles);
   const workerUrl = URL.createObjectURL(
@@ -674,11 +751,20 @@ async function initEngine() {
   return true;
 }
 
+async function getEngineVersionInfo() {
+  const res = await conn.query(`PRAGMA version;`);
+  const row = res.toArray()[0]?.toJSON() || {};
+  return {
+    coreVersion: row.library_version || null,
+    sourceId: row.source_id || null,
+    packageVersion: currentDuckdbVersion,
+  };
+}
+
 function quoteIdent(name) {
   return `"${String(name).replace(/"/g, '""')}"`;
 }
 
-// Reads a File (csv or xlsx/xls) and materializes it into a DuckDB table called "source".
 async function importFile(file) {
   if (!db || !conn) throw new Error('Engine not ready yet.');
   const ext = file.name.split('.').pop().toLowerCase();
@@ -720,7 +806,6 @@ async function describeTable(tableOrSQL) {
   return { rowCount, columns };
 }
 
-// Runs a SQL SELECT and returns { columns: [{name,type}], rows, totalRows } (rows capped for preview).
 async function runPreviewQuery(sql, limit = 200) {
   const clean = sql.trim().replace(/;+\s*$/, '');
   const wrapped = `SELECT * FROM (${clean}) AS __ledger_preview LIMIT ${limit}`;
@@ -754,37 +839,398 @@ async function exportCSV(sql, filename = 'duckbench-export.csv') {
   a.remove();
   URL.revokeObjectURL(url);
 }
-
-// ===== steps.js =====
-// steps.js — the step model. Pure functions: no DOM, no DuckDB calls.
-
-const STEP_TYPES = [
-  { type: 'filter', code: 'FLT', category: 'row', label: 'Filter rows', blurb: 'Keep rows that match a condition.' },
-  { type: 'sort', code: 'SRT', category: 'row', label: 'Sort rows', blurb: 'Order rows by a column.' },
-  { type: 'remove_duplicates', code: 'UNQ', category: 'row', label: 'Remove duplicates', blurb: 'Keep only distinct rows.' },
-  { type: 'remove_blank_rows', code: 'BLK', category: 'row', label: 'Remove blank rows', blurb: 'Drop rows that are entirely empty.' },
-  { type: 'index_column', code: 'IDX', category: 'row', label: 'Add index column', blurb: 'Number the rows, starting wherever you like.' },
-  { type: 'limit', code: 'LIM', category: 'row', label: 'Limit rows', blurb: 'Cap the number of rows.' },
-
-  { type: 'select_columns', code: 'KEEP', category: 'column', label: 'Keep columns', blurb: 'Choose which columns to keep.' },
-  { type: 'remove_columns', code: 'DROP', category: 'column', label: 'Remove columns', blurb: 'Drop columns you don\u2019t need.' },
-  { type: 'rename_column', code: 'REN', category: 'column', label: 'Rename column', blurb: 'Give a column a new name.' },
-  { type: 'change_type', code: 'TYP', category: 'column', label: 'Change type', blurb: 'Cast a column to a different type.' },
-  { type: 'add_column', code: 'ADD', category: 'column', label: 'Add column', blurb: 'Compute a new column from an expression.' },
-  { type: 'conditional_column', code: 'CND', category: 'column', label: 'Conditional column', blurb: 'Add a column with if/then/else logic.' },
-  { type: 'split_column', code: 'SPL', category: 'column', label: 'Split column', blurb: 'Split on a delimiter, into columns or rows.' },
-  { type: 'merge_columns', code: 'MRG', category: 'column', label: 'Merge columns', blurb: 'Combine columns with a separator.' },
-  { type: 'extract_text', code: 'EXT', category: 'column', label: 'Extract text', blurb: 'Pull out text before, after, or between markers.' },
-  { type: 'replace_values', code: 'RPL', category: 'column', label: 'Replace values', blurb: 'Find and replace within a column.' },
-  { type: 'change_case', code: 'CASE', category: 'column', label: 'Change case', blurb: 'UPPER, lower, or Title case.' },
-  { type: 'trim_clean', code: 'TRM', category: 'column', label: 'Trim & clean', blurb: 'Strip whitespace, collapse extra spaces.' },
-  { type: 'fill', code: 'FIL', category: 'column', label: 'Fill down / up', blurb: 'Carry a value forward or backward over blanks.' },
-
-  { type: 'group_by', code: 'AGG', category: 'aggregate', label: 'Group & aggregate', blurb: 'Summarize rows into groups.' },
-
-  { type: 'pivot', code: 'PVT', category: 'shape', label: 'Pivot column', blurb: 'Turn unique values from a column into new columns.' },
-  { type: 'unpivot', code: 'UPV', category: 'shape', label: 'Unpivot columns', blurb: 'Turn columns into attribute/value row pairs.' },
+const FILTER_OPS = [
+  ['=', 'equals'], ['!=', 'not equals'], ['>', 'greater than'], ['>=', 'greater or equal'],
+  ['<', 'less than'], ['<=', 'less or equal'], ['contains', 'contains'], ['starts_with', 'starts with'],
+  ['is_null', 'is empty'], ['is_not_null', 'is not empty'],
 ];
+const TEXT_ONLY_OPS = new Set(['contains', 'starts_with']);
+function operatorsFor(ctx, draft) {
+  const type = ctx.typeOf(draft.column);
+  return (isNumericType(type) || /DATE|TIME/i.test(type || ''))
+    ? FILTER_OPS.filter(([v]) => !TEXT_ONLY_OPS.has(v))
+    : FILTER_OPS;
+}
+
+const TRANSFORMS = {
+
+  filter: {
+    code: 'FLT', category: 'row', label: 'Filter rows', blurb: 'Keep rows that match a condition.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn, reactive: true },
+      { key: 'operator', type: 'enum', label: 'Condition', options: operatorsFor, default: '=', reactive: true },
+      { key: 'value', type: 'text', label: 'Value', default: '', visible: d => !String(d.operator || '').includes('null') },
+    ],
+    validate: d => !d.column ? 'Choose a column.' : null,
+    postRead: (d, ctx) => { d.__columnType = ctx.typeOf(d.column); },
+    toSQL: (d, from) => `SELECT * FROM ${from} WHERE ${filterClause({ ...d, columnType: d.__columnType })}`,
+    describe: d => `${d.column} ${d.operator}${String(d.operator).includes('null') ? '' : ' ' + d.value}`.trim(),
+  },
+
+  sort: {
+    code: 'SRT', category: 'row', label: 'Sort rows', blurb: 'Order rows by one or more columns.',
+    params: [
+      { key: 'columns', type: 'repeater', label: 'Sort by', minItems: 1, addLabel: '+ Add sort column',
+        itemDefault: ctx => ({ column: ctx.firstColumn, direction: 'asc' }),
+        fields: [
+          { key: 'column', type: 'column', label: 'Column' },
+          { key: 'direction', type: 'enum', label: 'Direction', options: [['asc', 'Ascending'], ['desc', 'Descending']] },
+        ] },
+    ],
+    validate: d => (!d.columns || !d.columns.length) ? 'Add at least one sort column.' : null,
+    toSQL: (d, from) => {
+      const cols = (d.columns || []).map(s => `${quoteIdent(s.column)} ${s.direction === 'desc' ? 'DESC' : 'ASC'}`);
+      return `SELECT * FROM ${from}${cols.length ? ` ORDER BY ${cols.join(', ')}` : ''}`;
+    },
+    describe: d => (d.columns || []).map(s => `${s.column} (${s.direction === 'desc' ? 'desc' : 'asc'})`).join(', '),
+  },
+
+  remove_duplicates: {
+    code: 'UNQ', category: 'row', label: 'Remove duplicates', blurb: 'Keep only distinct rows.',
+    params: [
+      { key: 'columns', type: 'columns', label: 'Check these columns only (optional)', default: () => [] },
+    ],
+    validate: () => null,
+    toSQL: (d, from) => {
+      const cols = (d.columns || []).map(quoteIdent);
+      return cols.length ? `SELECT DISTINCT ON (${cols.join(', ')}) * FROM ${from}` : `SELECT DISTINCT * FROM ${from}`;
+    },
+    describe: d => (d.columns || []).length ? `distinct by ${d.columns.join(', ')}` : 'distinct rows only',
+  },
+
+  remove_blank_rows: {
+    code: 'BLK', category: 'row', label: 'Remove blank rows', blurb: 'Drop rows that are entirely empty across chosen columns.',
+    params: [
+      { key: 'columns', type: 'columns', label: 'Check these columns', default: ctx => ctx.allColumns },
+    ],
+    validate: d => (!d.columns || !d.columns.length) ? 'Check at least one column.' : null,
+    toSQL: (d, from) => {
+      const conds = (d.columns || []).map(c => `${quoteIdent(c)} IS NULL`).join(' AND ');
+      return `SELECT * FROM ${from}${conds ? ` WHERE NOT (${conds})` : ''}`;
+    },
+    describe: d => `${(d.columns || []).length} columns checked`,
+  },
+
+  index_column: {
+    code: 'IDX', category: 'row', label: 'Add index column', blurb: 'Number the rows, starting wherever you like.',
+    params: [
+      { key: 'name', type: 'text', label: 'Column name', default: 'index' },
+      { key: 'start', type: 'number', label: 'Start at', default: 1 },
+    ],
+    validate: () => null,
+    toSQL: (d, from) => `SELECT (ROW_NUMBER() OVER () + ${(Number(d.start) || 1) - 1}) AS ${quoteIdent(d.name || 'index')}, * FROM ${from}`,
+    describe: d => `${d.name || 'index'}, starting at ${d.start ?? 1}`,
+  },
+
+  limit: {
+    code: 'LIM', category: 'row', label: 'Limit rows', blurb: 'Cap the number of rows.',
+    params: [{ key: 'n', type: 'number', label: 'Row count', default: 100, min: 1 }],
+    validate: d => (!d.n || d.n < 1) ? 'Enter a row count of at least 1.' : null,
+    toSQL: (d, from) => `SELECT * FROM ${from} LIMIT ${Number(d.n) || 100}`,
+    describe: d => `first ${d.n} rows`,
+  },
+
+  select_columns: {
+    code: 'KEEP', category: 'column', label: 'Keep columns', blurb: 'Choose which columns to keep.',
+    params: [{ key: 'columns', type: 'columns', label: 'Columns to keep', default: ctx => ctx.allColumns }],
+    validate: d => (!d.columns || !d.columns.length) ? 'Choose at least one column to keep.' : null,
+    toSQL: (d, from) => `SELECT ${d.columns.map(quoteIdent).join(', ')} FROM ${from}`,
+    describe: d => d.columns.join(', '),
+  },
+
+  remove_columns: {
+    code: 'DROP', category: 'column', label: 'Remove columns', blurb: 'Drop columns you don\u2019t need.',
+    params: [{ key: 'columns', type: 'columns', label: 'Columns to remove', default: () => [] }],
+    validate: d => (!d.columns || !d.columns.length) ? 'Choose at least one column to remove.' : null,
+    toSQL: (d, from) => `SELECT * EXCLUDE (${d.columns.map(quoteIdent).join(', ')}) FROM ${from}`,
+    describe: d => d.columns.join(', '),
+  },
+
+  rename_column: {
+    code: 'REN', category: 'column', label: 'Rename column', blurb: 'Give a column a new name.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn },
+      { key: 'newName', type: 'text', label: 'New name', default: '' },
+    ],
+    validate: d => !d.newName || !d.newName.trim() ? 'Give the column a new name.' : null,
+    toSQL: (d, from) => `SELECT * RENAME (${quoteIdent(d.column)} AS ${quoteIdent(d.newName)}) FROM ${from}`,
+    describe: d => `${d.column} \u2192 ${d.newName}`,
+  },
+
+  change_type: {
+    code: 'TYP', category: 'column', label: 'Change type', blurb: 'Cast a column to a different type.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn },
+      { key: 'dataType', type: 'toggle', label: 'New type', default: 'VARCHAR',
+        options: [['VARCHAR', 'VARCHAR'], ['BIGINT', 'BIGINT'], ['DOUBLE', 'DOUBLE'], ['BOOLEAN', 'BOOLEAN'], ['DATE', 'DATE'], ['TIMESTAMP', 'TIMESTAMP']] },
+    ],
+    validate: () => null,
+    toSQL: (d, from) => `SELECT * REPLACE (CAST(${quoteIdent(d.column)} AS ${d.dataType}) AS ${quoteIdent(d.column)}) FROM ${from}`,
+    describe: d => `${d.column} \u2192 ${d.dataType}`,
+  },
+
+  add_column: {
+    code: 'ADD', category: 'column', label: 'Add column', blurb: 'Compute a new column from an expression.',
+    params: [
+      { key: 'name', type: 'text', label: 'New column name', default: 'new_column' },
+      { key: 'expression', type: 'sql', label: 'Expression', default: '' },
+    ],
+    validate: d => (!d.name || !d.expression || !d.expression.trim()) ? 'Give the new column a name and an expression.' : null,
+    toSQL: (d, from) => `SELECT *, (${d.expression}) AS ${quoteIdent(d.name)} FROM ${from}`,
+    describe: d => `${d.name} = ${d.expression}`,
+  },
+
+  conditional_column: {
+    code: 'CND', category: 'column', label: 'Conditional column', blurb: 'Add a column with if/then/else logic.',
+    params: [
+      { key: 'name', type: 'text', label: 'New column name', default: 'new_column' },
+      { key: 'cases', type: 'repeater', label: 'Conditions', minItems: 1, addLabel: '+ Add condition',
+        itemDefault: () => ({ when: '', then: '' }),
+        fields: [
+          { key: 'when', type: 'sql', label: 'When', inline: true, placeholder: 'when...' },
+          { key: 'then', type: 'sql', label: 'Then', inline: true, placeholder: 'then...' },
+        ] },
+      { key: 'elseValue', type: 'sql', label: 'Else', default: 'NULL' },
+    ],
+    validate: d => {
+      if (!d.name) return 'Give the new column a name.';
+      const cases = (d.cases || []).filter(c => c.when && c.then);
+      if (!cases.length) return 'Add at least one condition.';
+      return null;
+    },
+    toSQL: (d, from) => {
+      const cases = (d.cases || []).filter(c => c.when && c.then);
+      const whens = cases.map(c => `WHEN ${c.when} THEN ${c.then}`).join(' ');
+      return `SELECT *, (CASE ${whens} ELSE ${d.elseValue || 'NULL'} END) AS ${quoteIdent(d.name)} FROM ${from}`;
+    },
+    describe: d => `${d.name} \u00b7 ${(d.cases || []).filter(c => c.when && c.then).length} condition(s)`,
+  },
+
+  split_column: {
+    code: 'SPL', category: 'column', label: 'Split column', blurb: 'Split on a delimiter, into columns or rows.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn },
+      { key: 'delimiter', type: 'text', label: 'Delimiter', default: ',' },
+      { key: 'mode', type: 'toggle', label: 'Split into', default: 'columns', reactive: true,
+        options: [['columns', 'Columns'], ['rows', 'Rows']] },
+      { key: 'parts', type: 'number', label: 'Number of columns', default: 2, min: 2,
+        visible: d => d.mode !== 'rows' },
+    ],
+    validate: d => !d.delimiter ? 'Enter a delimiter to split on.' : null,
+    toSQL: (d, from) => {
+      const col = quoteIdent(d.column);
+      const delim = String(d.delimiter ?? '').length ? esc(d.delimiter) : ',';
+      if (d.mode === 'rows') {
+        return `SELECT * EXCLUDE (${col}), unnest(string_split(${col}, '${delim}')) AS ${col} FROM ${from}`;
+      }
+      const n = Math.max(2, Number(d.parts) || 2);
+      const newCols = Array.from({ length: n }, (_, i) => `string_split(${col}, '${delim}')[${i + 1}] AS ${quoteIdent(d.column + '_' + (i + 1))}`);
+      return `SELECT *, ${newCols.join(', ')} FROM ${from}`;
+    },
+    describe: d => `${d.column} on "${d.delimiter}" \u2192 ${d.mode === 'rows' ? 'rows' : (d.parts || 2) + ' columns'}`,
+  },
+
+  merge_columns: {
+    code: 'MRG', category: 'column', label: 'Merge columns', blurb: 'Combine columns with a separator, in the order you choose.',
+    params: [
+      { key: 'columns', type: 'columns', label: 'Columns to merge, in order checked', default: ctx => ctx.allColumns.slice(0, 2) },
+      { key: 'separator', type: 'text', label: 'Separator', default: ' ' },
+      { key: 'newName', type: 'text', label: 'New column name', default: 'merged' },
+    ],
+    validate: d => {
+      if (!d.columns || d.columns.length < 2) return 'Choose at least two columns to merge.';
+      if (!d.newName) return 'Give the merged column a name.';
+      return null;
+    },
+    toSQL: (d, from) => {
+      const colsQ = d.columns.map(quoteIdent).join(', ');
+      return `SELECT * EXCLUDE (${d.columns.map(quoteIdent).join(', ')}), concat_ws('${esc(d.separator ?? '')}', ${colsQ}) AS ${quoteIdent(d.newName)} FROM ${from}`;
+    },
+    describe: d => `${d.columns.join(' + ')} \u2192 ${d.newName}`,
+  },
+
+  extract_text: {
+    code: 'EXT', category: 'column', label: 'Extract text', blurb: 'Pull out text before, after, or between markers.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn },
+      { key: 'mode', type: 'toggle', label: 'Extract', default: 'before', reactive: true,
+        options: [['before', 'Before'], ['after', 'After'], ['between', 'Between'], ['chars', 'Characters']] },
+      { key: 'a', type: 'text', label: d => d.mode === 'chars' ? 'Start position' : d.mode === 'between' ? 'From marker' : 'Marker', default: '' },
+      { key: 'b', type: 'text', label: d => d.mode === 'chars' ? 'Length' : 'To marker', default: '',
+        visible: d => d.mode === 'between' || d.mode === 'chars' },
+      { key: 'newName', type: 'text', label: 'New column name', default: 'extracted' },
+    ],
+    validate: d => !d.newName ? 'Give the new column a name.' : null,
+    toSQL: (d, from) => `SELECT *, ${extractExpr(d)} AS ${quoteIdent(d.newName)} FROM ${from}`,
+    describe: d => `${d.mode} \u00b7 ${d.column} \u2192 ${d.newName}`,
+  },
+
+  replace_values: {
+    code: 'RPL', category: 'column', label: 'Replace values', blurb: 'Find and replace within a column.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn },
+      { key: 'find', type: 'text', label: 'Find', default: '' },
+      { key: 'replace', type: 'text', label: 'Replace with', default: '' },
+      { key: 'matchMode', type: 'toggle', label: 'Match', default: 'contains', options: [['contains', 'Contains'], ['exact', 'Exact value']] },
+    ],
+    validate: () => null,
+    toSQL: (d, from) => {
+      const col = quoteIdent(d.column);
+      const expr = d.matchMode === 'exact'
+        ? `CASE WHEN ${col} = '${esc(d.find)}' THEN '${esc(d.replace)}' ELSE ${col} END`
+        : `REPLACE(${col}, '${esc(d.find)}', '${esc(d.replace)}')`;
+      return `SELECT * REPLACE (${expr} AS ${col}) FROM ${from}`;
+    },
+    describe: d => `"${d.find}" \u2192 "${d.replace}" in ${d.column}`,
+  },
+
+  change_case: {
+    code: 'CASE', category: 'column', label: 'Change case', blurb: 'UPPER, lower, or Title case.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn },
+      { key: 'mode', type: 'toggle', label: 'Case', default: 'upper', options: [['upper', 'UPPER'], ['lower', 'lower'], ['title', 'Title Case']] },
+    ],
+    validate: () => null,
+    toSQL: (d, from) => {
+      const col = quoteIdent(d.column);
+      const fn = d.mode === 'upper' ? 'UPPER' : d.mode === 'lower' ? 'LOWER' : 'initcap';
+      return `SELECT * REPLACE (${fn}(${col}) AS ${col}) FROM ${from}`;
+    },
+    describe: d => `${d.column} \u2192 ${d.mode}`,
+  },
+
+  trim_clean: {
+    code: 'TRM', category: 'column', label: 'Trim & clean', blurb: 'Strip whitespace, collapse extra spaces.',
+    params: [{ key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn }],
+    validate: () => null,
+    toSQL: (d, from) => {
+      const col = quoteIdent(d.column);
+      return `SELECT * REPLACE (TRIM(REGEXP_REPLACE(${col}, '\\s+', ' ', 'g')) AS ${col}) FROM ${from}`;
+    },
+    describe: d => `${d.column}`,
+  },
+
+  fill: {
+    code: 'FIL', category: 'column', label: 'Fill down / up', blurb: 'Carry a value forward or backward over blanks.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column', default: ctx => ctx.firstColumn },
+      { key: 'direction', type: 'toggle', label: 'Direction', default: 'down', options: [['down', 'Fill down'], ['up', 'Fill up']] },
+    ],
+    validate: () => null,
+    toSQL: (d, from) => {
+      const col = quoteIdent(d.column);
+      const frame = d.direction === 'up'
+        ? `FIRST_VALUE(${col} IGNORE NULLS) OVER (ORDER BY __rn ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)`
+        : `LAST_VALUE(${col} IGNORE NULLS) OVER (ORDER BY __rn ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`;
+      return `SELECT * EXCLUDE (__rn) REPLACE (COALESCE(${col}, ${frame}) AS ${col}) FROM (SELECT *, ROW_NUMBER() OVER () AS __rn FROM ${from}) t`;
+    },
+    describe: d => `${d.column}, fill ${d.direction}`,
+  },
+
+  rank: {
+    code: 'RNK', category: 'column', label: 'Rank rows', blurb: 'Number rows by rank within optional groups.',
+    params: [
+      { key: 'column', type: 'column', label: 'Rank by column', default: ctx => ctx.firstColumn },
+      { key: 'direction', type: 'enum', label: 'Direction', default: 'desc', options: [['desc', 'Highest first'], ['asc', 'Lowest first']] },
+      { key: 'method', type: 'enum', label: 'Method', default: 'rank',
+        options: [['rank', 'rank (ties share a place, gaps after)'], ['dense_rank', 'dense rank (ties share a place, no gaps)'], ['row_number', 'row number (every row unique)']] },
+      { key: 'name', type: 'text', label: 'New column name', default: 'rank' },
+      { key: 'groupColumns', type: 'columns', label: 'Restart ranking within groups (optional)', default: () => [] },
+    ],
+    validate: () => null,
+    toSQL: (d, from) => {
+      const partition = (d.groupColumns || []).length ? `PARTITION BY ${d.groupColumns.map(quoteIdent).join(', ')} ` : '';
+      const fn = d.method === 'row_number' ? 'ROW_NUMBER()' : d.method === 'dense_rank' ? 'DENSE_RANK()' : 'RANK()';
+      const dir = d.direction === 'desc' ? 'DESC' : 'ASC';
+      return `SELECT *, ${fn} OVER (${partition}ORDER BY ${quoteIdent(d.column)} ${dir}) AS ${quoteIdent(d.name || 'rank')} FROM ${from}`;
+    },
+    describe: d => `${d.name || 'rank'} by ${d.column}${(d.groupColumns || []).length ? ` per ${d.groupColumns.length} group col(s)` : ''}`,
+  },
+
+  running_total: {
+    code: 'RUN', category: 'column', label: 'Running total', blurb: 'Cumulative sum in a defined order, per optional group.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column to accumulate', default: ctx => ctx.firstColumn },
+      { key: 'orderColumn', type: 'column', label: 'Order by', default: ctx => ctx.columnAt(1) },
+      { key: 'direction', type: 'enum', label: 'Direction', default: 'asc', options: [['asc', 'Earliest / smallest first'], ['desc', 'Latest / largest first']] },
+      { key: 'name', type: 'text', label: 'New column name', default: 'running_total' },
+      { key: 'groupColumns', type: 'columns', label: 'Restart the total within groups (optional)', default: () => [] },
+    ],
+    validate: () => null,
+    toSQL: (d, from) => {
+      const partition = (d.groupColumns || []).length ? `PARTITION BY ${d.groupColumns.map(quoteIdent).join(', ')} ` : '';
+      const dir = d.direction === 'desc' ? 'DESC' : 'ASC';
+      return `SELECT *, SUM(${quoteIdent(d.column)}) OVER (${partition}ORDER BY ${quoteIdent(d.orderColumn)} ${dir} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS ${quoteIdent(d.name || 'running_total')} FROM ${from}`;
+    },
+    describe: d => `${d.name || 'running_total'} = sum(${d.column}) by ${d.orderColumn}${(d.groupColumns || []).length ? ` per ${d.groupColumns.length} group col(s)` : ''}`,
+  },
+
+  group_by: {
+    code: 'AGG', category: 'aggregate', label: 'Group & aggregate', blurb: 'Summarize rows into groups.',
+    params: [
+      { key: 'groupColumns', type: 'columns', label: 'Group by', default: () => [] },
+      { key: 'aggregations', type: 'repeater', label: 'Metrics', minItems: 1, addLabel: '+ Add metric',
+        itemDefault: (ctx, existing) => ({ column: ctx.firstColumn, func: 'count', alias: `metric_${(existing?.length || 0) + 1}` }),
+        fields: [
+          { key: 'func', type: 'enum', label: 'Function', reactive: true,
+            options: [['count', 'count'], ['count_distinct', 'count distinct'], ['sum', 'sum'], ['avg', 'average'], ['min', 'min'], ['max', 'max']] },
+          { key: 'column', type: 'column', label: 'Column', allowEmptyLabel: d => d.func === 'count' ? '(all rows)' : null },
+          { key: 'alias', type: 'text', label: 'Alias', placeholder: 'alias' },
+        ] },
+    ],
+    validate: d => (!d.groupColumns || !d.groupColumns.length) && (!d.aggregations || !d.aggregations.length)
+      ? 'Choose at least one group column or metric.' : null,
+    toSQL: (d, from) => {
+      const groupCols = (d.groupColumns || []).map(quoteIdent);
+      const aggs = (d.aggregations || []).map(a => `${aggExpr(a)} AS ${quoteIdent(a.alias || 'metric')}`);
+      const selectList = [...groupCols, ...aggs].join(', ') || '*';
+      const groupClause = groupCols.length ? ` GROUP BY ${groupCols.join(', ')}` : '';
+      return `SELECT ${selectList} FROM ${from}${groupClause}`;
+    },
+    describe: d => `by ${(d.groupColumns || []).join(', ') || '\u2014'} \u00b7 ${(d.aggregations || []).length} metric(s)`,
+  },
+
+  pivot: {
+    code: 'PVT', category: 'shape', label: 'Pivot column', blurb: 'Turn unique values from a column into new columns.',
+    params: [
+      { key: 'column', type: 'column', label: 'Column to pivot', default: ctx => ctx.firstColumn },
+      { key: 'valueColumn', type: 'column', label: 'Values column', default: ctx => ctx.columnAt(1) },
+      { key: 'func', type: 'enum', label: 'Aggregation', default: 'sum',
+        options: [['sum', 'sum'], ['avg', 'average'], ['count', 'count'], ['min', 'min'], ['max', 'max'], ['first', 'first value']] },
+    ],
+    validate: d => d.column === d.valueColumn ? 'Pick two different columns \u2014 one to spread into new columns, one to fill their values.' : null,
+    toSQL: (d, from) => {
+      const onCol = quoteIdent(d.column);
+      const valCol = quoteIdent(d.valueColumn);
+      const usingExpr = d.func === 'count' ? `count(${valCol})` : `${d.func || 'sum'}(${valCol})`;
+      return `PIVOT ${from} ON ${onCol} USING ${usingExpr}`;
+    },
+    describe: d => `${d.column} \u2192 columns \u00b7 ${d.func}(${d.valueColumn})`,
+  },
+
+  unpivot: {
+    code: 'UPV', category: 'shape', label: 'Unpivot columns', blurb: 'Turn columns into attribute/value row pairs.',
+    params: [
+      { key: 'columns', type: 'columns', label: 'Columns to unpivot', default: () => [] },
+      { key: 'nameColumn', type: 'text', label: 'Attribute column name', default: 'attribute' },
+      { key: 'valueColumn', type: 'text', label: 'Value column name', default: 'value' },
+    ],
+    validate: d => {
+      if (!d.columns || d.columns.length < 2) return 'Choose at least two columns to unpivot.';
+      if (d.nameColumn === d.valueColumn) return 'The attribute and value column names need to be different.';
+      return null;
+    },
+    toSQL: (d, from) => {
+      const cols = (d.columns || []).map(quoteIdent).join(', ');
+      return `UNPIVOT ${from} ON ${cols} INTO NAME ${quoteIdent(d.nameColumn || 'attribute')} VALUE ${quoteIdent(d.valueColumn || 'value')}`;
+    },
+    describe: d => `${(d.columns || []).length} columns \u2192 ${d.nameColumn}/${d.valueColumn}`,
+  },
+};
+
+const STEP_TYPES = Object.entries(TRANSFORMS).map(([type, t]) => ({
+  type, code: t.code, category: t.category, label: t.label, blurb: t.blurb,
+}));
 
 function stepMeta(type) {
   return STEP_TYPES.find(s => s.type === type);
@@ -802,8 +1248,8 @@ function filterClause(step) {
   const col = quoteIdent(step.column);
   if (step.operator === 'is_null') return `${col} IS NULL`;
   if (step.operator === 'is_not_null') return `${col} IS NOT NULL`;
-  if (step.operator === 'contains') return `${col} ILIKE '%' || REPLACE('${esc(step.value)}', '%', '') || '%'`;
-  if (step.operator === 'starts_with') return `${col} ILIKE '${esc(step.value)}%'`;
+  if (step.operator === 'contains') return `contains(lower(${col}), lower('${esc(step.value)}'))`;
+  if (step.operator === 'starts_with') return `starts_with(lower(${col}), lower('${esc(step.value)}'))`;
   const lit = sqlLiteral(step.value, step.columnType);
   return `${col} ${step.operator} ${lit}`;
 }
@@ -818,133 +1264,27 @@ function aggExpr(agg) {
 
 function extractExpr(step) {
   const col = quoteIdent(step.column);
+  const a = esc(step.a);
   switch (step.mode) {
-    case 'before': return `split_part(${col}, '${esc(step.a)}', 1)`;
-    case 'after': return `split_part(${col}, '${esc(step.a)}', 2)`;
-    case 'between': return `split_part(split_part(${col}, '${esc(step.a)}', 2), '${esc(step.b)}', 1)`;
+    case 'before':
+      return `split_part(${col}, '${a}', 1)`;
+    case 'after': {
+      return `CASE WHEN POSITION('${a}' IN ${col}) = 0 THEN NULL ELSE substring(${col}, POSITION('${a}' IN ${col}) + LENGTH('${a}')) END`;
+    }
+    case 'between': {
+      const b = esc(step.b);
+      const afterA = `substring(${col}, POSITION('${a}' IN ${col}) + LENGTH('${a}'))`;
+      return `CASE WHEN POSITION('${a}' IN ${col}) = 0 THEN NULL WHEN POSITION('${b}' IN ${afterA}) = 0 THEN NULL ELSE substring(${afterA}, 1, POSITION('${b}' IN ${afterA}) - 1) END`;
+    }
     case 'chars': return `substring(${col}, ${Number(step.a) || 1}, ${Number(step.b) || 10})`;
     default: return col;
   }
 }
 
 function stepBody(step, fromExpr) {
-  switch (step.type) {
-    case 'filter':
-      return `SELECT * FROM ${fromExpr} WHERE ${filterClause(step)}`;
-
-    case 'select_columns':
-      return `SELECT ${step.columns.map(quoteIdent).join(', ')} FROM ${fromExpr}`;
-
-    case 'remove_columns':
-      return `SELECT * EXCLUDE (${step.columns.map(quoteIdent).join(', ')}) FROM ${fromExpr}`;
-
-    case 'rename_column':
-      return `SELECT * RENAME (${quoteIdent(step.column)} AS ${quoteIdent(step.newName)}) FROM ${fromExpr}`;
-
-    case 'sort':
-      return `SELECT * FROM ${fromExpr} ORDER BY ${quoteIdent(step.column)} ${step.direction === 'desc' ? 'DESC' : 'ASC'}`;
-
-    case 'add_column':
-      return `SELECT *, (${step.expression}) AS ${quoteIdent(step.name)} FROM ${fromExpr}`;
-
-    case 'change_type':
-      return `SELECT * REPLACE (CAST(${quoteIdent(step.column)} AS ${step.dataType}) AS ${quoteIdent(step.column)}) FROM ${fromExpr}`;
-
-    case 'group_by': {
-      const groupCols = step.groupColumns.map(quoteIdent);
-      const aggs = step.aggregations.map(a => `${aggExpr(a)} AS ${quoteIdent(a.alias)}`);
-      const selectList = [...groupCols, ...aggs].join(', ') || '*';
-      const groupClause = groupCols.length ? ` GROUP BY ${groupCols.join(', ')}` : '';
-      return `SELECT ${selectList} FROM ${fromExpr}${groupClause}`;
-    }
-
-    case 'remove_duplicates':
-      return `SELECT DISTINCT * FROM ${fromExpr}`;
-
-    case 'limit':
-      return `SELECT * FROM ${fromExpr} LIMIT ${Number(step.n) || 100}`;
-
-    case 'remove_blank_rows': {
-      const conds = (step.columns || []).map(c => `${quoteIdent(c)} IS NULL`).join(' AND ');
-      return `SELECT * FROM ${fromExpr}${conds ? ` WHERE NOT (${conds})` : ''}`;
-    }
-
-    case 'index_column': {
-      const start = Number(step.start) || 1;
-      return `SELECT (ROW_NUMBER() OVER () + ${start - 1}) AS ${quoteIdent(step.name || 'index')}, * FROM ${fromExpr}`;
-    }
-
-    case 'split_column': {
-      const col = quoteIdent(step.column);
-      const parts = String(step.delimiter ?? '').length ? esc(step.delimiter) : ',';
-      if (step.mode === 'rows') {
-        return `SELECT * EXCLUDE (${col}), unnest(string_split(${col}, '${parts}')) AS ${col} FROM ${fromExpr}`;
-      }
-      const n = Math.max(2, Number(step.parts) || 2);
-      const newCols = Array.from({ length: n }, (_, i) => `string_split(${col}, '${parts}')[${i + 1}] AS ${quoteIdent(step.column + '_' + (i + 1))}`);
-      return `SELECT *, ${newCols.join(', ')} FROM ${fromExpr}`;
-    }
-
-    case 'merge_columns': {
-      const cols = step.columns.map(quoteIdent).join(', ');
-      return `SELECT * EXCLUDE (${step.columns.map(quoteIdent).join(', ')}), concat_ws('${esc(step.separator ?? '')}', ${cols}) AS ${quoteIdent(step.newName)} FROM ${fromExpr}`;
-    }
-
-    case 'extract_text':
-      return `SELECT *, ${extractExpr(step)} AS ${quoteIdent(step.newName)} FROM ${fromExpr}`;
-
-    case 'replace_values': {
-      const col = quoteIdent(step.column);
-      const expr = step.matchMode === 'exact'
-        ? `CASE WHEN ${col} = '${esc(step.find)}' THEN '${esc(step.replace)}' ELSE ${col} END`
-        : `REPLACE(${col}, '${esc(step.find)}', '${esc(step.replace)}')`;
-      return `SELECT * REPLACE (${expr} AS ${col}) FROM ${fromExpr}`;
-    }
-
-    case 'change_case': {
-      const col = quoteIdent(step.column);
-      const fn = step.mode === 'upper' ? 'UPPER' : step.mode === 'lower' ? 'LOWER' : 'initcap';
-      return `SELECT * REPLACE (${fn}(${col}) AS ${col}) FROM ${fromExpr}`;
-    }
-
-    case 'trim_clean': {
-      const col = quoteIdent(step.column);
-      return `SELECT * REPLACE (TRIM(REGEXP_REPLACE(${col}, '\\s+', ' ', 'g')) AS ${col}) FROM ${fromExpr}`;
-    }
-
-    case 'fill': {
-      const col = quoteIdent(step.column);
-      const frame = step.direction === 'up'
-        ? `FIRST_VALUE(${col} IGNORE NULLS) OVER (ORDER BY __rn ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)`
-        : `LAST_VALUE(${col} IGNORE NULLS) OVER (ORDER BY __rn ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`;
-      return `SELECT * EXCLUDE (__rn) REPLACE (COALESCE(${col}, ${frame}) AS ${col}) FROM (SELECT *, ROW_NUMBER() OVER () AS __rn FROM ${fromExpr}) t`;
-    }
-
-    case 'conditional_column': {
-      const whens = (step.cases || []).map(c => `WHEN ${c.when} THEN ${c.then}`).join(' ');
-      return `SELECT *, (CASE ${whens} ELSE ${step.elseValue || 'NULL'} END) AS ${quoteIdent(step.name)} FROM ${fromExpr}`;
-    }
-
-    case 'pivot': {
-      const onCol = quoteIdent(step.column);
-      const valCol = quoteIdent(step.valueColumn);
-      const fn = step.func || 'sum';
-      const usingExpr = fn === 'count' ? `count(${valCol})` : `${fn}(${valCol})`;
-      // DuckDB's simplified PIVOT clause works directly as a CTE body (no SELECT needed).
-      // With no GROUP BY given, it auto-groups by every column not in ON/USING.
-      return `PIVOT ${fromExpr} ON ${onCol} USING ${usingExpr}`;
-    }
-
-    case 'unpivot': {
-      const cols = (step.columns || []).map(quoteIdent).join(', ');
-      return `UNPIVOT ${fromExpr} ON ${cols} INTO NAME ${quoteIdent(step.nameColumn || 'attribute')} VALUE ${quoteIdent(step.valueColumn || 'value')}`;
-    }
-
-    default:
-      return `SELECT * FROM ${fromExpr}`;
-  }
+  const t = TRANSFORMS[step.type];
+  return t ? t.toSQL(step, fromExpr) : `SELECT * FROM ${fromExpr}`;
 }
-
 function buildSQL(steps, sourceTable, uptoIndex = null) {
   const list = uptoIndex === null ? steps : steps.slice(0, uptoIndex + 1);
   if (!list.length) return `SELECT * FROM ${quoteIdent(sourceTable)}`;
@@ -963,39 +1303,9 @@ function stepTitle(step) {
 }
 
 function stepDetail(step) {
-  switch (step.type) {
-    case 'filter':
-      return `${step.column} ${step.operator} ${step.operator.includes('null') ? '' : step.value}`.trim();
-    case 'select_columns': return step.columns.join(', ');
-    case 'remove_columns': return step.columns.join(', ');
-    case 'rename_column': return `${step.column} → ${step.newName}`;
-    case 'sort': return `${step.column} (${step.direction === 'desc' ? 'desc' : 'asc'})`;
-    case 'add_column': return `${step.name} = ${step.expression}`;
-    case 'change_type': return `${step.column} → ${step.dataType}`;
-    case 'group_by':
-      return `by ${step.groupColumns.join(', ') || '—'} · ${step.aggregations.length} metric${step.aggregations.length === 1 ? '' : 's'}`;
-    case 'remove_duplicates': return 'distinct rows only';
-    case 'limit': return `first ${step.n} rows`;
-    case 'remove_blank_rows': return `${(step.columns || []).length} columns checked`;
-    case 'index_column': return `${step.name || 'index'}, starting at ${step.start ?? 1}`;
-    case 'split_column': return `${step.column} on "${step.delimiter}" → ${step.mode === 'rows' ? 'rows' : (step.parts || 2) + ' columns'}`;
-    case 'merge_columns': return `${step.columns.join(' + ')} → ${step.newName}`;
-    case 'extract_text': return `${step.mode} · ${step.column} → ${step.newName}`;
-    case 'replace_values': return `"${step.find}" → "${step.replace}" in ${step.column}`;
-    case 'change_case': return `${step.column} → ${step.mode}`;
-    case 'trim_clean': return `${step.column}`;
-    case 'fill': return `${step.column}, fill ${step.direction}`;
-    case 'conditional_column': return `${step.name} · ${(step.cases || []).length} condition${(step.cases || []).length === 1 ? '' : 's'}`;
-    case 'pivot': return `${step.column} → columns · ${step.func}(${step.valueColumn})`;
-    case 'unpivot': return `${(step.columns || []).length} columns → ${step.nameColumn}/${step.valueColumn}`;
-    default: return '';
-  }
+  const t = TRANSFORMS[step.type];
+  return t ? t.describe(step) : '';
 }
-
-// ===== app.js =====
-
-
-// ---------- DOM references ----------
 const $ = sel => document.querySelector(sel);
 const engineStatus = $('#engineStatus');
 const themeToggle = $('#themeToggle');
@@ -1018,8 +1328,16 @@ const previewPane = $('#previewPane');
 const editorPane = $('#editorPane');
 const previewTable = $('#previewTable');
 const previewEmpty = $('#previewEmpty');
+const columnStats = $('#columnStats');
 const rowCountLabel = $('#rowCountLabel');
 const exportBtn = $('#exportBtn');
+const qualityToggleBtn = $('#qualityToggleBtn');
+let showQuality = false;
+qualityToggleBtn.addEventListener('click', () => {
+  showQuality = !showQuality;
+  qualityToggleBtn.classList.toggle('is-active', showQuality);
+  previewTable.classList.toggle('show-quality', showQuality);
+});
 
 const sqlEditor = $('#sqlEditor');
 const runSqlBtn = $('#runSqlBtn');
@@ -1058,22 +1376,101 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !confirmOverlay.hidden) closeConfirm(false);
 });
 
-// ---------- State ----------
+const engineVersionBtn = $('#engineVersionBtn');
+const versionOverlay = $('#versionOverlay');
+const versionCoreLabel = $('#versionCoreLabel');
+const versionPackageLabel = $('#versionPackageLabel');
+const versionInput = $('#versionInput');
+const versionError = $('#versionError');
+const versionCancelBtn = $('#versionCancelBtn');
+const versionApplyBtn = $('#versionApplyBtn');
+
+async function refreshVersionLabels() {
+  versionPackageLabel.textContent = currentDuckdbVersion || '—';
+  try {
+    const info = await getEngineVersionInfo();
+    versionCoreLabel.textContent = info.coreVersion || '—';
+  } catch {
+    versionCoreLabel.textContent = '—';
+  }
+}
+
+engineVersionBtn.addEventListener('click', async () => {
+  versionError.hidden = true;
+  versionInput.value = '';
+  versionOverlay.hidden = false;
+  await refreshVersionLabels();
+});
+versionCancelBtn.addEventListener('click', () => { versionOverlay.hidden = true; });
+versionOverlay.addEventListener('click', e => { if (e.target === versionOverlay) versionOverlay.hidden = true; });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !versionOverlay.hidden) versionOverlay.hidden = true;
+});
+
+async function switchEngineVersion(version) {
+  setEngineStatus('loading', `loading duckdb-wasm ${version}…`);
+  if (conn) { try { await conn.close(); } catch {  } }
+  if (db) { try { await db.terminate(); } catch {  } }
+  db = null;
+  conn = null;
+  await initEngine(version);
+  engineVersionBtn.textContent = `DuckDB ${currentDuckdbVersion}`;
+  if (lastImportedFile) {
+    setEngineStatus('loading', 're-importing your file…');
+    const info = await importFile(lastImportedFile);
+    sourceTable = info.tableName;
+    sourceInfo = { rowCount: info.rowCount, columns: info.columns };
+    previewUpTo = null;
+    refreshRail();
+    refreshEditorText();
+    await refreshPreview();
+  }
+  setEngineStatus('ready', 'engine ready');
+}
+
+versionApplyBtn.addEventListener('click', async () => {
+  const v = versionInput.value.trim().replace(/^v/i, '');
+  if (!v) {
+    versionError.textContent = 'Enter a version number, e.g. 1.29.0';
+    versionError.hidden = false;
+    return;
+  }
+  versionError.hidden = true;
+  const ok = await askConfirm(`Load duckdb-wasm ${v} from jsdelivr? Only do this for a version you've checked on npm — this package has had compromised releases published under its name before. If unsure, cancel and keep the current version.`);
+  if (!ok) return;
+  versionApplyBtn.disabled = true;
+  versionApplyBtn.textContent = 'Switching…';
+  try {
+    await switchEngineVersion(v);
+    versionOverlay.hidden = true;
+  } catch (err) {
+    console.error(err);
+    versionError.textContent = `Could not load version ${v}: ${err.message || err}`;
+    versionError.hidden = false;
+    setEngineStatus('error', 'version switch failed');
+  } finally {
+    versionApplyBtn.disabled = false;
+    versionApplyBtn.textContent = 'Switch version';
+  }
+});
+
 let engineReady = null;
 let sourceTable = null;
 let sourceInfo = null;
 let steps = [];
-let manualSQL = null;      // when set, overrides the step-generated query
-let previewUpTo = null;    // null = all steps; -1 = source only; i = up to step i
+let manualSQL = null;      
+let previewUpTo = null;    
 let drawerDraft = null;
 let drawerEditingIndex = null;
 let drawerColumns = [];
 
 const escapeHTML = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-// ---------- Boot ----------
 engineReady = initEngine()
-  .then(() => setEngineStatus('ready', 'engine ready'))
+  .then(() => {
+    engineVersionBtn.textContent = `DuckDB ${currentDuckdbVersion}`;
+    setEngineStatus('ready', 'engine ready');
+  })
   .catch(err => { console.error(err); setEngineStatus('error', 'engine failed to start — check your connection'); });
 
 function setEngineStatus(kind, text) {
@@ -1095,7 +1492,6 @@ themeToggle.addEventListener('click', () => {
   }
 });
 
-// ---------- File import ----------
 ['dragover', 'dragenter'].forEach(evt => dropZone.addEventListener(evt, e => {
   e.preventDefault(); dropZone.classList.add('is-dragover');
 }));
@@ -1117,6 +1513,7 @@ async function handleFile(file) {
   try {
     await engineReady;
     const info = await importFile(file);
+    lastImportedFile = file;
     sourceTable = info.tableName;
     sourceInfo = { rowCount: info.rowCount, columns: info.columns };
     steps = [];
@@ -1136,7 +1533,6 @@ async function handleFile(file) {
   }
 }
 
-// ---------- Tabs ----------
 tabBtns.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
 function switchTab(tab) {
   tabBtns.forEach(b => b.classList.toggle('is-active', b.dataset.tab === tab));
@@ -1144,7 +1540,6 @@ function switchTab(tab) {
   editorPane.classList.toggle('is-active', tab === 'editor');
 }
 
-// ---------- Rail rendering ----------
 function refreshRail() {
   railSource.innerHTML = `
     <div class="rail-node cat-source">
@@ -1255,11 +1650,102 @@ resetPipelineBtn.addEventListener('click', async () => {
   refreshPreview();
 });
 
-// ---------- Preview ----------
+const commandPalette = $('#commandPalette');
+const paletteInput = $('#paletteInput');
+const paletteResults = $('#paletteResults');
+const CATEGORY_LABELS = { row: 'Row', column: 'Column', aggregate: 'Aggregate', shape: 'Reshape' };
+let paletteMatches = [];
+let paletteIndex = 0;
+
+function fuzzyScore(query, target) {
+  query = query.toLowerCase();
+  target = target.toLowerCase();
+  if (!query) return 0;
+  if (query.length <= 3) {
+    const idx = target.indexOf(query);
+    return idx === -1 ? -1 : 1000 - idx;
+  }
+  let qi = 0, score = 0, streak = 0;
+  for (let ti = 0; ti < target.length && qi < query.length; ti++) {
+    if (target[ti] === query[qi]) { qi++; streak++; score += streak; }
+    else streak = 0;
+  }
+  return qi === query.length ? score : -1;
+}
+
+function paletteItemHTML(s) {
+  return `<button type="button" class="palette-item cat-${s.category}" data-type="${s.type}">
+    <span class="step-code code-${s.category}">${s.code}</span>
+    <span class="palette-item-text"><strong>${escapeHTML(s.label)}</strong><span>${escapeHTML(s.blurb)}</span></span>
+  </button>`;
+}
+
+function renderPaletteResults(query) {
+  if (!query) {
+    paletteMatches = STEP_TYPES.slice();
+    const groups = Object.keys(CATEGORY_LABELS).map(cat => ({
+      cat, items: STEP_TYPES.filter(s => s.category === cat),
+    })).filter(g => g.items.length);
+    paletteResults.innerHTML = groups.map(g =>
+      `<div class="palette-section-label">${CATEGORY_LABELS[g.cat]}</div>${g.items.map(paletteItemHTML).join('')}`
+    ).join('');
+  } else {
+    const scored = STEP_TYPES
+      .map(s => ({ s, score: fuzzyScore(query, `${s.label} ${s.blurb} ${CATEGORY_LABELS[s.category]}`) }))
+      .filter(r => r.score >= 0)
+      .sort((a, b) => b.score - a.score);
+    paletteMatches = scored.map(r => r.s);
+    paletteResults.innerHTML = paletteMatches.length
+      ? paletteMatches.map(paletteItemHTML).join('')
+      : `<div class="palette-empty">No matching transformation.</div>`;
+  }
+  paletteIndex = 0;
+  highlightPaletteIndex();
+  paletteResults.querySelectorAll('.palette-item').forEach((el, i) => {
+    el.addEventListener('mouseenter', () => { paletteIndex = i; highlightPaletteIndex(); });
+    el.addEventListener('click', () => chooseStepType(paletteMatches[i].type));
+  });
+}
+
+function highlightPaletteIndex() {
+  const items = [...paletteResults.querySelectorAll('.palette-item')];
+  items.forEach((el, i) => el.classList.toggle('is-active', i === paletteIndex));
+  items[paletteIndex]?.scrollIntoView?.({ block: 'nearest' });
+}
+
+function openCommandPalette() {
+  paletteInput.value = '';
+  commandPalette.hidden = false;
+  renderPaletteResults('');
+  paletteInput.focus();
+}
+function closeCommandPalette() { commandPalette.hidden = true; }
+
+paletteInput.addEventListener('input', () => renderPaletteResults(paletteInput.value.trim()));
+commandPalette.addEventListener('click', e => { if (e.target === commandPalette) closeCommandPalette(); });
+paletteInput.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); paletteIndex = Math.min(paletteIndex + 1, paletteMatches.length - 1); highlightPaletteIndex(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); paletteIndex = Math.max(paletteIndex - 1, 0); highlightPaletteIndex(); }
+  else if (e.key === 'Enter') { e.preventDefault(); if (paletteMatches[paletteIndex]) chooseStepType(paletteMatches[paletteIndex].type); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeCommandPalette(); }
+});
+document.addEventListener('keydown', e => {
+  const isModK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k';
+  if (!isModK) return;
+  if (workbench.hidden) return; // no data loaded yet — nothing to add a step to
+  e.preventDefault();
+  if (!commandPalette.hidden) closeCommandPalette();
+  else if (drawerOverlay.hidden && confirmOverlay.hidden && versionOverlay.hidden) openCommandPalette();
+});
+
+function currentSQL() {
+  return manualSQL !== null ? manualSQL : buildSQL(steps, sourceTable, previewUpTo);
+}
+
 async function refreshPreview() {
   if (!sourceTable) return;
   try {
-    const sql = manualSQL !== null ? manualSQL : buildSQL(steps, sourceTable, previewUpTo);
+    const sql = currentSQL();
     const { columns, rows, totalRows } = await runPreviewQuery(sql);
     renderTable(columns, rows);
     rowCountLabel.textContent = `${totalRows.toLocaleString()} row${totalRows === 1 ? '' : 's'}`;
@@ -1286,16 +1772,92 @@ function typeBadge(t) {
 function renderTable(columns, rows) {
   const thead = previewTable.querySelector('thead tr');
   const tbody = previewTable.querySelector('tbody');
-  thead.innerHTML = columns.map(c => `
-    <th class="${isNumericType(c.type) ? 'col-numeric' : ''}">
+  columnStats.hidden = true; // underlying data changed — any previous stats no longer apply
+  thead.innerHTML = columns.map(c => {
+    const total = rows.length;
+    const empty = total ? rows.filter(r => r[c.name] === null || r[c.name] === undefined).length : 0;
+    const validPct = total ? Math.round(((total - empty) / total) * 100) : 0;
+    const emptyPct = 100 - validPct;
+    const sampleNote = total ? `${validPct}% valid · ${emptyPct}% empty (of ${total} sampled row${total === 1 ? '' : 's'})` : 'no rows sampled';
+    return `
+    <th class="${isNumericType(c.type) ? 'col-numeric' : ''}" data-col="${escapeHTML(c.name)}" data-type="${escapeHTML(c.type)}" title="Click for column stats">
       <span class="th-name">${escapeHTML(c.name)}</span><span class="th-type">${typeBadge(c.type)}</span>
-    </th>`).join('');
+      <div class="th-quality" title="${escapeHTML(sampleNote)}">
+        <div class="th-quality-valid" style="width:${validPct}%;"></div>
+        <div class="th-quality-empty" style="width:${emptyPct}%;"></div>
+      </div>
+    </th>`;
+  }).join('');
   tbody.innerHTML = rows.map(row => `<tr>${columns.map(c => {
     const v = row[c.name];
     const display = v === null || v === undefined ? '<span class="null-cell">∅</span>' : escapeHTML(String(v));
     return `<td class="${isNumericType(c.type) ? 'col-numeric' : ''}">${display}</td>`;
   }).join('')}</tr>`).join('');
   previewEmpty.hidden = rows.length > 0;
+}
+
+let statsToken = 0;
+previewTable.querySelector('thead').addEventListener('click', e => {
+  const th = e.target.closest('th[data-col]');
+  if (!th) return;
+  showColumnStats(th.dataset.col, th.dataset.type, th);
+});
+$('#columnStats').addEventListener('click', e => {
+  if (e.target.closest('.column-stats-close')) hideColumnStats();
+});
+
+function hideColumnStats() {
+  columnStats.hidden = true;
+  previewTable.querySelectorAll('th.is-stats-active').forEach(el => el.classList.remove('is-stats-active'));
+}
+
+async function showColumnStats(name, type, thEl) {
+  if (!sourceTable) return;
+  previewTable.querySelectorAll('th.is-stats-active').forEach(el => el.classList.remove('is-stats-active'));
+  thEl?.classList.add('is-stats-active');
+  const myToken = ++statsToken;
+  columnStats.hidden = false;
+  columnStats.innerHTML = `<span class="column-stats-name">${escapeHTML(name)}</span><span class="column-stats-item">computing…</span>`;
+  try {
+    const col = quoteIdent(name);
+    const numeric = isNumericType(type);
+    const parts = [
+      `COUNT(*) AS n`,
+      `COUNT(${col}) AS n_valid`,
+      `COUNT(DISTINCT ${col}) AS n_distinct`,
+      `MIN(${col}) AS min_v`,
+      `MAX(${col}) AS max_v`,
+    ];
+    if (numeric) parts.push(`SUM(${col}) AS sum_v`, `AVG(${col}) AS avg_v`);
+    const sql = `SELECT ${parts.join(', ')} FROM (${currentSQL()}) AS __ledger_stats`;
+    const result = await conn.query(sql);
+    if (myToken !== statsToken) return;
+    const row = result.toArray()[0]?.toJSON() || {};
+    const fmt = v => typeof v === 'bigint' ? Number(v).toLocaleString() : (typeof v === 'number' ? (Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 2 })) : String(v));
+    const items = [
+      `<span class="column-stats-item">rows <strong>${fmt(row.n)}</strong></span>`,
+      `<span class="column-stats-item">distinct <strong>${fmt(row.n_distinct)}</strong></span>`,
+      `<span class="column-stats-item">empty <strong>${fmt(Number(row.n) - Number(row.n_valid))}</strong></span>`,
+    ];
+    if (numeric) {
+      items.push(
+        `<span class="column-stats-item">sum <strong>${row.sum_v === null ? '—' : fmt(row.sum_v)}</strong></span>`,
+        `<span class="column-stats-item">avg <strong>${row.avg_v === null ? '—' : fmt(row.avg_v)}</strong></span>`,
+        `<span class="column-stats-item">min <strong>${row.min_v === null ? '—' : fmt(row.min_v)}</strong></span>`,
+        `<span class="column-stats-item">max <strong>${row.max_v === null ? '—' : fmt(row.max_v)}</strong></span>`,
+      );
+    } else {
+      items.push(
+        `<span class="column-stats-item">min <strong>${row.min_v === null ? '—' : escapeHTML(String(row.min_v))}</strong></span>`,
+        `<span class="column-stats-item">max <strong>${row.max_v === null ? '—' : escapeHTML(String(row.max_v))}</strong></span>`,
+      );
+    }
+    columnStats.innerHTML = `<span class="column-stats-name">${escapeHTML(name)}</span>${items.join('')}<button type="button" class="column-stats-close" title="Close">✕</button>`;
+  } catch (err) {
+    if (myToken !== statsToken) return;
+    console.error(err);
+    columnStats.innerHTML = `<span class="column-stats-name">${escapeHTML(name)}</span><span class="column-stats-item">couldn't compute stats</span><button type="button" class="column-stats-close" title="Close">✕</button>`;
+  }
 }
 
 function setEditorStatus(kind, text) {
@@ -1305,7 +1867,6 @@ function setEditorStatus(kind, text) {
   if (kind === 'error') editorStatus.classList.add('is-error');
 }
 
-// ---------- SQL editor ----------
 function refreshEditorText() {
   if (manualSQL !== null) return;
   sqlEditor.value = buildSQL(steps, sourceTable, null);
@@ -1322,7 +1883,6 @@ revertSqlBtn.addEventListener('click', () => {
   refreshPreview();
 });
 
-// ---------- Export ----------
 exportBtn.addEventListener('click', async () => {
   try {
     const sql = manualSQL !== null ? manualSQL : buildSQL(steps, sourceTable, previewUpTo);
@@ -1332,15 +1892,24 @@ exportBtn.addEventListener('click', async () => {
     notify('Export failed: ' + (err.message || err));
   }
 });
-
-// ============================================================
-// Step drawer
-// ============================================================
 function showDrawer() { drawerOverlay.hidden = false; }
-function closeDrawer() { drawerOverlay.hidden = true; drawerDraft = null; drawerEditingIndex = null; drawerApply.disabled = false; hideDrawerValidation(); }
+function closeDrawer() {
+  drawerOverlay.hidden = true;
+  drawerDraft = null;
+  drawerEditingIndex = null;
+  drawerApply.disabled = false;
+  hideDrawerValidation();
+  drawerPreviewToken++;
+  clearTimeout(drawerPreviewTimer);
+  drawerBaseRowCount = null;
+  $('#drawerPreview').hidden = true;
+}
 
 drawerClose.addEventListener('click', closeDrawer);
 drawerCancel.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !drawerOverlay.hidden) closeDrawer();
+});
 drawerOverlay.addEventListener('click', e => { if (e.target === drawerOverlay) closeDrawer(); });
 
 async function loadDrawerColumns(uptoIndex) {
@@ -1360,7 +1929,12 @@ function showDrawerError(err) {
 }
 
 
-async function openDrawerForAdd() {
+function openDrawerForAdd() {
+  openCommandPalette();
+}
+
+async function chooseStepType(type) {
+  closeCommandPalette();
   drawerEditingIndex = null;
   drawerDraft = { type: null };
   drawerTitle.textContent = 'Add a step';
@@ -1370,6 +1944,8 @@ async function openDrawerForAdd() {
   drawerBody.innerHTML = '<p class="field-hint">Loading columns…</p>';
   try {
     await loadDrawerColumns(steps.length - 1);
+    drawerDraft = defaultDraftFor(type);
+    primeDrawerBaseRowCount();
     renderDrawerBody();
   } catch (err) {
     showDrawerError(err);
@@ -1386,424 +1962,208 @@ async function openDrawerForEdit(idx) {
   drawerBody.innerHTML = '<p class="field-hint">Loading columns…</p>';
   try {
     await loadDrawerColumns(idx - 1);
+    primeDrawerBaseRowCount();
     renderDrawerBody();
   } catch (err) {
     showDrawerError(err);
   }
 }
+function ctxFor() {
+  return {
+    firstColumn: drawerColumns[0]?.name || '',
+    allColumns: drawerColumns.map(c => c.name),
+    columnAt: i => (drawerColumns[i] || drawerColumns[0])?.name || '',
+    typeOf: name => drawerColumns.find(c => c.name === name)?.type,
+  };
+}
 
-function defaultParams(type) {
-  const first = drawerColumns[0]?.name || '';
-  switch (type) {
-    case 'filter': return { column: first, operator: '=', value: '', columnType: drawerColumns[0]?.type };
-    case 'select_columns': return { columns: drawerColumns.map(c => c.name) };
-    case 'remove_columns': return { columns: [] };
-    case 'rename_column': return { column: first, newName: first };
-    case 'sort': return { column: first, direction: 'asc' };
-    case 'add_column': return { name: 'new_column', expression: '' };
-    case 'change_type': return { column: first, dataType: 'VARCHAR' };
-    case 'group_by': return { groupColumns: [], aggregations: [{ column: first, func: 'count', alias: 'count' }] };
-    case 'remove_duplicates': return {};
-    case 'limit': return { n: 100 };
-    case 'remove_blank_rows': return { columns: drawerColumns.map(c => c.name) };
-    case 'index_column': return { name: 'index', start: 1 };
-    case 'split_column': return { column: first, delimiter: ',', mode: 'columns', parts: 2 };
-    case 'merge_columns': return { columns: drawerColumns.slice(0, 2).map(c => c.name), separator: ' ', newName: 'merged' };
-    case 'extract_text': return { column: first, mode: 'before', a: '', b: '', newName: first + '_extract' };
-    case 'replace_values': return { column: first, find: '', replace: '', matchMode: 'contains' };
-    case 'change_case': return { column: first, mode: 'upper' };
-    case 'trim_clean': return { column: first };
-    case 'fill': return { column: first, direction: 'down' };
-    case 'conditional_column': return { name: 'new_column', cases: [{ when: '', then: '' }], elseValue: '' };
-    case 'pivot': return { column: first, valueColumn: drawerColumns[1]?.name || first, func: 'sum' };
-    case 'unpivot': return { columns: [], nameColumn: 'attribute', valueColumn: 'value' };
-    default: return {};
+function defaultDraftFor(type) {
+  const t = TRANSFORMS[type];
+  const ctx = ctxFor();
+  const draft = { type };
+  for (const p of t.params) {
+    if (p.type === 'repeater') {
+      if (p.default) { draft[p.key] = p.default(ctx); continue; }
+      const arr = [];
+      for (let i = 0; i < (p.minItems || 0); i++) arr.push(p.itemDefault(ctx, arr));
+      draft[p.key] = arr;
+    } else if (typeof p.default === 'function') {
+      draft[p.key] = p.default(ctx);
+    } else if (p.default !== undefined) {
+      draft[p.key] = p.default;
+    } else if (p.type === 'columns') {
+      draft[p.key] = [];
+    } else {
+      draft[p.key] = '';
+    }
+  }
+  return draft;
+}
+function renderTransformForm(type, draft) {
+  const t = TRANSFORMS[type];
+  const ctx = ctxFor();
+  drawerBody.innerHTML = t.params.map(p => renderParamHTML(p, draft, ctx)).join('');
+  t.params.forEach(p => wireParam(type, t, p, draft, ctx));
+}
+
+function renderParamHTML(p, draft, ctx) {
+  const label = typeof p.label === 'function' ? p.label(draft) : p.label;
+  const visible = p.visible ? p.visible(draft) : true;
+  const hideStyle = visible ? '' : ' style="display:none;"';
+  const value = draft[p.key];
+  switch (p.type) {
+    case 'column':
+      return `<div class="field" data-param="${p.key}"${hideStyle}><label>${escapeHTML(label)}</label><select id="df-${p.key}">${colOptions(value)}</select></div>`;
+    case 'enum': {
+      const opts = typeof p.options === 'function' ? p.options(ctx, draft) : p.options;
+      return `<div class="field" data-param="${p.key}"${hideStyle}><label>${escapeHTML(label)}</label><select id="df-${p.key}">${opts.map(([v, l]) => `<option value="${escapeHTML(v)}" ${v === value ? 'selected' : ''}>${escapeHTML(l)}</option>`).join('')}</select></div>`;
+    }
+    case 'toggle':
+      return `<div class="field" data-param="${p.key}"${hideStyle}><label>${escapeHTML(label)}</label><div class="type-picker" data-key="${p.key}">${p.options.map(([v, l]) => `<button type="button" data-value="${escapeHTML(v)}" class="${v === value ? 'is-selected' : ''}">${escapeHTML(l)}</button>`).join('')}</div></div>`;
+    case 'text':
+      return `<div class="field" data-param="${p.key}"${hideStyle}><label>${escapeHTML(label)}</label><input type="text" id="df-${p.key}" value="${escapeHTML(value ?? '')}" ${p.placeholder ? `placeholder="${escapeHTML(p.placeholder)}"` : ''}></div>`;
+    case 'number':
+      return `<div class="field" data-param="${p.key}"${hideStyle}><label>${escapeHTML(label)}</label><input type="number" id="df-${p.key}" ${p.min !== undefined ? `min="${p.min}"` : ''} value="${escapeHTML(String(value ?? ''))}"></div>`;
+    case 'sql':
+      return `<div class="field" data-param="${p.key}"${hideStyle}><label>${escapeHTML(label)}</label><textarea id="df-${p.key}" class="sql-textarea" placeholder="${escapeHTML(p.placeholder || '')}">${escapeHTML(value ?? '')}</textarea></div>`;
+    case 'columns': {
+      const selected = new Set(value || []);
+      return `<div class="field" data-param="${p.key}"${hideStyle}><label>${escapeHTML(label)}</label><div class="checkbox-list" data-key="${p.key}">${ctx.allColumns.map(name => `
+        <label class="checkbox-row"><input type="checkbox" class="df-col-check" value="${escapeHTML(name)}" ${selected.has(name) ? 'checked' : ''}> ${escapeHTML(name)}</label>
+      `).join('')}</div></div>`;
+    }
+    case 'repeater': {
+      const items = value || [];
+      return `<div class="field" data-param="${p.key}"${hideStyle}><label>${escapeHTML(label)}</label>
+        <div id="df-${p.key}-rows">${items.map((item, i) => renderRepeaterRow(p, item, i, items.length, ctx)).join('')}</div>
+        <button type="button" class="btn-ghost btn-small df-repeater-add" data-key="${p.key}" style="align-self:flex-start;margin-top:4px;">${escapeHTML(p.addLabel || '+ Add')}</button>
+      </div>`;
+    }
+    default: return '';
   }
 }
 
-function renderDrawerBody() {
-  hideDrawerValidation();
-  if (!drawerDraft.type) { renderTypePicker(); return; }
-  drawerTitle.textContent = (drawerEditingIndex === null ? 'Add — ' : 'Edit — ') + STEP_TYPES.find(s => s.type === drawerDraft.type).label;
-  const renderers = {
-    filter: renderFilterForm, select_columns: renderKeepColumnsForm, remove_columns: renderRemoveColumnsForm,
-    rename_column: renderRenameForm, sort: renderSortForm, add_column: renderAddColumnForm,
-    change_type: renderChangeTypeForm, group_by: renderGroupByForm,
-    remove_duplicates: renderRemoveDuplicatesForm, limit: renderLimitForm,
-    remove_blank_rows: renderRemoveBlankRowsForm, index_column: renderIndexColumnForm,
-    split_column: renderSplitColumnForm, merge_columns: renderMergeColumnsForm,
-    extract_text: renderExtractTextForm, replace_values: renderReplaceValuesForm,
-    change_case: renderChangeCaseForm, trim_clean: renderTrimCleanForm,
-    fill: renderFillForm, conditional_column: renderConditionalColumnForm,
-    pivot: renderPivotForm, unpivot: renderUnpivotForm,
-  };
-  renderers[drawerDraft.type]();
+function renderRepeaterRow(p, item, i, total, ctx) {
+  const cells = p.fields.map(f => {
+    const val = item[f.key];
+    if (f.type === 'column') {
+      const emptyLabel = f.allowEmptyLabel ? f.allowEmptyLabel(item) : null;
+      const emptyOpt = emptyLabel ? `<option value="" ${!val ? 'selected' : ''}>${escapeHTML(emptyLabel)}</option>` : '';
+      return `<select class="rep-field" data-field="${f.key}">${emptyOpt}${colOptions(val)}</select>`;
+    }
+    if (f.type === 'enum') {
+      return `<select class="rep-field" data-field="${f.key}">${f.options.map(([v, l]) => `<option value="${escapeHTML(v)}" ${v === val ? 'selected' : ''}>${escapeHTML(l)}</option>`).join('')}</select>`;
+    }
+    const inline = f.inline ? ' style="flex:1;font-family:var(--font-mono);"' : (f.key === 'alias' ? ' style="width:90px;"' : '');
+    return `<input type="text" class="rep-field" data-field="${f.key}"${inline} value="${escapeHTML(val ?? '')}" placeholder="${escapeHTML(f.placeholder || '')}">`;
+  }).join('');
+  const canRemove = total > (p.minItems || 0);
+  return `<div class="agg-row" data-i="${i}" style="margin-bottom:7px;">${cells}${canRemove ? `<button type="button" class="btn-icon df-repeater-remove" data-key="${p.key}" data-i="${i}" title="Remove">\u2715</button>` : ''}</div>`;
+}
+function readForm(type, draft) {
+  const t = TRANSFORMS[type];
+  const ctx = ctxFor();
+  const result = { type };
+  t.params.forEach(p => {
+    if (p.type === 'text' || p.type === 'sql') {
+      const el = $(`#df-${p.key}`);
+      result[p.key] = el ? el.value : (draft[p.key] ?? '');
+    } else if (p.type === 'number') {
+      const el = $(`#df-${p.key}`);
+      result[p.key] = el ? Number(el.value) : (draft[p.key] ?? 0);
+    } else if (p.type === 'column' || p.type === 'enum') {
+      const el = $(`#df-${p.key}`);
+      result[p.key] = el ? el.value : (draft[p.key] ?? '');
+    } else if (p.type === 'toggle' || p.type === 'columns') {
+      result[p.key] = draft[p.key]; // these keep themselves current on every click, no DOM read needed
+    } else if (p.type === 'repeater') {
+      const wrap = $(`#df-${p.key}-rows`);
+      result[p.key] = wrap ? [...wrap.querySelectorAll('.agg-row')].map(row => {
+        const item = {};
+        p.fields.forEach(f => { item[f.key] = row.querySelector(`[data-field="${f.key}"]`)?.value ?? ''; });
+        return item;
+      }) : (draft[p.key] || []);
+    }
+  });
+  if (t.postRead) t.postRead(result, ctx);
+  return result;
 }
 
-function renderTypePicker() {
-  drawerBody.innerHTML = `<div class="field-hint" style="margin-bottom:2px;">Choose what this step should do.</div>` +
-    `<div class="type-pick-list">` +
-    STEP_TYPES.map(s => `
-      <button class="type-pick-btn cat-${s.category}" data-type="${s.type}">
-        <span class="step-code code-${s.category}">${s.code}</span>
-        <span class="type-pick-text"><strong>${s.label}</strong><span>${s.blurb}</span></span>
-      </button>`).join('') +
-    `</div>`;
-  drawerBody.querySelectorAll('[data-type]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      drawerDraft = { type: btn.dataset.type, ...defaultParams(btn.dataset.type) };
-      renderDrawerBody();
+function wireParam(type, t, p, draft, ctx) {
+  if (p.type === 'column' || p.type === 'enum') {
+    $(`#df-${p.key}`).addEventListener('change', () => {
+      const fresh = readForm(type, draft);
+      Object.assign(draft, fresh);
+      if (p.reactive) renderTransformForm(type, draft);
     });
-  });
+  } else if (p.type === 'toggle') {
+    drawerBody.querySelectorAll(`.type-picker[data-key="${p.key}"] button`).forEach(btn => {
+      btn.addEventListener('click', () => {
+        const fresh = readForm(type, draft);
+        Object.assign(draft, fresh);
+        draft[p.key] = btn.dataset.value;
+        renderTransformForm(type, draft); 
+      });
+    });
+  } else if (p.type === 'columns') {
+    drawerBody.querySelectorAll(`.checkbox-list[data-key="${p.key}"] .df-col-check`).forEach(cb => {
+      cb.addEventListener('change', () => {
+        let arr = (draft[p.key] || []).slice();
+        if (cb.checked) { if (!arr.includes(cb.value)) arr.push(cb.value); }
+        else { arr = arr.filter(v => v !== cb.value); }
+        draft[p.key] = arr;
+        if (p.reactive) renderTransformForm(type, draft);
+      });
+    });
+  } else if (p.type === 'repeater') {
+    const wrap = $(`#df-${p.key}-rows`);
+    wrap.querySelectorAll('.agg-row').forEach(row => {
+      p.fields.forEach(f => {
+        if (!f.reactive) return;
+        row.querySelector(`[data-field="${f.key}"]`).addEventListener('change', () => {
+          draft[p.key] = readForm(type, draft)[p.key];
+          renderTransformForm(type, draft);
+        });
+      });
+    });
+  }
+}
+
+drawerBody.addEventListener('click', e => {
+  const addBtn = e.target.closest('.df-repeater-add');
+  if (addBtn) {
+    const type = drawerDraft.type;
+    const t = TRANSFORMS[type];
+    const p = t.params.find(pp => pp.key === addBtn.dataset.key);
+    const fresh = readForm(type, drawerDraft);
+    Object.assign(drawerDraft, fresh);
+    drawerDraft[p.key] = [...drawerDraft[p.key], p.itemDefault(ctxFor(), drawerDraft[p.key])];
+    renderTransformForm(type, drawerDraft);
+    return;
+  }
+  const removeBtn = e.target.closest('.df-repeater-remove');
+  if (removeBtn) {
+    const type = drawerDraft.type;
+    const t = TRANSFORMS[type];
+    const p = t.params.find(pp => pp.key === removeBtn.dataset.key);
+    const fresh = readForm(type, drawerDraft);
+    Object.assign(drawerDraft, fresh);
+    drawerDraft[p.key].splice(Number(removeBtn.dataset.i), 1);
+    renderTransformForm(type, drawerDraft);
+  }
+});
+
+function renderDrawerBody() {
+  hideDrawerValidation();
+  drawerTitle.textContent = (drawerEditingIndex === null ? 'Add — ' : 'Edit — ') + STEP_TYPES.find(s => s.type === drawerDraft.type).label;
+  renderTransformForm(drawerDraft.type, drawerDraft);
+  scheduleDrawerPreview();
 }
 
 function colOptions(selected) {
   return drawerColumns.map(c => `<option value="${escapeHTML(c.name)}" ${c.name === selected ? 'selected' : ''}>${escapeHTML(c.name)}</option>`).join('');
 }
 
-function renderFilterForm() {
-  const d = drawerDraft;
-  const ops = [
-    ['=', 'equals'], ['!=', 'not equals'], ['>', 'greater than'], ['>=', 'greater or equal'],
-    ['<', 'less than'], ['<=', 'less or equal'], ['contains', 'contains'], ['starts_with', 'starts with'],
-    ['is_null', 'is empty'], ['is_not_null', 'is not empty'],
-  ];
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>Condition</label><select id="df-operator">${ops.map(([v, l]) => `<option value="${v}" ${v === d.operator ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div class="field" id="df-value-wrap"><label>Value</label><input type="text" id="df-value" value="${escapeHTML(d.value || '')}" placeholder="value to compare against"></div>
-  `;
-  const opSel = $('#df-operator');
-  const toggleVal = () => { $('#df-value-wrap').style.display = opSel.value.includes('null') ? 'none' : 'flex'; };
-  opSel.addEventListener('change', toggleVal);
-  toggleVal();
-}
-
-function renderKeepColumnsForm() {
-  const selected = new Set(drawerDraft.columns || drawerColumns.map(c => c.name));
-  drawerBody.innerHTML = `
-    <div class="field"><label>Columns to keep</label>
-      <div class="checkbox-list">${drawerColumns.map(c => `
-        <label class="checkbox-row"><input type="checkbox" class="df-col-check" value="${escapeHTML(c.name)}" ${selected.has(c.name) ? 'checked' : ''}> ${escapeHTML(c.name)} <span style="color:var(--muted)">(${c.type})</span></label>
-      `).join('')}</div>
-    </div>`;
-}
-
-function renderRemoveColumnsForm() {
-  const selected = new Set(drawerDraft.columns || []);
-  drawerBody.innerHTML = `
-    <div class="field"><label>Columns to remove</label>
-      <div class="checkbox-list">${drawerColumns.map(c => `
-        <label class="checkbox-row"><input type="checkbox" class="df-col-check" value="${escapeHTML(c.name)}" ${selected.has(c.name) ? 'checked' : ''}> ${escapeHTML(c.name)} <span style="color:var(--muted)">(${c.type})</span></label>
-      `).join('')}</div>
-    </div>`;
-}
-
-function renderRenameForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>New name</label><input type="text" id="df-newname" value="${escapeHTML(d.newName || '')}"></div>
-  `;
-  $('#df-column').addEventListener('change', e => { if (!drawerDraft.newNameTouched) $('#df-newname').value = e.target.value; });
-  $('#df-newname').addEventListener('input', () => { drawerDraft.newNameTouched = true; });
-}
-
-function renderSortForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>Direction</label><select id="df-direction">
-      <option value="asc" ${d.direction === 'asc' ? 'selected' : ''}>Ascending</option>
-      <option value="desc" ${d.direction === 'desc' ? 'selected' : ''}>Descending</option>
-    </select></div>`;
-}
-
-function renderAddColumnForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>New column name</label><input type="text" id="df-name" value="${escapeHTML(d.name || '')}"></div>
-    <div class="field"><label>Expression (SQL)</label><textarea id="df-expression" placeholder="e.g. price * quantity, or upper(city)">${escapeHTML(d.expression || '')}</textarea>
-      <span class="field-hint">Available columns: ${drawerColumns.map(c => c.name).join(', ') || '—'}</span>
-    </div>`;
-}
-
-function renderChangeTypeForm() {
-  const d = drawerDraft;
-  const types = ['VARCHAR', 'BIGINT', 'DOUBLE', 'BOOLEAN', 'DATE', 'TIMESTAMP'];
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>New type</label>
-      <div class="type-picker">${types.map(t => `<button type="button" data-type="${t}" class="${t === d.dataType ? 'is-selected' : ''}">${t}</button>`).join('')}</div>
-    </div>`;
-  drawerBody.querySelectorAll('.type-picker button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      drawerBody.querySelectorAll('.type-picker button').forEach(b => b.classList.remove('is-selected'));
-      btn.classList.add('is-selected');
-      drawerDraft.dataType = btn.dataset.type;
-    });
-  });
-}
-
-function renderGroupByForm() {
-  const d = drawerDraft;
-  const groupSelected = new Set(d.groupColumns || []);
-  drawerBody.innerHTML = `
-    <div class="field"><label>Group by</label>
-      <div class="checkbox-list">${drawerColumns.map(c => `
-        <label class="checkbox-row"><input type="checkbox" class="df-group-check" value="${escapeHTML(c.name)}" ${groupSelected.has(c.name) ? 'checked' : ''}> ${escapeHTML(c.name)}</label>
-      `).join('')}</div>
-    </div>
-    <div class="field"><label>Metrics</label>
-      <div id="df-agg-rows"></div>
-      <button type="button" id="df-add-agg" class="btn-ghost btn-small" style="align-self:flex-start;margin-top:4px;">+ Add metric</button>
-    </div>`;
-  renderAggRows();
-  $('#df-add-agg').addEventListener('click', () => {
-    drawerDraft.aggregations = readAggRowsFromDOM();
-    drawerDraft.aggregations.push({ column: drawerColumns[0]?.name || '', func: 'count', alias: `metric_${drawerDraft.aggregations.length + 1}` });
-    renderAggRows();
-  });
-}
-
-function readAggRowsFromDOM() {
-  return [...$('#df-agg-rows').querySelectorAll('.agg-row')].map(row => ({
-    func: row.querySelector('.agg-func').value,
-    column: row.querySelector('.agg-col').value,
-    alias: row.querySelector('.agg-alias').value,
-  }));
-}
-
-function renderAggRows() {
-  const wrap = $('#df-agg-rows');
-  const funcs = [['count', 'count'], ['count_distinct', 'count distinct'], ['sum', 'sum'], ['avg', 'average'], ['min', 'min'], ['max', 'max']];
-  wrap.innerHTML = drawerDraft.aggregations.map((a, i) => `
-    <div class="agg-row" data-i="${i}" style="margin-bottom:7px;">
-      <select class="agg-func">${funcs.map(([v, l]) => `<option value="${v}" ${v === a.func ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <select class="agg-col">${a.func === 'count' ? `<option value="" ${!a.column ? 'selected' : ''}>(all rows)</option>` : ''}${colOptions(a.column)}</select>
-      <input type="text" class="agg-alias" value="${escapeHTML(a.alias)}" placeholder="alias" style="width:90px;background:var(--ink-2);border:1px solid var(--line);color:var(--paper);padding:8px;border-radius:3px;font-size:12px;">
-      <button type="button" class="btn-icon" data-remove="${i}">✕</button>
-    </div>`).join('');
-  wrap.querySelectorAll('.agg-func').forEach((sel, i) => sel.addEventListener('change', () => {
-    drawerDraft.aggregations = readAggRowsFromDOM();
-    const agg = drawerDraft.aggregations[i];
-    agg.func = sel.value;
-    if (agg.func !== 'count' && !agg.column) agg.column = drawerColumns[0]?.name || '';
-    renderAggRows();
-  }));
-  wrap.querySelectorAll('[data-remove]').forEach(btn => btn.addEventListener('click', () => {
-    drawerDraft.aggregations = readAggRowsFromDOM();
-    drawerDraft.aggregations.splice(Number(btn.dataset.remove), 1);
-    renderAggRows();
-  }));
-}
-
-function renderRemoveDuplicatesForm() {
-  drawerBody.innerHTML = `<p class="field-hint">This step keeps only distinct rows across every column — exact duplicate rows are collapsed into one.</p>`;
-}
-
-function renderLimitForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `<div class="field"><label>Row count</label><input type="number" id="df-n" min="1" value="${d.n || 100}"></div>`;
-}
-
-function renderRemoveBlankRowsForm() {
-  const selected = new Set(drawerDraft.columns || drawerColumns.map(c => c.name));
-  drawerBody.innerHTML = `
-    <div class="field-hint">A row is removed only if every checked column is empty on that row.</div>
-    <div class="field"><label>Check these columns</label>
-      <div class="checkbox-list">${drawerColumns.map(c => `
-        <label class="checkbox-row"><input type="checkbox" class="df-col-check" value="${escapeHTML(c.name)}" ${selected.has(c.name) ? 'checked' : ''}> ${escapeHTML(c.name)}</label>
-      `).join('')}</div>
-    </div>`;
-}
-
-function renderIndexColumnForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column name</label><input type="text" id="df-name" value="${escapeHTML(d.name || 'index')}"></div>
-    <div class="field"><label>Start at</label><input type="number" id="df-start" value="${d.start ?? 1}"></div>`;
-}
-
-function renderSplitColumnForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>Delimiter</label><input type="text" id="df-delimiter" value="${escapeHTML(d.delimiter ?? ',')}" placeholder=", or | or space"></div>
-    <div class="field"><label>Split into</label>
-      <div class="type-picker" style="grid-template-columns:1fr 1fr;">
-        <button type="button" data-mode="columns" class="${d.mode !== 'rows' ? 'is-selected' : ''}">Columns</button>
-        <button type="button" data-mode="rows" class="${d.mode === 'rows' ? 'is-selected' : ''}">Rows</button>
-      </div>
-    </div>
-    <div class="field" id="df-parts-wrap" style="${d.mode === 'rows' ? 'display:none' : ''}"><label>Number of columns</label><input type="number" id="df-parts" min="2" value="${d.parts || 2}"></div>`;
-  drawerBody.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => {
-    drawerBody.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('is-selected'));
-    btn.classList.add('is-selected');
-    drawerDraft.mode = btn.dataset.mode;
-    $('#df-parts-wrap').style.display = drawerDraft.mode === 'rows' ? 'none' : 'flex';
-  }));
-}
-
-function renderMergeColumnsForm() {
-  const d = drawerDraft;
-  const selected = new Set(d.columns || []);
-  drawerBody.innerHTML = `
-    <div class="field"><label>Columns to merge, in order</label>
-      <div class="checkbox-list">${drawerColumns.map(c => `
-        <label class="checkbox-row"><input type="checkbox" class="df-col-check" value="${escapeHTML(c.name)}" ${selected.has(c.name) ? 'checked' : ''}> ${escapeHTML(c.name)}</label>
-      `).join('')}</div>
-    </div>
-    <div class="field"><label>Separator</label><input type="text" id="df-separator" value="${escapeHTML(d.separator ?? ' ')}"></div>
-    <div class="field"><label>New column name</label><input type="text" id="df-newname" value="${escapeHTML(d.newName || 'merged')}"></div>`;
-}
-
-function renderExtractTextForm() {
-  const d = drawerDraft;
-  const modes = [['before', 'text before a marker'], ['after', 'text after a marker'], ['between', 'text between two markers'], ['chars', 'a fixed character range']];
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>Extract</label><select id="df-mode">${modes.map(([v, l]) => `<option value="${v}" ${v === d.mode ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div class="field" id="df-a-wrap"><label id="df-a-label">Marker</label><input type="text" id="df-a" value="${escapeHTML(d.a ?? '')}"></div>
-    <div class="field" id="df-b-wrap"><label id="df-b-label">End marker</label><input type="text" id="df-b" value="${escapeHTML(d.b ?? '')}"></div>
-    <div class="field"><label>New column name</label><input type="text" id="df-newname" value="${escapeHTML(d.newName || '')}"></div>`;
-  const modeSel = $('#df-mode');
-  const sync = () => {
-    const m = modeSel.value;
-    $('#df-a-label').textContent = m === 'chars' ? 'Start position' : m === 'after' ? 'Marker' : 'Marker';
-    $('#df-b-label').textContent = m === 'chars' ? 'Length' : 'End marker';
-    $('#df-b-wrap').style.display = (m === 'between' || m === 'chars') ? 'flex' : 'none';
-    $('#df-a-wrap').querySelector('input').type = m === 'chars' ? 'number' : 'text';
-  };
-  modeSel.addEventListener('change', sync);
-  sync();
-}
-
-function renderReplaceValuesForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>Match</label>
-      <div class="type-picker" style="grid-template-columns:1fr 1fr;">
-        <button type="button" data-mode="contains" class="${d.matchMode !== 'exact' ? 'is-selected' : ''}">Contains</button>
-        <button type="button" data-mode="exact" class="${d.matchMode === 'exact' ? 'is-selected' : ''}">Exact value</button>
-      </div>
-    </div>
-    <div class="field"><label>Find</label><input type="text" id="df-find" value="${escapeHTML(d.find ?? '')}"></div>
-    <div class="field"><label>Replace with</label><input type="text" id="df-replace" value="${escapeHTML(d.replace ?? '')}"></div>`;
-  drawerBody.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => {
-    drawerBody.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('is-selected'));
-    btn.classList.add('is-selected');
-    drawerDraft.matchMode = btn.dataset.mode;
-  }));
-}
-
-function renderChangeCaseForm() {
-  const d = drawerDraft;
-  const modes = [['upper', 'UPPER'], ['lower', 'lower'], ['title', 'Title Case']];
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>Case</label>
-      <div class="type-picker">${modes.map(([v, l]) => `<button type="button" data-mode="${v}" class="${v === d.mode ? 'is-selected' : ''}">${l}</button>`).join('')}</div>
-    </div>`;
-  drawerBody.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => {
-    drawerBody.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('is-selected'));
-    btn.classList.add('is-selected');
-    drawerDraft.mode = btn.dataset.mode;
-  }));
-}
-
-function renderTrimCleanForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <p class="field-hint">Trims leading/trailing whitespace and collapses repeated spaces into one.</p>`;
-}
-
-function renderFillForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column</label><select id="df-column">${colOptions(d.column)}</select></div>
-    <div class="field"><label>Direction</label>
-      <div class="type-picker" style="grid-template-columns:1fr 1fr;">
-        <button type="button" data-mode="down" class="${d.direction !== 'up' ? 'is-selected' : ''}">Fill down</button>
-        <button type="button" data-mode="up" class="${d.direction === 'up' ? 'is-selected' : ''}">Fill up</button>
-      </div>
-    </div>
-    <p class="field-hint">Fill down carries the last seen value forward through blanks; fill up carries the next value backward.</p>`;
-  drawerBody.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => {
-    drawerBody.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('is-selected'));
-    btn.classList.add('is-selected');
-    drawerDraft.direction = btn.dataset.mode;
-  }));
-}
-
-function renderConditionalColumnForm() {
-  const d = drawerDraft;
-  drawerBody.innerHTML = `
-    <div class="field"><label>New column name</label><input type="text" id="df-name" value="${escapeHTML(d.name || '')}"></div>
-    <div class="field"><label>Conditions</label>
-      <div id="df-cond-rows"></div>
-      <button type="button" id="df-add-cond" class="btn-ghost btn-small" style="align-self:flex-start;margin-top:4px;">+ Add condition</button>
-    </div>
-    <div class="field"><label>Else</label><input type="text" id="df-else" value="${escapeHTML(d.elseValue ?? '')}" placeholder="e.g. 'Other' or NULL"></div>
-    <p class="field-hint">Condition and result are raw SQL — e.g. condition <code>country = 'FR'</code>, result <code>'Europe'</code> (quote text literals yourself).</p>`;
-  renderCondRows();
-  $('#df-add-cond').addEventListener('click', () => {
-    drawerDraft.cases = readCondRowsFromDOM();
-    drawerDraft.cases.push({ when: '', then: '' });
-    renderCondRows();
-  });
-}
-
-function readCondRowsFromDOM() {
-  return [...$('#df-cond-rows').querySelectorAll('.agg-row')].map(row => ({
-    when: row.querySelector('.cond-when').value,
-    then: row.querySelector('.cond-then').value,
-  }));
-}
-
-function renderCondRows() {
-  const wrap = $('#df-cond-rows');
-  wrap.innerHTML = drawerDraft.cases.map((c, i) => `
-    <div class="agg-row" data-i="${i}" style="margin-bottom:7px;">
-      <input type="text" class="cond-when" value="${escapeHTML(c.when)}" placeholder="when..." style="flex:1;background:var(--ink-2);border:1px solid var(--line);color:var(--paper);padding:8px;border-radius:3px;font-size:12px;font-family:var(--font-mono);">
-      <input type="text" class="cond-then" value="${escapeHTML(c.then)}" placeholder="then..." style="flex:1;background:var(--ink-2);border:1px solid var(--line);color:var(--paper);padding:8px;border-radius:3px;font-size:12px;font-family:var(--font-mono);">
-      <button type="button" class="btn-icon" data-remove="${i}">✕</button>
-    </div>`).join('');
-  wrap.querySelectorAll('[data-remove]').forEach(btn => btn.addEventListener('click', () => {
-    drawerDraft.cases = readCondRowsFromDOM();
-    drawerDraft.cases.splice(Number(btn.dataset.remove), 1);
-    renderCondRows();
-  }));
-}
-
-function renderPivotForm() {
-  const d = drawerDraft;
-  const funcs = [['sum', 'sum'], ['avg', 'average'], ['count', 'count'], ['min', 'min'], ['max', 'max'], ['first', 'first value']];
-  drawerBody.innerHTML = `
-    <div class="field"><label>Column to pivot</label><select id="df-column">${colOptions(d.column)}</select>
-      <span class="field-hint">Its unique values become new columns.</span></div>
-    <div class="field"><label>Values column</label><select id="df-valuecolumn">${colOptions(d.valueColumn)}</select></div>
-    <div class="field"><label>Aggregation</label><select id="df-func">${funcs.map(([v, l]) => `<option value="${v}" ${v === d.func ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <p class="field-hint">Every other column is kept as-is and used to group rows — e.g. pivoting "month" with values from "revenue" gives one column per month.</p>`;
-}
-
-function renderUnpivotForm() {
-  const d = drawerDraft;
-  const selected = new Set(d.columns || []);
-  drawerBody.innerHTML = `
-    <div class="field"><label>Columns to unpivot</label>
-      <div class="checkbox-list">${drawerColumns.map(c => `
-        <label class="checkbox-row"><input type="checkbox" class="df-col-check" value="${escapeHTML(c.name)}" ${selected.has(c.name) ? 'checked' : ''}> ${escapeHTML(c.name)}</label>
-      `).join('')}</div>
-    </div>
-    <div class="field"><label>Attribute column name</label><input type="text" id="df-namecol" value="${escapeHTML(d.nameColumn ?? 'attribute')}"></div>
-    <div class="field"><label>Value column name</label><input type="text" id="df-valuecol" value="${escapeHTML(d.valueColumn ?? 'value')}"></div>
-    <p class="field-hint">Each checked column becomes a row: its header lands in the attribute column, its value lands in the value column. Unchecked columns repeat as-is.</p>`;
-}
-
-// ---------- Apply drawer ----------
 function showDrawerValidation(msg) {
   const el = $('#drawerValidation');
   el.textContent = msg;
@@ -1813,112 +2173,96 @@ function hideDrawerValidation() {
   $('#drawerValidation').hidden = true;
 }
 
+let drawerBaseRowCount = null;
+let drawerPreviewToken = 0;
+let drawerPreviewTimer = null;
+
+async function primeDrawerBaseRowCount() {
+  drawerBaseRowCount = null;
+  try {
+    const base = drawerEditingIndex === null ? steps : steps.slice(0, drawerEditingIndex);
+    const sql = buildSQL(base, sourceTable, null);
+    const { totalRows } = await runPreviewQuery(sql, 1);
+    drawerBaseRowCount = totalRows;
+  } catch {
+    drawerBaseRowCount = null;
+  }
+}
+
+function debouncedDrawerPreview() {
+  clearTimeout(drawerPreviewTimer);
+  drawerPreviewTimer = setTimeout(scheduleDrawerPreview, 350);
+}
+
+async function scheduleDrawerPreview() {
+  if (!drawerDraft || !drawerDraft.type) return;
+  const myToken = ++drawerPreviewToken;
+  const previewEl = $('#drawerPreview');
+  const { step, error } = buildStepFromDrawer();
+
+  if (error) {
+    previewEl.hidden = false;
+    previewEl.innerHTML = `<p class="drawer-preview-hint">Finish filling in the fields above to see a preview.</p>`;
+    return;
+  }
+
+  previewEl.hidden = false;
+  if (!previewEl.querySelector('.drawer-preview-table')) {
+    previewEl.innerHTML = `<p class="drawer-preview-hint">computing preview…</p>`;
+  }
+
+  try {
+    const base = drawerEditingIndex === null ? steps : steps.slice(0, drawerEditingIndex);
+    const sql = buildSQL([...base, step], sourceTable, null);
+    const { columns, rows, totalRows } = await runPreviewQuery(sql, 5);
+    if (myToken !== drawerPreviewToken) return; 
+    renderDrawerPreview(columns, rows, totalRows);
+  } catch (err) {
+    if (myToken !== drawerPreviewToken) return;
+    previewEl.innerHTML = `<p class="drawer-preview-hint">Finish filling in the fields above to see a preview.</p>`;
+  }
+}
+
+function renderDrawerPreview(columns, rows, totalRows) {
+  const previewEl = $('#drawerPreview');
+  const countLabel = drawerBaseRowCount !== null && drawerBaseRowCount !== totalRows
+    ? `${drawerBaseRowCount.toLocaleString()} → <span class="drawer-preview-count">${totalRows.toLocaleString()} rows</span>`
+    : `<span class="drawer-preview-count">${totalRows.toLocaleString()} rows</span>`;
+  const shownCols = columns.slice(0, 6);
+  const moreCols = columns.length - shownCols.length;
+  const table = rows.length ? `
+    <table class="drawer-preview-table">
+      <thead><tr>${shownCols.map(c => `<th>${escapeHTML(c.name)}</th>`).join('')}</tr></thead>
+      <tbody>${rows.slice(0, 4).map(row => `<tr>${shownCols.map(c => {
+        const v = row[c.name];
+        return `<td>${v === null || v === undefined ? '∅' : escapeHTML(String(v))}</td>`;
+      }).join('')}</tr>`).join('')}</tbody>
+    </table>` : '<p class="drawer-preview-hint">This step would leave no rows.</p>';
+  previewEl.innerHTML = `
+    <div class="drawer-preview-head"><span>Preview</span><span>${countLabel}</span></div>
+    ${table}
+    ${moreCols > 0 ? `<div class="drawer-preview-more">+${moreCols} more column${moreCols === 1 ? '' : 's'} not shown</div>` : ''}`;
+}
+
+drawerBody.addEventListener('input', debouncedDrawerPreview);
+drawerBody.addEventListener('change', debouncedDrawerPreview);
+
+function buildStepFromDrawer() {
+  const type = drawerDraft.type;
+  try {
+    const step = readForm(type, drawerDraft);
+    const error = TRANSFORMS[type].validate(step);
+    return { step, error };
+  } catch (err) {
+    console.error(err);
+    return { step: { type }, error: 'Could not read this step\u2019s fields.' };
+  }
+}
 drawerApply.addEventListener('click', async () => {
   if (!drawerDraft || !drawerDraft.type) return;
   hideDrawerValidation();
-  const type = drawerDraft.type;
-  let finalStep = { type };
-  let invalid = false;
-  const fail = msg => { showDrawerValidation(msg); invalid = true; };
-
-  try {
-    if (type === 'filter') {
-      finalStep = { type, column: $('#df-column').value, operator: $('#df-operator').value, value: $('#df-value')?.value ?? '', columnType: drawerColumns.find(c => c.name === $('#df-column').value)?.type };
-    } else if (type === 'select_columns') {
-      const cols = [...drawerBody.querySelectorAll('.df-col-check:checked')].map(c => c.value);
-      if (!cols.length) fail('Choose at least one column to keep.');
-      finalStep = { type, columns: cols };
-    } else if (type === 'remove_columns') {
-      const cols = [...drawerBody.querySelectorAll('.df-col-check:checked')].map(c => c.value);
-      if (!cols.length) fail('Choose at least one column to remove.');
-      finalStep = { type, columns: cols };
-    } else if (type === 'rename_column') {
-      const newName = $('#df-newname').value.trim();
-      if (!newName) fail('Give the column a new name.');
-      finalStep = { type, column: $('#df-column').value, newName };
-    } else if (type === 'sort') {
-      finalStep = { type, column: $('#df-column').value, direction: $('#df-direction').value };
-    } else if (type === 'add_column') {
-      const name = $('#df-name').value.trim();
-      const expression = $('#df-expression').value.trim();
-      if (!name || !expression) fail('Give the new column a name and an expression.');
-      finalStep = { type, name, expression };
-    } else if (type === 'change_type') {
-      finalStep = { type, column: $('#df-column').value, dataType: drawerDraft.dataType || 'VARCHAR' };
-    } else if (type === 'group_by') {
-      const groupColumns = [...drawerBody.querySelectorAll('.df-group-check:checked')].map(c => c.value);
-      const rows = [...drawerBody.querySelectorAll('.agg-row')];
-      const aggregations = rows.map(row => ({
-        func: row.querySelector('.agg-func').value,
-        column: row.querySelector('.agg-col').value,
-        alias: row.querySelector('.agg-alias').value.trim() || 'metric',
-      }));
-      if (!groupColumns.length && !aggregations.length) fail('Choose at least one group column or metric.');
-      finalStep = { type, groupColumns, aggregations };
-    } else if (type === 'remove_duplicates') {
-      finalStep = { type };
-    } else if (type === 'limit') {
-      const n = Number($('#df-n').value);
-      if (!n || n < 1) fail('Enter a row count of at least 1.');
-      finalStep = { type, n };
-    } else if (type === 'remove_blank_rows') {
-      const cols = [...drawerBody.querySelectorAll('.df-col-check:checked')].map(c => c.value);
-      if (!cols.length) fail('Check at least one column.');
-      finalStep = { type, columns: cols };
-    } else if (type === 'index_column') {
-      const name = $('#df-name').value.trim() || 'index';
-      const start = Number($('#df-start').value) || 1;
-      finalStep = { type, name, start };
-    } else if (type === 'split_column') {
-      const delimiter = $('#df-delimiter').value;
-      if (!delimiter) fail('Enter a delimiter to split on.');
-      finalStep = { type, column: $('#df-column').value, delimiter, mode: drawerDraft.mode || 'columns', parts: Number($('#df-parts')?.value) || 2 };
-    } else if (type === 'merge_columns') {
-      const cols = [...drawerBody.querySelectorAll('.df-col-check:checked')].map(c => c.value);
-      const newName = $('#df-newname').value.trim();
-      if (cols.length < 2) fail('Choose at least two columns to merge.');
-      else if (!newName) fail('Give the merged column a name.');
-      finalStep = { type, columns: cols, separator: $('#df-separator').value, newName };
-    } else if (type === 'extract_text') {
-      const newName = $('#df-newname').value.trim();
-      if (!newName) fail('Give the new column a name.');
-      finalStep = { type, column: $('#df-column').value, mode: $('#df-mode').value, a: $('#df-a').value, b: $('#df-b').value, newName };
-    } else if (type === 'replace_values') {
-      finalStep = { type, column: $('#df-column').value, find: $('#df-find').value, replace: $('#df-replace').value, matchMode: drawerDraft.matchMode || 'contains' };
-    } else if (type === 'change_case') {
-      finalStep = { type, column: $('#df-column').value, mode: drawerDraft.mode || 'upper' };
-    } else if (type === 'trim_clean') {
-      finalStep = { type, column: $('#df-column').value };
-    } else if (type === 'fill') {
-      finalStep = { type, column: $('#df-column').value, direction: drawerDraft.direction || 'down' };
-    } else if (type === 'conditional_column') {
-      const name = $('#df-name').value.trim();
-      const cases = [...drawerBody.querySelectorAll('#df-cond-rows .agg-row')].map(row => ({
-        when: row.querySelector('.cond-when').value.trim(),
-        then: row.querySelector('.cond-then').value.trim(),
-      })).filter(c => c.when && c.then);
-      if (!name) fail('Give the new column a name.');
-      else if (!cases.length) fail('Add at least one condition.');
-      finalStep = { type, name, cases, elseValue: $('#df-else').value.trim() || 'NULL' };
-    } else if (type === 'pivot') {
-      const column = $('#df-column').value;
-      const valueColumn = $('#df-valuecolumn').value;
-      if (column === valueColumn) fail('Pick two different columns — one to spread into new columns, one to fill their values.');
-      finalStep = { type, column, valueColumn, func: $('#df-func').value };
-    } else if (type === 'unpivot') {
-      const cols = [...drawerBody.querySelectorAll('.df-col-check:checked')].map(c => c.value);
-      const nameColumn = $('#df-namecol').value.trim() || 'attribute';
-      const valueColumn = $('#df-valuecol').value.trim() || 'value';
-      if (cols.length < 2) fail('Choose at least two columns to unpivot.');
-      else if (nameColumn === valueColumn) fail('The attribute and value column names need to be different.');
-      finalStep = { type, columns: cols, nameColumn, valueColumn };
-    }
-  } catch (err) {
-    console.error(err);
-    fail('Could not read this step\u2019s fields.');
-  }
-
-  if (invalid) return;
+  const { step: finalStep, error } = buildStepFromDrawer();
+  if (error) { showDrawerValidation(error); return; }
 
   if (drawerEditingIndex === null) steps.push(finalStep);
   else steps[drawerEditingIndex] = finalStep;
