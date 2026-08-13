@@ -125,6 +125,8 @@ input,select,textarea{font-family:inherit;}
 .tagline{margin:1px 0 0;font-size:11.5px;color:var(--muted);letter-spacing:0.02em;}
 .masthead-right{display:flex;align-items:center;gap:14px;}
 .engine-status{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);}
+.engine-status.is-swappable{cursor:pointer;border-radius:var(--radius-s);padding:3px 7px;margin:-3px -7px;transition:background .15s,color .15s;}
+.engine-status.is-swappable:hover{background:var(--ink-2);color:var(--paper-dim);}
 .icon-btn-row{display:flex;align-items:center;gap:6px;}
 .engine-version-btn{
   background:none;border:none;color:var(--muted);
@@ -364,6 +366,37 @@ input,select,textarea{font-family:inherit;}
 .step-mini-btn.is-dragging{opacity:0.4;}
 .step-card[draggable="true"]{cursor:grab;}
 .step-card.is-drag-over{border-top:2px solid var(--brass-bright);}
+.step-card.step-flash{animation:stepAddFlash 900ms var(--ease-smooth);}
+@keyframes stepAddFlash{0%{box-shadow:0 0 0 3px rgba(var(--brass-rgb),0.5);background:rgba(var(--brass-rgb),0.18);}100%{box-shadow:0 0 0 1px rgba(var(--brass-rgb),0.25);background:var(--ink-2);}}
+.step-gap{position:relative;height:12px;z-index:2;}
+.step-gap-add{
+  position:absolute;left:24px;top:50%;width:18px;height:18px;border-radius:50%;
+  transform:translate(-50%,-50%) scale(0.4);
+  background:var(--brass);color:var(--ink-0);border:2px solid var(--ink-1);
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;line-height:1;font-weight:700;cursor:pointer;
+  opacity:0;pointer-events:none;
+  transition:opacity .15s var(--ease-smooth),transform .15s var(--ease-smooth),background .15s;
+  box-shadow:0 2px 6px rgba(0,0,0,0.3);
+}
+.step-gap:hover .step-gap-add{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);}
+.step-gap-add:hover{background:var(--brass-bright);}
+.step-gap-add:active{transform:translate(-50%,-50%) scale(0.85);}
+.rail-add{padding:0 14px 12px;}
+.rail-add-btn{width:100%;justify-content:center;padding:9px 14px;font-size:12px;}
+.rail-add-kbd{color:inherit;border-color:currentColor;opacity:0.65;}
+.rail-clear-link{
+  background:none;border:none;color:var(--muted);font-size:11px;
+  padding:4px 2px;cursor:pointer;text-align:center;width:100%;
+  transition:color .15s;
+}
+.rail-clear-link:hover{color:var(--rust-text);text-decoration:underline;}
+.toast-action{
+  background:none;border:1px solid rgba(var(--brass-rgb),0.5);color:var(--brass-bright);
+  font-size:11px;font-weight:600;padding:3px 9px;border-radius:12px;cursor:pointer;
+  flex-shrink:0;transition:background .15s,color .15s;
+}
+.toast-action:hover{background:rgba(var(--brass-rgb),0.15);}
 .rail-foot{padding:10px 14px 14px;display:flex;flex-direction:column;gap:6px;}
 .ribbon{
   border-bottom:1px solid var(--line-soft);background:var(--ink-1);flex-shrink:0;
@@ -397,6 +430,7 @@ input,select,textarea{font-family:inherit;}
   color:var(--muted);text-align:center;margin-top:3px;
 }
 .ribbon-btn{
+  position:relative;
   display:flex;flex-direction:column;align-items:center;gap:4px;
   background:none;border:1px solid transparent;border-radius:var(--radius-m);color:var(--paper-dim);
   padding:5px 8px;cursor:pointer;font-size:10.5px;line-height:1.15;text-align:center;
@@ -407,6 +441,15 @@ input,select,textarea{font-family:inherit;}
 .ribbon-btn:active{background:var(--ink-3);transform:translateY(0) scale(0.96);}
 .ribbon-btn:disabled{opacity:0.32;cursor:default;}
 .ribbon-btn:disabled:hover{background:none;border-color:transparent;}
+.ribbon-btn.needs-full{opacity:0.5;}
+.ribbon-btn.needs-full:hover{opacity:0.85;}
+.engine-pill{
+  font-family:var(--font-mono);font-size:8px;letter-spacing:0.05em;text-transform:uppercase;
+  padding:1px 4px;border-radius:4px;line-height:1.3;flex-shrink:0;
+  background:rgba(var(--rust-rgb),0.16);color:var(--rust-text);border:1px solid rgba(var(--rust-rgb),0.4);
+}
+.ribbon-btn .engine-pill{position:absolute;top:2px;right:2px;pointer-events:none;}
+.ribbon-btn.is-small .engine-pill{position:static;margin-left:auto;}
 .ribbon-btn svg{width:19px;height:19px;flex-shrink:0;}
 .ribbon-btn.is-small svg{width:15px;height:15px;}
 .ribbon-btn .rb-icon{
@@ -696,6 +739,8 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
   border-radius:var(--radius-s);padding:7px 9px;font-size:12.5px;width:100%;
 }
 .field select:focus, .field input:focus, .field textarea:focus{border-color:var(--brass-dim);}
+.field-skeleton{height:32px;border-radius:var(--radius-s);background:var(--ink-2);border:1px solid var(--line-soft);animation:skeletonPulse 1.3s ease-in-out infinite;}
+@keyframes skeletonPulse{0%,100%{opacity:0.4;}50%{opacity:0.85;}}
 .sql-textarea{font-family:var(--font-mono);min-height:64px;resize:vertical;line-height:1.5;}
 .type-picker{display:flex;flex-wrap:wrap;gap:4px;}
 .type-picker button{
@@ -775,6 +820,9 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
 .palette-item.cat-shape{border-left-color:rgba(var(--plum-rgb),0.55);}
 .palette-item.cat-sql{border-left-color:var(--paper-dim);}
 .palette-item.is-active{background:var(--ink-3);color:var(--paper);}
+.palette-item.needs-full{opacity:0.6;}
+.palette-item.needs-full:hover{opacity:0.9;}
+.palette-item .engine-pill{margin-left:auto;}
 .palette-item-text{display:flex;flex-direction:column;gap:1px;min-width:0;}
 .palette-item-text strong{font-size:13px;font-weight:500;color:var(--paper);}
 .palette-item-text span{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -945,13 +993,16 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
           </div>
         </div>
 
+        <div class="rail-add">
+          <button id="addStepBtn" class="btn-solid rail-add-btn" title="Add a step (⌘K)">+ Add step <kbd class="palette-kbd rail-add-kbd">⌘K</kbd></button>
+        </div>
+
         <div class="rail-source" id="railSource"></div>
 
         <ol id="stepsList" class="steps-list"></ol>
 
         <div class="rail-foot">
-          <button id="addStepBtn" class="btn-ghost btn-small" title="Add a step (⌘K)" style="justify-content:center;">+ Add step <kbd class="palette-kbd">⌘K</kbd></button>
-          <button id="resetPipelineBtn" class="btn-ghost btn-small" style="justify-content:center;">Clear all steps</button>
+          <button id="resetPipelineBtn" class="rail-clear-link">Clear all steps</button>
         </div>
       </aside>
 
@@ -1227,15 +1278,20 @@ function htmlIcon(name, size=15){
 }
 
 let toastTimer = null;
-function toast(msg){
+function toast(msg, opts={}){
   let t = $('#dbToast');
   if (!t){
-    t = el('div',{id:'dbToast', style:'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:var(--ink-2);border:1px solid var(--line-soft);color:var(--paper);padding:10px 16px;border-radius:20px;font-size:12.5px;box-shadow:var(--shadow-panel);z-index:200;max-width:420px;text-align:center;'});
+    t = el('div',{id:'dbToast', style:'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:var(--ink-2);border:1px solid var(--line-soft);color:var(--paper);padding:10px 16px;border-radius:20px;font-size:12.5px;box-shadow:var(--shadow-panel);z-index:200;max-width:420px;display:flex;align-items:center;justify-content:center;gap:10px;'});
     document.body.appendChild(t);
   }
-  t.textContent = msg; t.style.opacity='1';
+  t.innerHTML = '';
+  t.appendChild(el('span',{}, msg));
+  if (opts.actionLabel && opts.onAction){
+    t.appendChild(el('button',{class:'toast-action', onclick:()=>{ clearTimeout(toastTimer); t.style.transition='opacity .3s'; t.style.opacity='0'; opts.onAction(); }}, opts.actionLabel));
+  }
+  t.style.opacity='1';
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>{ t.style.transition='opacity .3s'; t.style.opacity='0'; }, 3400);
+  toastTimer = setTimeout(()=>{ t.style.transition='opacity .3s'; t.style.opacity='0'; }, opts.actionLabel ? 5000 : 3400);
 }
 
 function toggleTheme(){
@@ -3024,6 +3080,7 @@ const state = {
   aqSourceTable: null,
   duckdbVersion: null, duckdbBundleName: null,
   sourceFileName: null, sourceFormat: null, hasSource: false,
+sourceFile: null, sourceImportOptions: null,
   steps: [],                 
   selectedStepIndex: null,   
   inspector: null,           
@@ -3095,6 +3152,12 @@ renderRailSource();
 renderRibbon();
 refreshPreview();
 }
+function openInsertMenuAt(afterIndex){
+closeInspector();
+state.selectedStepIndex = afterIndex;
+renderStepsList();
+openPalette();
+}
 function toggleStepDisabled(i){
 const steps = state.steps.map((s,idx)=> idx===i ? {...s, disabled: !s.disabled} : s);
 applyStepsChange(steps);
@@ -3153,6 +3216,24 @@ const insertAt = state.selectedStepIndex !== null ? state.selectedStepIndex + 1 
 const steps = [...state.steps.slice(0,insertAt), { id: uid('step_'), type, data: draft, disabled:false }, ...state.steps.slice(insertAt)];
 state.selectedStepIndex = insertAt;
 applyStepsChange(steps);
+return null;
+}
+function revealSelectedStepCard(){
+const card = $('.step-card.is-selected');
+if (card) card.scrollIntoView({ block:'nearest', behavior:'smooth' });
+}
+function flashSelectedStepCard(){
+const card = $('.step-card.is-selected');
+if (card) card.classList.add('step-flash');
+}
+function commitInstantStep(type, draft){
+const t = TRANSFORMS[type];
+const err = commitNewStep(type, draft);
+if (err){ toast(err); return err; }
+flashSelectedStepCard();
+revealSelectedStepCard();
+const summary = safeSummary(t, draft);
+toast(`Added: ${t.label}${summary ? ' — ' + summary : ''}`, { actionLabel:'Undo', onAction: undo });
 return null;
 }
 function commitEditStep(index, draft){
@@ -3674,6 +3755,8 @@ if (format === 'parquet'){
 state.hasSource = true;
 state.sourceFileName = file.name;
 state.sourceFormat = format;
+state.sourceFile = file;
+state.sourceImportOptions = { sheet, skipRows, firstRowHeader };
 state.steps = [];
 state.selectedStepIndex = null;
 await refreshSourceSchema();
@@ -3681,15 +3764,76 @@ resetHistory();
 $('#importOptions').hidden = true;
 $('#importScreen').hidden = true;
 $('#workbench').hidden = false;
+$('#engineStatus').classList.add('is-swappable');
+$('#engineStatus').title = 'Click to swap engines';
 renderAll();
 await refreshPreview();
 } catch(e){
 showImportError(e.message || String(e));
 if (!state.conn && state.engine.id === 'duckdb') setEngineStatus('error', `Couldn’t start DuckDB: ${e.message}`);
 } finally {
-if (state.conn && state.engine.id === 'duckdb') setEngineStatus('ready', `DuckDB ${state.duckdbVersion}`);
-if (state.engine.id === 'arquero') setEngineStatus('ready', 'Arquero Express');
+if (state.conn && state.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${state.duckdbVersion}`);
+if (state.engine.id === 'arquero') setEngineStatus('ready', 'Express · Arquero');
 }
+}
+async function switchEngineMidSession(targetId){
+if (state.engine.id === targetId) return;
+if (!state.sourceFile){ toast("Can't switch engines — reimport the file to enable this."); return; }
+const targetLabel = targetId === 'duckdb' ? 'Full (DuckDB)' : 'Express (Arquero)';
+if (state.steps.length){
+const n = state.steps.length;
+const warn = targetId === 'arquero' ? ` Any step that needs the Full engine will show an error until you remove or edit it.` : '';
+const ok = await confirmDialog(`Switch to ${targetLabel}? The file will reload and all ${n} step${n===1?'':'s'} will re-run against the new engine.${warn}`);
+if (!ok) return;
+}
+const savedSteps = state.steps;
+const savedSelected = state.selectedStepIndex;
+setEngineStatus('loading', 'switching engines…');
+try {
+state.engine = createEngine(targetId);
+state.selectedEngineId = targetId;
+if (!state.conn && targetId === 'duckdb') await state.engine.init();
+if (targetId === 'arquero') await state.engine.init();
+const file = state.sourceFile;
+const format = state.sourceFormat;
+const opts = state.sourceImportOptions || {};
+if (format === 'parquet'){
+const buffer = new Uint8Array(await file.arrayBuffer());
+await state.engine.loadFile({ format, fileName: file.name, buffer });
+} else if (format === 'excel'){
+const fullWb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
+const ws = fullWb.Sheets[opts.sheet];
+const csvText = XLSX.utils.sheet_to_csv(ws, { skipHidden:false });
+const lines = csvText.split(/\r?\n/);
+const trimmed = (opts.skipRows>0 ? lines.slice(opts.skipRows) : lines).join('\n');
+await state.engine.loadFile({ format, fileName: `${file.name}.csv`, csvText: trimmed, firstRowHeader: opts.firstRowHeader });
+} else {
+const buffer = new Uint8Array(await file.arrayBuffer());
+const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
+await state.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader: opts.firstRowHeader, skipRows: opts.skipRows, delim });
+}
+state.steps = savedSteps;
+state.selectedStepIndex = savedSelected;
+await refreshSourceSchema();
+closeInspector();
+resetHistory();
+renderAll();
+await refreshPreview();
+toast(`Switched to ${targetLabel}.`);
+} catch(e){
+toast(`Couldn’t switch engines: ${e.message}`);
+} finally {
+if (state.conn && state.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${state.duckdbVersion}`);
+if (state.engine.id === 'arquero') setEngineStatus('ready', 'Express · Arquero');
+}
+}
+async function switchToFullAndRetry(retryFn){
+await switchEngineMidSession('duckdb');
+if (state.engine.id === 'duckdb') retryFn();
+}
+async function toggleEngineMidSession(){
+if (!state.hasSource) return;
+await switchEngineMidSession(state.engine.id === 'duckdb' ? 'arquero' : 'duckdb');
 }
 async function viewSkippedRows(){
 const overlay = el('div',{class:'confirm-overlay'});
@@ -3870,7 +4014,12 @@ const identityBox = el('div',{id:'inspectorIdentityWarning', class:'identity-war
 body.appendChild(errorBox);
 body.appendChild(identityBox);
 if (state.engine.id === 'arquero' && (!t.engines?.includes('arquero'))){
-body.appendChild(el('div',{class:'inspector-error'}, `“${t.label}” is only available in Full (DuckDB) mode. Switch engines from the import screen to use this step.`));
+const retryBox = el('div',{class:'inspector-error'});
+retryBox.appendChild(htmlIcon('warn',14));
+retryBox.appendChild(el('span',{}, `“${t.label}” needs the Full (DuckDB) engine — Express doesn't support it.`));
+retryBox.appendChild(el('br'));
+retryBox.appendChild(el('button',{class:'btn-solid btn-small', style:'margin-top:8px;', onclick:()=>switchToFullAndRetry(()=>{ if (insp.isNew) openInspectorForAdd(insp.type, insp.data); else openInspectorForEdit(insp.forIndex); })}, 'Switch to Full and retry'));
+body.appendChild(retryBox);
 } else {
 (t.params||[]).forEach(p => {
 const field = renderField(p, insp.data, insp.checkpoint, (opts={}) => {
@@ -3882,9 +4031,11 @@ if (field) body.appendChild(field);
 if (insp.type === 'change_type' || insp.type === 'replace_values') body.appendChild(failBox);
 }
 panel.appendChild(body);
+const engineIncompatible = state.engine.id === 'arquero' && !t.engines?.includes('arquero');
+const notReady = !insp.checkpoint || engineIncompatible;
 panel.appendChild(el('div',{class:'inspector-foot'},
 el('button',{class:'btn-ghost', onclick:closeInspector}, 'Cancel'),
-el('button',{class:'btn-solid', onclick:commitInspector}, insp.isNew?'Add step':'Save changes'),
+el('button',{class:'btn-solid', onclick:commitInspector, disabled: notReady||null, title: notReady?(engineIncompatible?'Needs Full engine':'Waiting on column info…'):null}, insp.isNew?'Add step':'Save changes'),
 ));
 renderInspectorError();
 renderInspectorFailNote();
@@ -3923,7 +4074,9 @@ return;
 }
 const err = insp.isNew ? commitNewStep(insp.type, insp.data) : commitEditStep(insp.forIndex, insp.data);
 if (err){ insp.error = err; renderInspectorError(); return; }
+const wasNew = insp.isNew;
 closeInspector();
+if (wasNew) revealSelectedStepCard();
 }
 function renderField(p, data, checkpoint, onChange){
 if (p.visible && !p.visible(data)) return null;
@@ -3933,13 +4086,13 @@ const label = typeof p.label === 'function' ? p.label(data) : p.label;
 const wrap = (control) => el('div',{class:'field'}, el('label',{}, label), control);
 const fire = () => onChange({ rerender: !!p.reactive });
 if (p.type === 'column'){
-if (resolving) return wrap(el('select',{disabled:true, 'data-field-key':p.key}, el('option',{}, 'Resolving columns…')));
+if (resolving) return wrap(el('div',{class:'field-skeleton', 'data-field-key':p.key}));
 const sel = el('select',{ 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.target.value; fire(); } },
 ...cols.map(c=>el('option',{value:c.name, selected: data[p.key]===c.name?true:null}, c.name)));
 return wrap(sel);
 }
 if (p.type === 'columns'){
-if (resolving) return wrap(el('div',{class:'checkbox-list'}, el('div',{style:'padding:8px;color:var(--muted);font-size:11.5px;'},'Resolving columns…')));
+if (resolving) return wrap(el('div',{class:'field-skeleton', style:'height:76px;', 'data-field-key':p.key}));
 const box = el('div',{class:'checkbox-list'});
 const search = el('input',{class:'rep-field checkbox-list-search', 'data-field-key':`${p.key}.search`, placeholder:'Search columns…', style:'margin-bottom:4px;'});
 const listBox = el('div',{});
@@ -4093,6 +4246,12 @@ mini('Delete', ()=>deleteStep(i)),
 wireStepDrag(card, i);
 li.appendChild(card);
 list.appendChild(li);
+if (i < state.steps.length - 1){
+const gap = el('li',{class:'step-gap'},
+el('button',{class:'step-gap-add', type:'button', title:'Insert step here', 'aria-label':'Insert step here', onclick:(e)=>{ e.stopPropagation(); openInsertMenuAt(i); }}, '+'),
+);
+list.appendChild(gap);
+}
 });
 }
 function mini(label, onclick, disabled=false){
@@ -4274,7 +4433,7 @@ ModalStack.pop(entry);
 const t = TRANSFORMS[type];
 const seed = { ...(t.seed ? t.seed({column:colName}, undefined) : {column:colName}), ...seedOverride };
 const draft = buildDefaultDraft(type, seed);
-if (stepIsInstant(type, draft)) commitNewStep(type, draft);
+if (stepIsInstant(type, draft)) commitInstantStep(type, draft);
 else openInspectorForAdd(type, draft);
 };
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); commitNewStep('sort',{column:colName,direction:'asc',nullsLast:true}); }}, htmlIcon('sortAsc'),'Sort A → Z'));
@@ -4324,7 +4483,7 @@ function runRibbonCommand(type){
 const t = TRANSFORMS[type];
 const seed = t.seed ? (t.seed(currentSelectionForSeed(), undefined) || {}) : {};
 const draft = buildDefaultDraft(type, seed);
-if (stepIsInstant(type, draft)) commitNewStep(type, draft);
+if (stepIsInstant(type, draft)) commitInstantStep(type, draft);
 else openInspectorForAdd(type, draft);
 }
 const RIBBON_TABS = [
@@ -4367,9 +4526,15 @@ el('div',{class:'ribbon-group-label'}, name),
 }
 function ribbonButtonEl(t){
 const small = t.ribbon.size === 'small';
-return el('button', { class:`ribbon-btn cat-${t.category}${small?' is-small':''}`, title:t.label, onclick:()=>runRibbonCommand(t.type) },
+const needsFull = state.engine.id === 'arquero' && !(t.engines||[]).includes('arquero');
+return el('button', {
+class:`ribbon-btn cat-${t.category}${small?' is-small':''}${needsFull?' needs-full':''}`,
+title: needsFull ? 'Needs Full engine — click to switch.' : t.label,
+onclick: needsFull ? ()=>switchToFullAndRetry(()=>runRibbonCommand(t.type)) : ()=>runRibbonCommand(t.type),
+},
 el('span',{class:'rb-icon'}, htmlIcon(t.ribbon.icon, small?15:19)),
 el('span',{}, t.label),
+needsFull ? el('span',{class:'engine-pill'}, 'Full') : null,
 );
 }
 function renderColumnTab(groupsBox){
@@ -4428,12 +4593,14 @@ box._matches = matches;
 return;
 }
 matches.forEach((t, i) => {
+const needsFull = state.engine.id === 'arquero' && !(t.engines||[]).includes('arquero');
 box.appendChild(el('div',{
-class: `palette-item cat-${t.category}` + (i===paletteActiveIndex?' is-active':''),
+class: `palette-item cat-${t.category}` + (i===paletteActiveIndex?' is-active':'') + (needsFull?' needs-full':''),
 onclick:()=>choosePaletteItem(t.type),
 },
 el('span',{class:`step-code code-${t.category}`}, t.code),
 el('div',{class:'palette-item-text'}, el('strong',{}, t.label), el('span',{}, `${t.category} step`)),
+needsFull ? el('span',{class:'engine-pill', title:'Needs Full engine'}, 'Full') : null,
 ));
 });
 box._matches = matches;
@@ -4459,6 +4626,7 @@ $('#paletteOverlay').addEventListener('mousedown', e => { if (e.target.id==='pal
 }
 function wireStaticUI(){
 $('#themeToggle').addEventListener('click', toggleTheme);
+$('#engineStatus').addEventListener('click', toggleEngineMidSession);
 $('#engineVersionBtn').addEventListener('click', openVersionPanel);
 $('#checkLatestBtn').addEventListener('click', handleCheckLatest);
 $('#versionManualApply').addEventListener('click', handleManualVersionApply);
