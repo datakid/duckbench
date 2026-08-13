@@ -4,76 +4,86 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Duckbench</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iYmciIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjMWUyNTMwIi8+CiAgICAgIDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzEyMTYxYiIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iYm9keSIgeDE9IjAiIHkxPSIwIiB4Mj0iMC4zIiB5Mj0iMSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI2U4YmQ3NiIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNjNDk1NGEiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxyZWN0IHg9IjEiIHk9IjEiIHdpZHRoPSI5OCIgaGVpZ2h0PSI5OCIgcng9IjI0IiBmaWxsPSJ1cmwoI2JnKSIvPgogIDxyZWN0IHg9IjEiIHk9IjEiIHdpZHRoPSI5OCIgaGVpZ2h0PSI5OCIgcng9IjI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMzYTQyNTAiIHN0cm9rZS13aWR0aD0iMS41Ii8+CiAgPGVsbGlwc2UgY3g9IjU5IiBjeT0iNjUiIHJ4PSIyNyIgcnk9IjIwIiBmaWxsPSJ1cmwoI2JvZHkpIi8+CiAgPHBhdGggZD0iTTUwIDQ4cTktMTMgMjUtOXE5IDMgOCAxMXEtMSA2LTkgNmgtNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYTk3YzNhIiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBvcGFjaXR5PSIwLjU1Ii8+CiAgPGNpcmNsZSBjeD0iMzciIGN5PSIzOSIgcj0iMTgiIGZpbGw9InVybCgjYm9keSkiLz4KICA8cGF0aCBkPSJNMTUgMzdxLTYgMS02IDZxMCA1IDYgNS41cTYgLjUgOC00cTEuNS00LTItNi41cS0zLTItNi0xeiIgZmlsbD0iI2IwNjU0YyIvPgogIDxjaXJjbGUgY3g9IjMzIiBjeT0iMzMiIHI9IjMiIGZpbGw9IiMxNzFiMjEiLz4KPC9zdmc+">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNjQgNjQiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CiAgPHN0eWxlPgogICAgLmRie2ZpbGw6I0ZGNjI2Njt9CiAgICAuZGJpbGx7ZmlsbDojRkY2MjY2O30KICAgIEBtZWRpYSAocHJlZmVycy1jb2xvci1zY2hlbWU6IGRhcmspewogICAgICAuZGJ7ZmlsbDojRkZGNkU5O30KICAgICAgLmRiaWxse2ZpbGw6I0ZGNjI2Njt9CiAgICB9CiAgPC9zdHlsZT4KICA8cGF0aCBjbGFzcz0iZGIiIGQ9Ik03LDQyCiAgICAgICAgICAgQzYsMzEgMTAsMjQgMTksMjIKICAgICAgICAgICBDMjEsMTIgMjksNSA0MCw1CiAgICAgICAgICAgQzQ5LDUgNTUsMTAgNTYsMTcKICAgICAgICAgICBMNTMsMjcKICAgICAgICAgICBDNTEsMzUgNDQsNDAgMzYsNDEKICAgICAgICAgICBDMzUsNDMgMzIsNDQgMjksNDQKICAgICAgICAgICBMMTMsNDQKICAgICAgICAgICBDOCw0NCA3LDQ0IDcsNDIgWiIvPgogIDxwYXRoIGNsYXNzPSJkYmlsbCIgZD0iTTU2LDE3IEw2NCwyMSBMNTMsMjcgWiIvPgogIDxjaXJjbGUgY3g9IjQ5IiBjeT0iMTUiIHI9IjMuNCIgZmlsbD0iIzFhMWExYyIvPgo8L3N2Zz4K">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
-  /* Milky white — Raycast-inspired, default */
-  --ink-0-rgb: 247,247,247;   --ink-0: rgb(var(--ink-0-rgb));  /* app bg  #F7F7F7 */
-  --ink-1-rgb: 255,255,255;   --ink-1: rgb(var(--ink-1-rgb));  /* panels */
-  --ink-2-rgb: 243,243,244;   --ink-2: rgb(var(--ink-2-rgb));  /* hover / raised */
-  --ink-3-rgb: 234,234,236;   --ink-3: rgb(var(--ink-3-rgb));  /* pressed */
-  --line-rgb: 226,226,229;    --line: rgb(var(--line-rgb));
-  --line-soft-rgb: 238,238,240; --line-soft: rgb(var(--line-soft-rgb));
+  /* Subtle rose milk — warm, never pure white */
+  --ink-0-rgb: 246,244,241;   --ink-0: rgb(var(--ink-0-rgb));  /* canvas app bg */
+  --ink-1-rgb: 252,250,247;   --ink-1: rgb(var(--ink-1-rgb));  /* panels */
+  --ink-2-rgb: 243,239,233;   --ink-2: rgb(var(--ink-2-rgb));  /* hover / raised */
+  --ink-3-rgb: 239,235,229;   --ink-3: rgb(var(--ink-3-rgb));  /* pressed / inset */
+  --ink-hi-rgb: 255,253,249;  --ink-hi: rgb(var(--ink-hi-rgb)); /* highest surface, popovers */
+  --line-rgb: 229,227,224;    --line: rgb(var(--line-rgb));
+  --line-soft-rgb: 237,235,232; --line-soft: rgb(var(--line-soft-rgb));
 
-  /* rose = primary accent (was brass) */
+  /* rose = the one accent, used sparingly */
   --brass-rgb: 255,98,102;        --brass: rgb(var(--brass-rgb));        /* #FF6266 */
   --brass-bright-rgb: 255,122,126; --brass-bright: rgb(var(--brass-bright-rgb));
-  --brass-dim-rgb: 214,74,79;      --brass-dim: rgb(var(--brass-dim-rgb));
+  --brass-dim-rgb: 201,74,78;      --brass-dim: rgb(var(--brass-dim-rgb));
+  --brass-soft-rgb: 255,228,228;   --brass-soft: rgb(var(--brass-soft-rgb)); /* chip / hover tint fill */
 
-  --verdigris-rgb: 45,163,127;     --verdigris: rgb(var(--verdigris-rgb));
-  --verdigris-text-rgb: 26,118,90; --verdigris-text: rgb(var(--verdigris-text-rgb));
-  --rust-rgb: 217,45,32;           --rust: rgb(var(--rust-rgb));
-  --rust-text-rgb: 180,35,24;      --rust-text: rgb(var(--rust-text-rgb));
-  --plum-rgb: 122,90,248;          --plum: rgb(var(--plum-rgb));
-  --plum-text-rgb: 91,63,214;      --plum-text: rgb(var(--plum-text-rgb));
+  --verdigris-rgb: 107,142,127;     --verdigris: rgb(var(--verdigris-rgb));  /* sage */
+  --verdigris-text-rgb: 74,108,94;  --verdigris-text: rgb(var(--verdigris-text-rgb));
+  --rust-rgb: 184,92,74;            --rust: rgb(var(--rust-rgb));            /* clay */
+  --rust-text-rgb: 150,72,56;       --rust-text: rgb(var(--rust-text-rgb));
+  --plum-rgb: 123,109,184;          --plum: rgb(var(--plum-rgb));            /* iris */
+  --plum-text-rgb: 91,74,158;       --plum-text: rgb(var(--plum-text-rgb));
 
-  --paper-rgb: 26,26,28;      --paper: rgb(var(--paper-rgb));
-  --paper-dim-rgb: 74,74,78;  --paper-dim: rgb(var(--paper-dim-rgb));
-  --muted-rgb: 138,138,142;   --muted: rgb(var(--muted-rgb));
+  --paper-rgb: 31,27,24;      --paper: rgb(var(--paper-rgb));
+  --paper-dim-rgb: 74,66,60;  --paper-dim: rgb(var(--paper-dim-rgb));
+  --muted-rgb: 133,124,116;   --muted: rgb(var(--muted-rgb));
 
-  --grid-surface-rgb: 255,255,255;     --grid-surface: rgb(var(--grid-surface-rgb));
-  --grid-surface-alt-rgb: 250,250,251; --grid-surface-alt: rgb(var(--grid-surface-alt-rgb));
-  --grid-ink-rgb: 26,26,28;            --grid-ink: rgb(var(--grid-ink-rgb));
-  --grid-ink-dim-rgb: 122,122,127;     --grid-ink-dim: rgb(var(--grid-ink-dim-rgb));
-  --grid-line-rgb: 234,234,237;        --grid-line: rgb(var(--grid-line-rgb));
-  --grid-line-soft-rgb: 242,242,244;   --grid-line-soft: rgb(var(--grid-line-soft-rgb));
-  --grid-header-rgb: 247,247,248;      --grid-header: rgb(var(--grid-header-rgb));
+  --grid-surface-rgb: 253,251,248;     --grid-surface: rgb(var(--grid-surface-rgb));
+  --grid-surface-alt-rgb: 247,244,239; --grid-surface-alt: rgb(var(--grid-surface-alt-rgb));
+  --grid-ink-rgb: 31,27,24;            --grid-ink: rgb(var(--grid-ink-rgb));
+  --grid-ink-dim-rgb: 124,116,108;     --grid-ink-dim: rgb(var(--grid-ink-dim-rgb));
+  --grid-line-rgb: 231,226,219;        --grid-line: rgb(var(--grid-line-rgb));
+  --grid-line-soft-rgb: 240,237,231;   --grid-line-soft: rgb(var(--grid-line-soft-rgb));
+  --grid-header-rgb: 244,241,236;      --grid-header: rgb(var(--grid-header-rgb));
 
   --shadow-strength: 0.07;
   --texture-strength: 0.0;
+  --shadow-rgb: 56,40,30;
 
   --font-display: "Fraunces", Georgia, serif;
   --font-body: "IBM Plex Sans", -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", "SF Mono", monospace;
 
-  --radius-s: 10px;  --radius-m: 14px;  --radius-l: 22px;  --radius-xl: 28px;
+  --radius-s: 8px;  --radius-m: 12px;  --radius-l: 16px;  --radius-xl: 24px;
   --ease-smooth: cubic-bezier(.22,.85,.32,1);
   --shadow-panel:
-    0 1px 2px rgba(16,16,20,calc(var(--shadow-strength) * 1.1)),
-    0 8px 24px -6px rgba(16,16,20,calc(var(--shadow-strength) * 1.6)),
-    0 0 0 1px rgba(16,16,20,0.035);
+    0 1px 2px rgba(var(--shadow-rgb),calc(var(--shadow-strength) * 1.1)),
+    0 8px 24px -6px rgba(var(--shadow-rgb),calc(var(--shadow-strength) * 1.6)),
+    0 0 0 1px rgba(var(--shadow-rgb),0.035);
+  --shadow-glass:
+    0 1px 0 rgba(255,255,255,0.6) inset,
+    0 0 0 1px rgba(var(--shadow-rgb),0.06),
+    0 4px 24px -6px rgba(var(--shadow-rgb),0.16);
   --ribbon-h: 84px;
   --statusbar-h: 26px;
 }
 :root[data-theme="light"]{
-  /* now the DARK theme — charcoal milk, same rose */
-  --ink-0-rgb: 19,19,22;      --ink-1-rgb: 26,26,30;
-  --ink-2-rgb: 34,34,39;      --ink-3-rgb: 44,44,50;
-  --line-rgb: 56,56,63;       --line-soft-rgb: 42,42,48;
-  --brass-rgb: 255,98,102;    --brass-bright-rgb: 255,140,143;  --brass-dim-rgb: 190,72,76;
-  --verdigris-rgb: 61,196,153;   --verdigris-text-rgb: 122,224,190;
-  --rust-rgb: 240,90,78;         --rust-text-rgb: 255,150,140;
-  --plum-rgb: 154,128,255;       --plum-text-rgb: 190,172,255;
-  --paper-rgb: 243,243,245;   --paper-dim-rgb: 190,190,196;  --muted-rgb: 130,130,138;
-  --grid-surface-rgb: 24,24,28;      --grid-surface-alt-rgb: 29,29,34;
-  --grid-ink-rgb: 240,240,243;       --grid-ink-dim-rgb: 150,150,158;
-  --grid-line-rgb: 48,48,55;         --grid-line-soft-rgb: 38,38,44;
-  --grid-header-rgb: 31,31,36;
+  /* now the DARK theme — warm charcoal, same rose */
+  --ink-0-rgb: 21,19,17;      --ink-1-rgb: 28,25,23;
+  --ink-2-rgb: 37,33,30;      --ink-3-rgb: 48,43,39;
+  --ink-hi-rgb: 42,38,35;
+  --line-rgb: 60,54,49;       --line-soft-rgb: 45,40,36;
+  --brass-rgb: 255,98,102;    --brass-bright-rgb: 255,140,143;  --brass-dim-rgb: 198,78,82;
+  --brass-soft-rgb: 74,42,44;
+  --verdigris-rgb: 110,180,152;   --verdigris-text-rgb: 150,214,188;
+  --rust-rgb: 214,116,92;         --rust-text-rgb: 240,164,140;
+  --plum-rgb: 168,148,224;        --plum-text-rgb: 198,182,240;
+  --paper-rgb: 242,238,233;   --paper-dim-rgb: 188,180,172;  --muted-rgb: 140,132,122;
+  --grid-surface-rgb: 26,23,21;      --grid-surface-alt-rgb: 32,29,26;
+  --grid-ink-rgb: 238,234,228;       --grid-ink-dim-rgb: 152,144,134;
+  --grid-line-rgb: 52,47,42;         --grid-line-soft-rgb: 41,37,33;
+  --grid-header-rgb: 34,30,27;
   --shadow-strength: 0.5;
   --texture-strength: 0.012;
+  --shadow-rgb: 8,6,5;
 }
 *{box-sizing:border-box;}
 [hidden]{display:none !important;}
@@ -113,11 +123,15 @@ input,select,textarea{font-family:inherit;}
 .mark{
   width:34px;height:34px;flex-shrink:0;
   display:flex;align-items:center;justify-content:center;
-  filter:drop-shadow(0 2px 5px rgba(0,0,0,0.35));
   transition:transform .2s cubic-bezier(.2,.8,.3,1);
 }
 .mark:hover{transform:scale(1.05);}
-.mark svg{display:block;border-radius:24%;}
+.mark svg{display:block;}
+.mark .duck-body{fill:var(--brass);}
+.mark .duck-bill{fill:var(--brass);}
+.mark .duck-eye{fill:#1a1a1c;}
+.mark .duck-water{stroke:var(--brass);}
+:root[data-theme="light"] .mark .duck-body{fill:#FFF6E9;}
 .masthead-text h1{
   font-family:var(--font-display);font-weight:500;font-size:20px;letter-spacing:0.01em;
   margin:0;color:var(--paper);
@@ -881,24 +895,19 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
   <header class="masthead">
     <div class="masthead-left">
       <span class="mark" aria-hidden="true">
-        <svg width="34" height="34" viewBox="0 0 100 100">
-          <defs>
-            <linearGradient id="markBg" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#232b38"/>
-              <stop offset="1" stop-color="#141920"/>
-            </linearGradient>
-            <linearGradient id="markBody" x1="0" y1="0" x2="0.3" y2="1">
-              <stop offset="0" stop-color="#e8bd76"/>
-              <stop offset="1" stop-color="#c4954a"/>
-            </linearGradient>
-          </defs>
-          <rect x="1" y="1" width="98" height="98" rx="24" fill="url(#markBg)"/>
-          <rect x="1" y="1" width="98" height="98" rx="24" fill="none" stroke="var(--brass-dim)" stroke-width="1.5"/>
-          <ellipse cx="59" cy="65" rx="27" ry="20" fill="url(#markBody)"/>
-          <path d="M50 48q9-13 25-9q9 3 8 11q-1 6-9 6h-4" fill="none" stroke="#a97c3a" stroke-width="2.5" stroke-linecap="round" opacity="0.55"/>
-          <circle cx="37" cy="39" r="18" fill="url(#markBody)"/>
-          <path d="M15 37q-6 1-6 6q0 5 6 5.5q6 .5 8-4q1.5-4-2-6.5q-3-2-6-1z" fill="#b0654c"/>
-          <circle cx="33" cy="33" r="3" fill="#171b21"/>
+        <svg width="34" height="34" viewBox="0 0 64 64">
+          <path class="duck-water" d="M3 50 L 61 50" fill="none" stroke-width="2.4" stroke-linecap="round" opacity="0.3"/>
+          <path class="duck-body" d="M7,42
+                   C6,31 10,24 19,22
+                   C21,12 29,5 40,5
+                   C49,5 55,10 56,17
+                   L53,27
+                   C51,35 44,40 36,41
+                   C35,43 32,44 29,44
+                   L13,44
+                   C8,44 7,44 7,42 Z"/>
+          <path class="duck-bill" d="M56,17 L64,21 L53,27 Z"/>
+          <circle class="duck-eye" cx="49" cy="15" r="3"/>
         </svg>
       </span>
       <div class="masthead-text">
