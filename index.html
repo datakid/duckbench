@@ -623,6 +623,7 @@ tr.is-row-selected .row-gutter{background:rgba(var(--brass-rgb),0.06);box-shadow
 .th-type-badge.t-bool{color:var(--plum-text);background:rgba(var(--plum-rgb),0.1);}
 :root[data-theme="light"] .th-type-badge{filter:none;}
 .th-filter-dot{width:5px;height:5px;border-radius:50%;background:var(--brass-bright);flex-shrink:0;}
+.th-key-badge{display:flex;align-items:center;color:var(--brass);flex-shrink:0;}
 .th-quality{
   height:3px;border-radius:2px;overflow:hidden;display:flex;background:rgba(var(--grid-ink-rgb),0.08);
 }
@@ -731,17 +732,28 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
 }
 .ctx-submenu-trigger:hover .ctx-submenu, .ctx-submenu-trigger.is-open .ctx-submenu{display:block;}
 .ctx-menu-item .chev{margin-left:auto;color:var(--muted);}
-.column-stats{
-  display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:9px 16px;
-  background:var(--ink-1);border-top:1px solid var(--line-soft);font-size:12px;flex-shrink:0;
+.column-profile-head{
+  display:flex;align-items:center;gap:8px;padding:14px 16px 12px;border-bottom:1px solid var(--line-soft);flex-shrink:0;
 }
-.column-stats-name{font-family:var(--font-display);font-weight:500;color:var(--brass-bright);font-size:13px;}
-.column-stats-item{color:var(--muted);}
-.column-stats-item strong{color:var(--paper-dim);font-family:var(--font-mono);font-weight:500;}
-.column-stats-close{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;}
-.column-stats-close:hover{color:var(--paper);}
-.column-stats-hist{display:flex;align-items:flex-end;gap:1px;height:20px;margin-left:4px;}
-.column-stats-hist span{width:3px;background:var(--verdigris);border-radius:1px 1px 0 0;min-height:1px;}
+.column-profile-name{font-family:var(--font-display);font-weight:500;font-size:15px;color:var(--paper);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+.column-profile-body{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:16px;}
+.cp-stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.cp-stat{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:var(--radius-s);padding:8px 10px;}
+.cp-stat-label{font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);}
+.cp-stat-value{font-family:var(--font-mono);font-size:14px;font-weight:500;color:var(--paper);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cp-section-label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:8px;}
+.cp-hist{display:flex;align-items:flex-end;gap:3px;height:64px;}
+.cp-hist-bar{flex:1;background:var(--brass);border-radius:2px 2px 0 0;min-height:2px;opacity:0.85;transition:opacity .12s;}
+.cp-hist-bar:hover{opacity:1;}
+.cp-hist-range{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10.5px;color:var(--muted);margin-top:6px;}
+.cp-top-row{display:flex;align-items:center;gap:8px;font-size:11.5px;margin-bottom:5px;}
+.cp-top-label{width:38%;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--paper-dim);}
+.cp-top-bar-track{flex:1;background:var(--ink-3);border-radius:3px;height:14px;overflow:hidden;}
+.cp-top-bar-fill{height:100%;background:var(--verdigris);border-radius:3px;}
+.cp-top-count{font-family:var(--font-mono);font-size:10.5px;color:var(--muted);width:44px;text-align:right;flex-shrink:0;}
+.cp-samples{display:flex;flex-wrap:wrap;gap:5px;}
+.cp-sample-chip{font-family:var(--font-mono);font-size:11px;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:5px;padding:2px 7px;color:var(--paper-dim);}
+.cp-actions{display:flex;flex-direction:column;gap:6px;padding:14px 16px;border-top:1px solid var(--line-soft);flex-shrink:0;}
 .statusbar{
   height:var(--statusbar-h);flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 14px;
   border-top:1px solid var(--line-soft);background:var(--ink-1);
@@ -776,7 +788,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
   border-bottom:1px solid var(--line-soft);flex-shrink:0;gap:8px;
 }
 .inspector-head h3{margin:0;font-family:var(--font-display);font-size:15px;font-weight:500;color:var(--paper);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.masthead-text h1, .version-box-title, .import-card h2, .preview-empty strong, .column-stats-name, .inspector-head h3{
+.masthead-text h1, .version-box-title, .import-card h2, .preview-empty strong, .column-profile-name, .inspector-head h3{
   font-optical-sizing:auto;font-variation-settings:"SOFT" 50,"WONK" 0;
 }
 .inspector-body{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:14px;}
@@ -1120,7 +1132,6 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
             </div>
           </div>
           <p id="previewEmpty" class="preview-empty" hidden></p>
-          <div id="columnStats" class="column-stats" hidden></div>
         </div>
 
         <div id="editorPane" class="pane">
@@ -1137,6 +1148,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
       </section>
 
       <aside id="inspector" class="inspector" hidden></aside>
+      <aside id="columnProfile" class="inspector column-profile" hidden></aside>
     </div>
 
     <div class="statusbar" id="statusBar">
@@ -1341,6 +1353,7 @@ const ICONS = {
   terminal:'<rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M7 9l3.5 3.5L7 16M13 16h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
   undo:'<path d="M7 8H15.5C18 8 20 10 20 12.5S18 17 15.5 17H10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 4.5L7 8L10.5 11.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
   trash:'<path d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0v12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  key:'<circle cx="8" cy="13" r="4" stroke="currentColor" stroke-width="1.6"/><path d="M11 10l9-9M17 4l2.5 2.5M14 7l2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
   copy:'<rect x="9" y="9" width="11" height="11" rx="1.5" stroke="currentColor" stroke-width="1.6"/><path d="M5.5 15H5a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 5 3.5h8.5A1.5 1.5 0 0 1 15 5v.5" stroke="currentColor" stroke-width="1.6"/>',
   eye:'<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.6" stroke="currentColor" stroke-width="1.6"/>',
   eyeOff:'<path d="M3 3l18 18M9.9 5.2A10.4 10.4 0 0 1 12 5c6 0 9.5 6.5 9.5 6.5a15.6 15.6 0 0 1-3 3.7M6.4 6.9C4 8.6 2.5 11 2.5 11.5S6 18.5 12 18.5a10 10 0 0 0 3.4-.6M9.9 10a2.6 2.6 0 0 0 3.7 3.7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -1698,14 +1711,38 @@ async function fetchColumnStats(sql, column, type){
   }
   const numeric = isNumericType(type) && !isDecimalType(type);
   const parts = [`COUNT(*) AS total`, `COUNT(${q(column)}) AS nonnull`, `approx_count_distinct(${q(column)}) AS distinct_n`];
-  if (numeric) parts.push(`MIN(${q(column)}) AS mn`, `MAX(${q(column)}) AS mx`, `AVG(${q(column)}) AS avg_v`);
+  if (numeric) parts.push(`MIN(${q(column)}) AS mn`, `MAX(${q(column)}) AS mx`, `AVG(${q(column)}) AS avg_v`, `MEDIAN(${q(column)}) AS median_v`);
   const res = await state.conn.query(`SELECT ${parts.join(', ')} FROM (${sql})`);
   if (currentPlanSql() !== sql) return null;
   const { rows } = extractRows(res);
   const r = rows[0];
   const asNum = v => typeof v==='bigint' ? Number(v) : v;
   const out = { total: asNum(r[0]), nonNull: asNum(r[1]), distinctApprox: asNum(r[2]) };
-  if (numeric){ out.min = asNum(r[3]); out.max = asNum(r[4]); out.avg = asNum(r[5]); }
+  if (numeric){
+    out.min = asNum(r[3]); out.max = asNum(r[4]); out.avg = asNum(r[5]); out.median = asNum(r[6]);
+    if (out.nonNull > 0 && out.max > out.min){
+      const nb = 12;
+      const bres = await state.conn.query(`SELECT LEAST(${nb-1}, GREATEST(0, FLOOR((${q(column)} - ${out.min}) / (${out.max}-${out.min}) * ${nb}))) AS bucket, COUNT(*) AS n FROM (${sql}) WHERE ${q(column)} IS NOT NULL GROUP BY bucket`);
+      if (currentPlanSql() !== sql) return null;
+      const { rows: brows } = extractRows(bres);
+      const buckets = new Array(nb).fill(0);
+      for (const br of brows){ const idx = Number(br[0]); if (idx>=0 && idx<nb) buckets[idx] = asNum(br[1]); }
+      out.histogram = buckets;
+    } else if (out.nonNull > 0){
+      out.histogram = [out.nonNull];
+    }
+    if (out.nonNull > 0){
+      const sres = await state.conn.query(`SELECT DISTINCT ${q(column)} FROM (${sql}) WHERE ${q(column)} IS NOT NULL LIMIT 8`);
+      if (currentPlanSql() !== sql) return null;
+      const { rows: srows } = extractRows(sres);
+      out.samples = srows.map(sr => asNum(sr[0]));
+    }
+  } else {
+    const tres = await state.conn.query(`SELECT ${q(column)} AS v, COUNT(*) AS n FROM (${sql}) WHERE ${q(column)} IS NOT NULL GROUP BY ${q(column)} ORDER BY n DESC LIMIT 20`);
+    if (currentPlanSql() !== sql) return null;
+    const { rows: trows } = extractRows(tres);
+    out.topValues = trows.map(tr => ({ value: tr[0], count: asNum(tr[1]) }));
+  }
   return out;
 }
 
@@ -3118,8 +3155,29 @@ function createArqueroEngine(){
       const out = { total, nonNull, distinctApprox: seen.size };
       if (numeric){
         let min=Infinity, max=-Infinity, sum=0;
-        for (let i=0;i<arr.length;i++){ const v=arr[i]; if (v==null) continue; if (v<min) min=v; if (v>max) max=v; sum+=v; }
+        const vals = [];
+        const samples = [];
+        for (let i=0;i<arr.length;i++){ const v=arr[i]; if (v==null) continue; if (v<min) min=v; if (v>max) max=v; sum+=v; vals.push(v); if (samples.length<8) samples.push(v); }
         out.min = nonNull ? min : null; out.max = nonNull ? max : null; out.avg = nonNull ? sum/nonNull : null;
+        out.samples = samples;
+        if (nonNull){
+          vals.sort((a,b)=>a-b);
+          const mid = Math.floor(vals.length/2);
+          out.median = vals.length % 2 ? vals[mid] : (vals[mid-1]+vals[mid])/2;
+          const nb = 12;
+          const buckets = new Array(nb).fill(0);
+          if (max > min){
+            for (const v of vals){ let idx = Math.floor((v-min)/(max-min)*nb); if (idx>=nb) idx=nb-1; if (idx<0) idx=0; buckets[idx]++; }
+          } else {
+            buckets[0] = nonNull;
+          }
+          out.histogram = buckets;
+        }
+      } else {
+        const counts = new Map();
+        for (let i=0;i<arr.length;i++){ const v=arr[i]; if (v==null) continue; const key = v instanceof Date ? v.getTime() : v; counts.set(key, (counts.get(key)||0)+1); }
+        const isDateCol = type === 'TIMESTAMP';
+        out.topValues = Array.from(counts.entries()).sort((a,b)=>b[1]-a[1]).slice(0,20).map(([k,n]) => ({ value: isDateCol ? new Date(k) : k, count: n }));
       }
       return out;
     },
@@ -3189,6 +3247,7 @@ sourceFile: null, sourceImportOptions: null, pendingRecipe: null,
   theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
   pipelineToken: 0, inspectorToken: 0,
   statsGenToken: 0,
+  keyColumn: null,
   currentColumns: [],
   currentPlan: null,
   currentRidColIndex: -1,
@@ -3702,7 +3761,11 @@ const nameSpan = el('span',{class:'th-name', title:col.name}, col.name);
 const badge = el('span',{class:`th-type-badge ${typeBadgeClass(col.type)}`, title:col.type}, shortType(col.type));
 const inner = el('div',{class:'th-inner'},
 el('div',{class:'th-toprow'},
-el('div',{class:'th-name-wrap'}, nameSpan, isFiltered ? el('span',{class:'th-filter-dot', title:'A filter step targets this column'}) : null),
+el('div',{class:'th-name-wrap'},
+col.name === state.keyColumn ? el('span',{class:'th-key-badge', title:'Key column'}, htmlIcon('key',11)) : null,
+nameSpan,
+isFiltered ? el('span',{class:'th-filter-dot', title:'A filter step targets this column'}) : null,
+),
 badge,
 ),
 el('div',{class:'th-quality'}, el('div',{class:'th-quality-valid', style:`width:${validPct}%`}), el('div',{class:'th-quality-empty', style:`width:${100-validPct}%`})),
@@ -3717,6 +3780,7 @@ nameSpan.addEventListener('click', (e) => { e.stopPropagation(); state.focusedCo
 nameSpan.addEventListener('dblclick', (e) => { e.stopPropagation(); startInlineRename(col.name, nameSpan); });
 badge.addEventListener('click', (e) => { e.stopPropagation(); openTypePopover(col.name, badge); });
 th.addEventListener('contextmenu', (e) => { e.preventDefault(); state.focusedColumn = col.name; renderRibbon(); openHeaderContextMenu(col.name, e.clientX, e.clientY); });
+th.addEventListener('dblclick', (e) => { e.stopPropagation(); state.focusedColumn = col.name; renderRibbon(); openColumnProfile(col.name); });
 th.tabIndex = 0; th.setAttribute('role','button'); th.setAttribute('aria-label', `Column ${col.name}, ${col.type}`);
 th.addEventListener('keydown', (e) => { if (e.key==='Enter' || e.key===' '){ e.preventDefault(); inner.click(); } });
 return th;
@@ -3879,40 +3943,91 @@ const err = commitNewStep('delete_rows', { rids });
 if (err){ toast(err); return; }
 state.rowSelection.clear();
 }
-async function openColumnStats(colName){
+async function openColumnProfile(colName){
 const col = state.currentColumns.find(c=>c.name===colName);
 if (!col) return;
-const box = $('#columnStats');
+closeInspector();
+const box = $('#columnProfile');
 box.hidden = false;
 box.innerHTML = '';
-const closeBtn = el('button',{class:'column-stats-close', onclick:()=>{ box.hidden = true; }}, '×');
-box.appendChild(el('span',{class:'column-stats-name'}, colName));
+const cpCloseBtn = el('button',{class:'icon-btn', 'aria-label':'Close', onclick:()=>{ box.hidden = true; }});
+cpCloseBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" width="15" height="15"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+box.appendChild(el('div',{class:'column-profile-head'},
+el('div',{class:'column-profile-name'}, colName),
+cpCloseBtn,
+));
+const body = el('div',{class:'column-profile-body'}, el('div',{class:'cp-section-label'}, 'Loading…'));
+box.appendChild(body);
 const token = ++state.statsGenToken;
+let stats;
 try {
-const stats = await state.engine.stats(state.currentPlan, colName);
+stats = await state.engine.stats(state.currentPlan, colName);
+} catch(e){
 if (token !== state.statsGenToken) return;
-if (!stats){ box.appendChild(closeBtn); return; }
+body.innerHTML = '';
+body.appendChild(el('div',{class:'cp-section-label'}, 'Couldn’t compute stats.'));
+return;
+}
+if (token !== state.statsGenToken) return;
+body.innerHTML = '';
+if (!stats){ body.appendChild(el('div',{class:'cp-section-label'}, 'No data.')); return; }
 if (stats.unsupported){
-box.appendChild(el('span',{class:'column-stats-item'}, 'stats unavailable for this type'));
-box.appendChild(closeBtn);
+body.appendChild(el('div',{class:'cp-section-label'}, 'Stats unavailable for this column type.'));
+renderColumnProfileActions(colName);
 return;
 }
 const emptyPct = stats.total ? Math.round((stats.total-stats.nonNull)/stats.total*100) : 0;
-box.appendChild(el('span',{class:'column-stats-item'}, el('strong',{}, `${emptyPct}%`), ' empty'));
-box.appendChild(el('span',{class:'column-stats-item'}, '≈', el('strong',{}, stats.distinctApprox.toLocaleString()), ' distinct'));
+const distinctPct = stats.nonNull ? Math.round(stats.distinctApprox/stats.nonNull*100) : 0;
+const statGrid = el('div',{class:'cp-stat-grid'},
+el('div',{class:'cp-stat'}, el('div',{class:'cp-stat-label'},'Empty'), el('div',{class:'cp-stat-value'}, `${emptyPct}%`)),
+el('div',{class:'cp-stat'}, el('div',{class:'cp-stat-label'},'Distinct'), el('div',{class:'cp-stat-value'}, `≈${distinctPct}%`)),
+);
 if (stats.min !== undefined){
-box.appendChild(el('span',{class:'column-stats-item'}, 'min ', el('strong',{}, formatCellValue(stats.min, col.type))));
-box.appendChild(el('span',{class:'column-stats-item'}, 'max ', el('strong',{}, formatCellValue(stats.max, col.type))));
-box.appendChild(el('span',{class:'column-stats-item'}, 'avg ', el('strong',{}, Number(stats.avg).toLocaleString(undefined,{maximumFractionDigits:2}))));
+statGrid.appendChild(el('div',{class:'cp-stat'}, el('div',{class:'cp-stat-label'},'Min'), el('div',{class:'cp-stat-value'}, formatCellValue(stats.min, col.type))));
+statGrid.appendChild(el('div',{class:'cp-stat'}, el('div',{class:'cp-stat-label'},'Max'), el('div',{class:'cp-stat-value'}, formatCellValue(stats.max, col.type))));
+statGrid.appendChild(el('div',{class:'cp-stat'}, el('div',{class:'cp-stat-label'},'Mean'), el('div',{class:'cp-stat-value'}, Number(stats.avg).toLocaleString(undefined,{maximumFractionDigits:2}))));
+statGrid.appendChild(el('div',{class:'cp-stat'}, el('div',{class:'cp-stat-label'},'Median'), el('div',{class:'cp-stat-value'}, Number(stats.median).toLocaleString(undefined,{maximumFractionDigits:2}))));
 }
-box.appendChild(closeBtn);
-} catch(e){
-if (token !== state.statsGenToken) return;
-box.innerHTML = '';
-box.appendChild(el('span',{class:'column-stats-name'}, colName));
-box.appendChild(el('span',{class:'column-stats-item'}, 'Couldn’t compute stats.'));
-box.appendChild(closeBtn);
+body.appendChild(statGrid);
+if (stats.histogram){
+const maxN = Math.max(...stats.histogram, 1);
+const hist = el('div',{class:'cp-hist'}, ...stats.histogram.map(n => el('div',{class:'cp-hist-bar', style:`height:${Math.max(2,Math.round(n/maxN*64))}px`, title:`${n.toLocaleString()} rows`})));
+body.appendChild(el('div',{},
+el('div',{class:'cp-section-label'}, 'Distribution'),
+hist,
+el('div',{class:'cp-hist-range'}, el('span',{}, formatCellValue(stats.min, col.type)), el('span',{}, formatCellValue(stats.max, col.type))),
+));
 }
+if (stats.topValues && stats.topValues.length){
+const maxN = Math.max(...stats.topValues.map(t=>t.count), 1);
+const rows = stats.topValues.slice(0,10).map(tv => el('div',{class:'cp-top-row'},
+el('span',{class:'cp-top-label', title:String(tv.value)}, formatCellValue(tv.value, col.type)),
+el('div',{class:'cp-top-bar-track'}, el('div',{class:'cp-top-bar-fill', style:`width:${Math.max(4,Math.round(tv.count/maxN*100))}%`})),
+el('span',{class:'cp-top-count'}, tv.count.toLocaleString()),
+));
+body.appendChild(el('div',{}, el('div',{class:'cp-section-label'}, `Top values${stats.topValues.length>10?` (of ${stats.topValues.length})`:''}`), ...rows));
+}
+if (stats.samples && stats.samples.length){
+body.appendChild(el('div',{},
+el('div',{class:'cp-section-label'}, 'Sample values'),
+el('div',{class:'cp-samples'}, ...stats.samples.map(v => el('span',{class:'cp-sample-chip'}, formatCellValue(v, col.type)))),
+));
+}
+renderColumnProfileActions(colName);
+}
+function renderColumnProfileActions(colName){
+const box = $('#columnProfile');
+const isKey = state.keyColumn === colName;
+box.appendChild(el('div',{class:'cp-actions'},
+el('button',{class:'btn-ghost btn-small', onclick:()=>commitInstantStep('filter', { column:colName, mode:'operator', operator:'is_not_null', value:'' })}, 'Filter empties'),
+el('button',{class:'btn-ghost btn-small', onclick:()=>{
+state.keyColumn = isKey ? null : colName;
+toast(isKey ? 'Removed key column.' : `Set “${colName}” as key column.`);
+refreshPreview();
+openColumnProfile(colName);
+}}, isKey ? 'Unset as key' : 'Set as key'),
+el('button',{class:'btn-ghost btn-small', onclick:()=>openInspectorForAdd('change_type', buildDefaultDraft('change_type', { column: colName }))}, 'Change type'),
+));
 }
 let pendingImport = null;
 async function handleFileSelected(file){
@@ -4126,6 +4241,7 @@ body.appendChild(el('p',{class:'inspector-hint'}, `Couldn’t load skipped-row d
 }
 function openInspectorForAdd(type, draft){
 switchPane('preview');
+$('#columnProfile').hidden = true;
 state.inspectorToken++;
 state.inspector = { forIndex:null, isNew:true, type, data:draft, checkpoint:null, error:null, failNote:null };
 renderInspector();
@@ -4133,6 +4249,7 @@ primeInspectorCheckpoint();
 }
 function openInspectorForEdit(index){
 switchPane('preview');
+$('#columnProfile').hidden = true;
 state.inspectorToken++;
 const step = state.steps[index];
 const data = JSON.parse(JSON.stringify(step.data));
@@ -4704,7 +4821,7 @@ pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInspectorForAdd('replace_values', buildDefaultDraft('replace_values',{column:colName})); }}, htmlIcon('replace'),'Replace values…'));
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInspectorForAdd('split_column', buildDefaultDraft('split_column',{column:colName})); }}, htmlIcon('split'),'Split column…'));
 pop.appendChild(el('div',{class:'ctx-menu-divider'}));
-pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openColumnStats(colName); }}, htmlIcon('trending-up'), 'Column profile'));
+pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openColumnProfile(colName); }}, htmlIcon('trending-up'), 'Column profile'));
 pop.appendChild(el('div',{class:'ctx-menu-divider'}));
 pop.appendChild(el('button',{class:'ctx-menu-item is-danger', onclick:()=>run('remove_columns',{columns:[colName]})}, htmlIcon('trash'),'Remove column'));
 document.body.appendChild(pop);
