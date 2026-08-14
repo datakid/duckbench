@@ -258,6 +258,10 @@ input,select,textarea{font-family:inherit;}
   background:rgba(var(--brass-rgb),0.06);
 }
 .drop-zone-inner{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--paper-dim);}
+.grid-skeleton{padding:14px;display:flex;flex-direction:column;gap:8px;}
+.grid-skeleton-row{height:26px;border-radius:var(--radius-s);background:var(--grid-surface-alt);animation:skeletonPulse 1.3s ease-in-out infinite;}
+.grid-skeleton-row:nth-child(2n){animation-delay:.08s;}
+.grid-skeleton-row:nth-child(3n){animation-delay:.16s;}
 .resume-card{
   display:flex;align-items:center;gap:12px;padding:12px 14px;margin:0 0 16px;
   background:rgba(var(--brass-rgb),0.06);border:1px solid rgba(var(--brass-rgb),0.3);border-radius:var(--radius-m);
@@ -1123,6 +1127,16 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
         </div>
 
         <div id="previewPane" class="pane is-active">
+          <div id="gridSkeleton" class="grid-skeleton" hidden>
+            <div class="grid-skeleton-row"></div>
+            <div class="grid-skeleton-row"></div>
+            <div class="grid-skeleton-row"></div>
+            <div class="grid-skeleton-row"></div>
+            <div class="grid-skeleton-row"></div>
+            <div class="grid-skeleton-row"></div>
+            <div class="grid-skeleton-row"></div>
+            <div class="grid-skeleton-row"></div>
+          </div>
           <div class="grid-shell">
             <div class="grid-scroll">
               <table id="previewTable" class="preview-table">
@@ -1492,6 +1506,22 @@ function sqlLiteralForColumn(value, colName, columns){
 }
 function denylistReason(version){ return DUCKDB_DENYLIST[String(version).trim()] || null; }
 
+async function trackBundleDownloadProgress(url, version){
+try {
+const res = await fetch(url);
+const total = Number(res.headers.get('content-length')) || 0;
+if (!total || total < 5_000_000 || !res.body){ return; }
+const reader = res.body.getReader();
+let received = 0;
+while (true){
+const { done, value } = await reader.read();
+if (done) break;
+received += value.length;
+if (state.duckdbVersion === version) break;
+setEngineStatus('loading', `fetching duckdb-wasm@${version}… ${Math.round(received/total*100)}%`);
+}
+} catch(e){}
+}
 async function loadDuckDB(version){
   const bad = denylistReason(version);
   if (bad) { const e = new Error(bad); e.denylisted = true; throw e; }
@@ -1499,6 +1529,7 @@ async function loadDuckDB(version){
   const duckdb = await import( `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${version}/+esm`);
   const bundles = duckdb.getJsDelivrBundles();
   const bundle = await duckdb.selectBundle(bundles);
+  trackBundleDownloadProgress(bundle.mainModule, version);
   const workerUrl = URL.createObjectURL(new Blob([`importScripts(${JSON.stringify(bundle.mainWorker)});`], { type:'text/javascript' }));
   const worker = new Worker(workerUrl);
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel ? duckdb.LogLevel.WARNING : undefined);
@@ -3614,6 +3645,7 @@ return preview;
 }
 async function refreshPreview(){
 if (!state.hasSource) return;
+if (!lastPreview) $('#gridSkeleton').hidden = false;
 const upto = state.selectedStepIndex !== null ? state.selectedStepIndex : state.steps.length - 1;
 const myToken = ++state.pipelineToken;
 const plan = await state.engine.compile(state.steps, upto);
@@ -3654,6 +3686,7 @@ let lastPreview = null;
 let lastPreviewColKey = null;
 const columnsKey = (columns) => columns.map(c=>c.name+'\u0000'+c.type).join('\u0001');
 function renderGrid(preview){
+$('#gridSkeleton').hidden = true;
 $('#previewEmpty').hidden = true;
 $('.grid-shell')?.removeAttribute('hidden');
 const table = $('#previewTable');
@@ -3846,6 +3879,7 @@ td.textContent = typeof formatted === 'string' && isNumericType(col.type) ? form
 });
 }
 function renderGridError({ error, errorIndex }){
+$('#gridSkeleton').hidden = true;
 $('.grid-shell')?.setAttribute('hidden','');
 const box = $('#previewEmpty');
 box.hidden = false;
@@ -4213,6 +4247,7 @@ box.appendChild(closeBtn);
 overlay.appendChild(box);
 document.body.appendChild(overlay);
 const entry = ModalStack.push(overlay, { onClose: () => overlay.remove() });
+overlay.addEventListener('mousedown', e => { if (e.target === overlay) ModalStack.pop(entry); });
 closeBtn.addEventListener('click', () => ModalStack.pop(entry));
 try {
 const rows = await state.engine.skippedRows();
@@ -4595,6 +4630,7 @@ const card = el('div', {
 class: `step-card cat-${t.category}` + (state.selectedStepIndex===i?' is-selected':'') + (step.disabled?' is-disabled':'') + (step.hasError?' is-error':''),
 draggable:'true', 'data-step-index':i,
 onclick:()=>selectStep(i), ondblclick:()=>openInspectorForEdit(i),
+oncontextmenu:(e)=>{ e.preventDefault(); state.selectedStepIndex=i; renderStepsList(); openStepContextMenu(i, e.clientX, e.clientY); },
 },
 el('div',{class:'step-eyebrow'},
 el('span',{class:'step-num'}, String(i+1)),
@@ -4793,6 +4829,26 @@ if (e.key==='Escape'){ e.preventDefault(); nameSpan.textContent = original; name
 }
 nameSpan.addEventListener('blur', commit, { once:true });
 nameSpan.addEventListener('keydown', onKey);
+}
+function openStepContextMenu(index, x, y){
+ModalStack.closeLight();
+const step = state.steps[index];
+if (!step) return;
+const pop = el('div',{class:'popover ctx-menu', style:`left:${x}px;top:${y}px;`});
+pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInspectorForEdit(index); }}, htmlIcon('edit'),'Edit'));
+pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); toggleStepDisabled(index); }}, htmlIcon(step.disabled?'eye':'eyeOff'), step.disabled?'Enable':'Disable'));
+pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); duplicateStep(index); }}, htmlIcon('copy'),'Duplicate'));
+pop.appendChild(el('div',{class:'ctx-menu-divider'}));
+pop.appendChild(el('button',{class:'ctx-menu-item', disabled: index===0, onclick:()=>{ ModalStack.pop(entry); moveStep(index,-1); }}, '↑','Move up'));
+pop.appendChild(el('button',{class:'ctx-menu-item', disabled: index===state.steps.length-1, onclick:()=>{ ModalStack.pop(entry); moveStep(index,1); }}, '↓','Move down'));
+pop.appendChild(el('div',{class:'ctx-menu-divider'}));
+pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInsertMenuAt(index-1); }}, '+','Insert step above'));
+pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInsertMenuAt(index); }}, '+','Insert step below'));
+pop.appendChild(el('div',{class:'ctx-menu-divider'}));
+pop.appendChild(el('button',{class:'ctx-menu-item is-danger', onclick:()=>{ ModalStack.pop(entry); deleteStep(index); }}, htmlIcon('trash'),'Delete'));
+document.body.appendChild(pop);
+const entry = ModalStack.push(pop, { light:true, onClose:()=>pop.remove() });
+positionPopoverWithinViewport(pop, { left:x, bottom:y, top:y });
 }
 function openHeaderContextMenu(colName, x, y){
 ModalStack.closeLight();
