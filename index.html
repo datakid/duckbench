@@ -258,6 +258,18 @@ input,select,textarea{font-family:inherit;}
   background:rgba(var(--brass-rgb),0.06);
 }
 .drop-zone-inner{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--paper-dim);}
+.resume-card{
+  display:flex;align-items:center;gap:12px;padding:12px 14px;margin:0 0 16px;
+  background:rgba(var(--brass-rgb),0.06);border:1px solid rgba(var(--brass-rgb),0.3);border-radius:var(--radius-m);
+}
+.resume-card-icon{
+  width:32px;height:32px;flex-shrink:0;border-radius:var(--radius-s);background:rgba(var(--brass-rgb),0.14);
+  display:flex;align-items:center;justify-content:center;color:var(--brass);
+}
+.resume-card-body{flex:1;min-width:0;}
+.resume-card-title{font-size:12.5px;font-weight:500;color:var(--paper);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.resume-card-meta{font-size:11px;color:var(--muted);margin-top:1px;}
+.resume-card-actions{display:flex;gap:6px;flex-shrink:0;}
 .drop-zone-inner svg{color:var(--brass-dim);}
 .drop-zone-inner p{margin:0;font-size:13.5px;}
 .drop-zone-inner strong{color:var(--paper);font-weight:500;}
@@ -988,6 +1000,13 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
           </span>
         </button>
         <button id="engineVersionBtn" class="engine-version-btn" title="DuckDB engine version">DuckDB —</button>
+        <button id="saveRecipeBtn" class="icon-btn" aria-label="Save recipe" title="Save recipe (.duckbench.json)" hidden>
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12M12 15l-4.5-4.5M12 15l4.5-4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 16v3.5C5 20.9 6.1 22 7.5 22h9c1.4 0 2.5-1.1 2.5-2.5V16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+        <button id="loadRecipeBtn" class="icon-btn" aria-label="Load recipe" title="Load recipe (.duckbench.json)">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 15V3M12 3l-4.5 4.5M12 3l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 16v3.5C5 20.9 6.1 22 7.5 22h9c1.4 0 2.5-1.1 2.5-2.5V16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+        <input type="file" id="recipeFileInput" accept=".json,.duckbench.json" hidden>
       </div>
     </div>
   </header>
@@ -1018,6 +1037,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
           <span>Instant start, no download. Most transforms; CSV and Excel only.</span>
         </button>
       </div>
+      <div id="resumeCard" class="resume-card" hidden></div>
       <label id="dropZone" class="drop-zone" for="fileInput">
         <div class="drop-zone-inner">
           <svg width="34" height="34" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -3156,7 +3176,7 @@ const state = {
   aqSourceTable: null,
   duckdbVersion: null, duckdbBundleName: null,
   sourceFileName: null, sourceFormat: null, hasSource: false,
-sourceFile: null, sourceImportOptions: null,
+sourceFile: null, sourceImportOptions: null, pendingRecipe: null,
   steps: [],                 
   selectedStepIndex: null,   
   inspector: null,           
@@ -3180,6 +3200,147 @@ sourceFile: null, sourceImportOptions: null,
 };
 
 function resetHistory(){ state.historyPast = []; state.historyFuture = []; updateUndoRedoButtons(); }
+const SESSION_DB_NAME = 'duckbench';
+const SESSION_STORE = 'sessions';
+const SESSION_KEY = 'last';
+function openSessionDB(){
+return new Promise((resolve, reject) => {
+if (!window.indexedDB){ reject(new Error('IndexedDB unavailable')); return; }
+const req = indexedDB.open(SESSION_DB_NAME, 1);
+req.onupgradeneeded = () => { req.result.createObjectStore(SESSION_STORE); };
+req.onsuccess = () => resolve(req.result);
+req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
+});
+}
+let sessionSaveTimer = null;
+function queueSessionSnapshot(){
+clearTimeout(sessionSaveTimer);
+sessionSaveTimer = setTimeout(saveSessionSnapshot, 500);
+}
+async function saveSessionSnapshot(){
+if (!state.hasSource || !state.sourceFile) return;
+try {
+const db = await openSessionDB();
+const tx = db.transaction(SESSION_STORE, 'readwrite');
+tx.objectStore(SESSION_STORE).put({
+file: state.sourceFile,
+fileName: state.sourceFileName,
+format: state.sourceFormat,
+importOptions: state.sourceImportOptions,
+engineId: state.engine.id,
+steps: state.steps,
+savedAt: Date.now(),
+}, SESSION_KEY);
+await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+db.close();
+} catch(e){}
+}
+async function loadSessionSnapshot(){
+try {
+const db = await openSessionDB();
+const tx = db.transaction(SESSION_STORE, 'readonly');
+const req = tx.objectStore(SESSION_STORE).get(SESSION_KEY);
+const result = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+db.close();
+return result || null;
+} catch(e){ return null; }
+}
+async function clearSessionSnapshot(){
+try {
+const db = await openSessionDB();
+const tx = db.transaction(SESSION_STORE, 'readwrite');
+tx.objectStore(SESSION_STORE).delete(SESSION_KEY);
+await new Promise(res => { tx.oncomplete = res; tx.onerror = res; });
+db.close();
+} catch(e){}
+}
+function relativeTimeFromNow(ts){
+const diff = Math.max(0, Date.now() - ts);
+const mins = Math.round(diff/60000);
+if (mins < 1) return 'just now';
+if (mins < 60) return `${mins} minute${mins===1?'':'s'} ago`;
+const hrs = Math.round(mins/60);
+if (hrs < 24) return `${hrs} hour${hrs===1?'':'s'} ago`;
+const days = Math.round(hrs/24);
+return `${days} day${days===1?'':'s'} ago`;
+}
+async function checkForResumableSession(){
+const snap = await loadSessionSnapshot();
+if (!snap || !snap.file) return;
+const card = $('#resumeCard');
+card.hidden = false;
+card.innerHTML = '';
+card.appendChild(el('div',{class:'resume-card-icon'}, htmlIcon('undo',16)));
+card.appendChild(el('div',{class:'resume-card-body'},
+el('div',{class:'resume-card-title'}, snap.fileName || 'Previous session'),
+el('div',{class:'resume-card-meta'}, `${(snap.steps||[]).length} step${(snap.steps||[]).length===1?'':'s'} · saved ${relativeTimeFromNow(snap.savedAt||Date.now())}`),
+));
+card.appendChild(el('div',{class:'resume-card-actions'},
+el('button',{class:'btn-ghost btn-small', onclick:()=>{ card.hidden=true; clearSessionSnapshot(); }}, 'Dismiss'),
+el('button',{class:'btn-solid btn-small', onclick:()=>resumeSession(snap)}, 'Resume'),
+));
+}
+async function resumeSession(snapshot){
+const card = $('#resumeCard');
+card.hidden = true;
+pendingImport = {
+file: snapshot.file,
+format: snapshot.format,
+sheet: snapshot.importOptions?.sheet ?? null,
+workbook: null,
+skipRows: snapshot.importOptions?.skipRows || 0,
+firstRowHeader: snapshot.importOptions?.firstRowHeader !== false,
+};
+state.selectedEngineId = snapshot.engineId;
+await runImport();
+if (state.hasSource){
+state.steps = Array.isArray(snapshot.steps) ? snapshot.steps : [];
+state.selectedStepIndex = null;
+resetHistory();
+renderAll();
+await refreshPreview();
+saveSessionSnapshot();
+}
+}
+function saveRecipe(){
+if (!state.hasSource) return;
+const recipe = {
+duckbenchRecipe: 1,
+savedAt: new Date().toISOString(),
+sourceFileName: state.sourceFileName,
+engineId: state.engine.id,
+steps: state.steps,
+};
+const blob = new Blob([JSON.stringify(recipe, null, 2)], { type:'application/json' });
+downloadBlob(blob, `${(state.sourceFileName||'recipe').replace(/\.[^.]+$/,'')}.duckbench.json`);
+toast('Recipe saved.');
+}
+async function handleRecipeFileSelected(file){
+try {
+const text = await file.text();
+const recipe = JSON.parse(text);
+if (!recipe || !Array.isArray(recipe.steps)) throw new Error('Not a valid recipe file');
+if (state.hasSource){
+if (state.steps.length){
+const ok = await confirmDialog(`Replace the current ${state.steps.length} step${state.steps.length===1?'':'s'} with this recipe's ${recipe.steps.length}?`);
+if (!ok) return;
+}
+closeInspector();
+state.steps = recipe.steps;
+state.selectedStepIndex = null;
+resetHistory();
+renderAll();
+await refreshPreview();
+saveSessionSnapshot();
+toast(`Recipe applied — ${recipe.steps.length} step${recipe.steps.length===1?'':'s'}.`);
+} else {
+state.pendingRecipe = recipe;
+toast('Recipe loaded — now drop or choose the data file to apply it to.');
+}
+} catch(e){
+toast(`Couldn’t read that recipe: ${e.message}`);
+}
+}
 function applyStepsChange(newSteps){
   state.historyPast.push(JSON.stringify({ steps: state.steps, selectedStepIndex: state.selectedStepIndex }));
   if (state.historyPast.length > 60) state.historyPast.shift();
@@ -3218,6 +3379,7 @@ updateUndoRedoButtons();
 renderStepsList();
 renderRibbon();
 refreshPreview();
+queueSessionSnapshot();
 }
 function selectStep(i){
 state.selectedStepIndex = i;
@@ -3844,6 +4006,19 @@ $('#engineStatus').classList.add('is-swappable');
 $('#engineStatus').title = 'Click to swap engines';
 renderAll();
 await refreshPreview();
+$('#saveRecipeBtn').hidden = false;
+$('#resumeCard').hidden = true;
+if (state.pendingRecipe){
+const recipe = state.pendingRecipe;
+state.pendingRecipe = null;
+state.steps = Array.isArray(recipe.steps) ? recipe.steps : [];
+state.selectedStepIndex = null;
+resetHistory();
+renderAll();
+await refreshPreview();
+toast(`Recipe applied — ${state.steps.length} step${state.steps.length===1?'':'s'}.`);
+}
+saveSessionSnapshot();
 } catch(e){
 showImportError(e.message || String(e));
 if (!state.conn && state.engine.id === 'duckdb') setEngineStatus('error', `Couldn’t start DuckDB: ${e.message}`);
@@ -3896,6 +4071,7 @@ resetHistory();
 renderAll();
 await refreshPreview();
 toast(`Switched to ${targetLabel}.`);
+saveSessionSnapshot();
 } catch(e){
 toast(`Couldn’t switch engines: ${e.message}`);
 } finally {
@@ -4704,6 +4880,9 @@ function wireStaticUI(){
 $('#themeToggle').addEventListener('click', toggleTheme);
 $('#engineStatus').addEventListener('click', toggleEngineMidSession);
 $('#engineVersionBtn').addEventListener('click', openVersionPanel);
+$('#saveRecipeBtn').addEventListener('click', saveRecipe);
+$('#loadRecipeBtn').addEventListener('click', () => $('#recipeFileInput').click());
+$('#recipeFileInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleRecipeFileSelected(f); e.target.value=''; });
 $('#checkLatestBtn').addEventListener('click', handleCheckLatest);
 $('#versionManualApply').addEventListener('click', handleManualVersionApply);
 $('#versionManualInput').addEventListener('keydown', e => { if (e.key==='Enter') handleManualVersionApply(); });
@@ -4758,6 +4937,7 @@ wireStaticUI();
 renderRibbon();
 updateVersionUI();
 setEngineStatus('idle', 'Choose a file to begin');
+checkForResumableSession();
 }
 document.addEventListener('DOMContentLoaded', init);
 </script>
