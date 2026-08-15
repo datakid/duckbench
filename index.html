@@ -560,10 +560,11 @@ input,select,textarea{font-family:inherit;}
 .btn-icon:hover{background:var(--ink-3);color:var(--paper);}
 .dropdown-menu-btn{position:relative;}
 .export-menu{
-  position:absolute;top:calc(100% + 6px);right:0;z-index:40;min-width:170px;
+  position:absolute;top:calc(100% + 6px);right:0;z-index:40;min-width:220px;
   background:var(--ink-1);border:1px solid var(--line-soft);border-radius:var(--radius-m);
   box-shadow:var(--shadow-panel);padding:5px;
 }
+.export-menu-divider{height:1px;background:var(--line-soft);margin:5px 4px;}
 .export-menu button{
   display:flex;width:100%;align-items:center;gap:9px;text-align:left;background:none;border:none;
   color:var(--paper-dim);font-size:12px;padding:8px 9px;border-radius:6px;cursor:pointer;
@@ -1134,7 +1135,14 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
               <div id="exportMenu" class="export-menu" hidden>
                 <button data-format="csv"><span>CSV<small>Comma-separated, opens anywhere</small></span></button>
                 <button data-format="xlsx"><span>Excel (.xlsx)<small>Single sheet workbook</small></span></button>
-                <button data-format="parquet"><span>Parquet<small>Columnar, smaller & typed</small></span></button>
+                <button data-format="parquet"><span>Parquet<small>Columnar, smaller &amp; typed</small></span></button>
+                <button data-format="json"><span>JSON<small>Array of objects</small></span></button>
+                <button data-format="jsonl"><span>JSONL<small>Newline-delimited JSON</small></span></button>
+                <div class="export-menu-divider"></div>
+                <button data-action="copy-insert"><span>Copy as SQL INSERT<small>First 200 rows, to clipboard</small></span></button>
+                <button data-action="copy-markdown"><span>Copy as Markdown table<small>First 200 rows, to clipboard</small></span></button>
+                <div class="export-menu-divider"></div>
+                <button data-action="export-options"><span>Export options…<small>Pick columns, row range, NULL text</small></span></button>
               </div>
             </div>
           </div>
@@ -1945,6 +1953,15 @@ async function exportPlanImpl(plan, format){
     blob.truncated = false;
     return blob;
   }
+  if (format === 'json' || format === 'jsonl'){
+    const target = `${uid('exp_')}.json`;
+    await state.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT JSON, ARRAY ${format==='json'?'TRUE':'FALSE'})`);
+    const buf = await state.db.copyFileToBuffer(target);
+    try { await state.db.dropFile(target); } catch {}
+    const blob = new Blob([buf], {type: format==='json' ? 'application/json' : 'application/x-ndjson'});
+    blob.truncated = false;
+    return blob;
+  }
   if (format === 'xlsx'){
     await ensureSheetJS();
     const XLSX_ROW_CEILING = 1048575;
@@ -1962,6 +1979,16 @@ async function exportPlanImpl(plan, format){
     return blob;
   }
   throw new Error(`Unsupported export format: ${format}`);
+}
+async function exportCustomCsvImpl(plan, cols, limit, nullStr){
+  const sql = sqlOf(plan);
+  const selectList = cols.map(c=>q(c)).join(', ');
+  const exportSql = `SELECT ${selectList} FROM (${sql})${limit ? ` LIMIT ${limit}` : ''}`;
+  const target = `${uid('exp_')}.csv`;
+  await state.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT CSV, HEADER TRUE, NULLSTR ${esc(nullStr||'')})`);
+  const buf = await state.db.copyFileToBuffer(target);
+  try { await state.db.dropFile(target); } catch {}
+  return new Blob([buf], {type:'text/csv'});
 }
 
 function createDuckDBEngine(){
@@ -2002,6 +2029,9 @@ function createDuckDBEngine(){
     },
     async export(plan, format){
       return exportPlanImpl(plan, format);
+    },
+    async exportCustomCsv(plan, cols, limit, nullStr){
+      return exportCustomCsvImpl(plan, cols, limit, nullStr);
     },
     async compile(steps, uptoIndex, checkpoint){
       const compiled = checkpoint
@@ -3240,6 +3270,13 @@ function createArqueroEngine(){
         blob.truncated = false;
         return blob;
       }
+      if (format === 'json' || format === 'jsonl'){
+        const rows = exportTable.objects();
+        const text = format === 'json' ? JSON.stringify(rows, null, 2) : rows.map(r=>JSON.stringify(r)).join('\n');
+        const blob = new Blob([text], {type: format==='json' ? 'application/json' : 'application/x-ndjson'});
+        blob.truncated = false;
+        return blob;
+      }
       if (format === 'parquet'){
         throw new Error('Parquet export needs Full mode (DuckDB) — switch engines from the version panel.');
       }
@@ -3258,6 +3295,15 @@ function createArqueroEngine(){
         return blob;
       }
       throw new Error(`Unsupported export format: ${format}`);
+    },
+    async exportCustomCsv(plan, cols, limit, nullStr){
+      const table = tableOf(plan);
+      if (!table) throw new Error('Nothing to export.');
+      const rows = table.objects({ limit: limit || Infinity });
+      const csvEsc = s => s == null ? nullStr||'' : /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g,'""')}"` : String(s);
+      const lines = [cols.map(csvEsc).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
+      const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+      return blob;
     },
     async compile(steps, uptoIndex){
       const compiled = await compileAq(steps, uptoIndex);
@@ -3475,8 +3521,11 @@ function redo(){
   afterStepsChanged();
 }
 function updateUndoRedoButtons(){
-$('#undoBtn').disabled = !state.historyPast.length;
-$('#redoBtn').disabled = !state.historyFuture.length;
+const undoBtn = $('#undoBtn'), redoBtn = $('#redoBtn');
+undoBtn.disabled = !state.historyPast.length;
+redoBtn.disabled = !state.historyFuture.length;
+undoBtn.title = state.historyPast.length ? `Undo (⌘Z) — ${state.historyPast.length} step${state.historyPast.length===1?'':'s'} back available` : 'Undo (⌘Z)';
+redoBtn.title = state.historyFuture.length ? `Redo (⌘⇧Z) — ${state.historyFuture.length} step${state.historyFuture.length===1?'':'s'} forward available` : 'Redo (⌘⇧Z)';
 }
 function afterStepsChanged(){
 if (state.selectedStepIndex !== null && state.selectedStepIndex >= state.steps.length){
@@ -3610,12 +3659,97 @@ const steps = state.steps;
 const plan = await state.engine.compile(steps, steps.length-1);
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
 const baseName = (state.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
-const ext = format==='parquet'?'parquet':format==='csv'?'csv':'xlsx';
+const ext = format==='parquet'?'parquet':format==='csv'?'csv':format==='json'?'json':format==='jsonl'?'jsonl':'xlsx';
+try {
 const blob = await state.engine.export(plan, format);
 downloadBlob(blob, `${baseName}.${ext}`);
 if (format === 'parquet') toast('Parquet file downloaded.');
 else if (format === 'csv') toast('CSV file downloaded.');
+else if (format === 'json') toast('JSON file downloaded.');
+else if (format === 'jsonl') toast('JSONL file downloaded.');
 else toast(blob.truncated ? "Excel file downloaded — truncated to 1,048,575 rows (Excel's limit). Use CSV or Parquet for the full data." : 'Excel file downloaded.');
+} catch(e){
+toast(`Export failed: ${e.message}`);
+}
+}
+async function copyTextToClipboard(text, successMsg){
+try { await navigator.clipboard.writeText(text); toast(successMsg); }
+catch { toast('Couldn’t copy — your browser blocked clipboard access.'); }
+}
+function copyAsSqlInsert(){
+if (!lastPreview || !lastPreview.rows.length){ toast('Nothing to copy — no data loaded.'); return; }
+const cols = lastPreview.columns;
+const table = (state.sourceFileName||'data').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]+/g,'_') || 'data';
+const lit = (v, type) => {
+if (v === null || v === undefined) return 'NULL';
+if (isNumericType(type) && !isDecimalType(type)) return typeof v==='bigint' ? v.toString() : String(v);
+if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+if (v instanceof Date) return `'${v.toISOString()}'`;
+return `'${String(v).replace(/'/g,"''")}'`;
+};
+const colList = cols.map(c=>q(c.name)).join(', ');
+const lines = lastPreview.rows.map(row => `INSERT INTO ${q(table)} (${colList}) VALUES (${cols.map((c,i)=>lit(row[i],c.type)).join(', ')});`);
+copyTextToClipboard(lines.join('\n'), `Copied ${lines.length} INSERT statement${lines.length===1?'':'s'}${lastPreview.hasMore?' (first 200 rows only)':''}.`);
+}
+function copyAsMarkdownTable(){
+if (!lastPreview || !lastPreview.rows.length){ toast('Nothing to copy — no data loaded.'); return; }
+const cols = lastPreview.columns;
+const mdEsc = s => String(s).replace(/\|/g,'\\|').replace(/\n/g,' ');
+const header = `| ${cols.map(c=>mdEsc(c.name)).join(' | ')} |`;
+const sep = `| ${cols.map(()=>'---').join(' | ')} |`;
+const rows = lastPreview.rows.map(row => `| ${cols.map((c,i)=>mdEsc(formatCellValue(row[i], c.type) ?? '')).join(' | ')} |`);
+copyTextToClipboard([header, sep, ...rows].join('\n'), `Copied a ${lastPreview.rows.length}-row Markdown table${lastPreview.hasMore?' (first 200 rows only)':''}.`);
+}
+function openExportOptionsDialog(){
+if (!state.hasSource || !state.currentColumns.length){ toast('Import data first.'); return; }
+const overlay = el('div',{class:'confirm-overlay'});
+const box = el('div',{class:'confirm-box', role:'dialog', 'aria-modal':'true', style:'max-width:420px;width:90vw;text-align:left;'});
+box.appendChild(el('h3',{style:'margin-top:0;'}, 'Export options (CSV)'));
+const colChecks = state.currentColumns.map(c => el('label',{class:'checkbox-row'}, el('input',{type:'checkbox', checked:true, 'data-col':c.name}), c.name));
+const rangeAll = el('input',{type:'radio', name:'exp-range', checked:true});
+const rangeN = el('input',{type:'radio', name:'exp-range'});
+const rangeInput = el('input',{type:'number', min:'1', value:'100', style:'width:70px;'});
+const nullInput = el('input',{type:'text', placeholder:'(empty string)', style:'width:120px;'});
+box.appendChild(el('div',{style:'margin-bottom:12px;'},
+el('div',{class:'inspector-hint', style:'margin-bottom:6px;'}, 'Columns'),
+el('div',{style:'max-height:160px;overflow-y:auto;border:1px solid var(--line-soft);border-radius:var(--radius-s);padding:2px;'}, ...colChecks),
+));
+box.appendChild(el('div',{style:'margin-bottom:12px;display:flex;flex-direction:column;gap:4px;'},
+el('div',{class:'inspector-hint', style:'margin-bottom:2px;'}, 'Rows'),
+el('label',{class:'checkbox-row'}, rangeAll, 'All rows'),
+el('label',{class:'checkbox-row'}, rangeN, 'First', rangeInput, 'rows'),
+));
+box.appendChild(el('div',{style:'margin-bottom:4px;display:flex;flex-direction:column;gap:4px;'},
+el('div',{class:'inspector-hint', style:'margin-bottom:2px;'}, 'NULL shown as'),
+nullInput,
+));
+const cancelBtn = el('button',{class:'btn-ghost'}, 'Cancel');
+const goBtn = el('button',{class:'btn-solid'}, 'Export CSV');
+box.appendChild(el('div',{class:'confirm-actions'}, cancelBtn, goBtn));
+overlay.appendChild(box);
+document.body.appendChild(overlay);
+const entry = ModalStack.push(overlay, { onClose: () => overlay.remove() });
+overlay.addEventListener('mousedown', e => { if (e.target === overlay) ModalStack.pop(entry); });
+cancelBtn.addEventListener('click', () => ModalStack.pop(entry));
+goBtn.addEventListener('click', async () => {
+const chosenCols = colChecks.filter(l=>l.firstChild.checked).map(l=>l.firstChild.dataset.col);
+if (!chosenCols.length){ toast('Pick at least one column.'); return; }
+const limit = rangeN.checked ? (Number(rangeInput.value)||100) : null;
+ModalStack.pop(entry);
+await runCustomCsvExport(chosenCols, limit, nullInput.value);
+});
+}
+async function runCustomCsvExport(cols, limit, nullStr){
+const plan = await state.engine.compile(state.steps, state.steps.length-1);
+if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
+try {
+const blob = await state.engine.exportCustomCsv(plan, cols, limit, nullStr);
+const baseName = (state.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
+downloadBlob(blob, `${baseName}.csv`);
+toast('CSV file downloaded.');
+} catch(e){
+toast(`Export failed: ${e.message}`);
+}
 }
 const typeBadgeClass = (t) => {
 if (isBoolType(t)) return 't-bool';
@@ -5257,7 +5391,15 @@ $('#exportBtn').addEventListener('click', (e) => { e.stopPropagation(); $('#expo
 document.addEventListener('click', (e) => { if (!e.target.closest('.dropdown-menu-btn')) $('#exportMenu').hidden = true; });
 $$('#exportMenu button').forEach(b => b.addEventListener('click', async () => {
 $('#exportMenu').hidden = true;
+if (b.dataset.format){
 try { await exportData(b.dataset.format); } catch(e){ toast(`Export failed: ${e.message}`); }
+} else if (b.dataset.action === 'copy-insert'){
+copyAsSqlInsert();
+} else if (b.dataset.action === 'copy-markdown'){
+copyAsMarkdownTable();
+} else if (b.dataset.action === 'export-options'){
+openExportOptionsDialog();
+}
 }));
 wirePalette();
 const dropZone = $('#dropZone');
