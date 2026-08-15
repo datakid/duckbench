@@ -536,8 +536,9 @@ input,select,textarea{font-family:inherit;}
 .tab-btn.is-active{background:var(--ink-2);color:var(--paper);}
 .toolbar-actions{display:flex;align-items:center;gap:8px;}
 .row-count-label{font-family:var(--font-mono);font-size:11px;color:var(--muted);}
-.row-count-label .rc-approx{color:var(--paper-dim);cursor:pointer;text-decoration:underline dotted;}
-.row-count-label .rc-approx:hover{color:var(--paper);}
+.rc-approx{color:var(--paper-dim);cursor:pointer;text-decoration:underline dotted;}
+.rc-approx:hover{color:var(--paper);}
+.rc-approx.is-loading{cursor:default;text-decoration:none;opacity:0.7;}
 .btn-ghost, .btn-solid{
   font-size:11.5px;font-weight:500;padding:7px 13px;border-radius:20px;cursor:pointer;
   transition:background .18s var(--ease-smooth),border-color .18s var(--ease-smooth),color .18s var(--ease-smooth),transform .12s var(--ease-smooth),box-shadow .18s var(--ease-smooth);
@@ -831,6 +832,12 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
 .field-skeleton{height:32px;border-radius:var(--radius-s);background:var(--ink-2);border:1px solid var(--line-soft);animation:skeletonPulse 1.3s ease-in-out infinite;}
 @keyframes skeletonPulse{0%,100%{opacity:0.4;}50%{opacity:0.85;}}
 .sql-textarea{font-family:var(--font-mono);min-height:64px;resize:vertical;line-height:1.5;}
+.formula-assist-bar{display:flex;gap:6px;margin-bottom:6px;}
+.formula-assist-bar select{
+  flex:1;min-width:0;background:var(--ink-1);border:1px solid var(--line-soft);color:var(--paper-dim);
+  border-radius:var(--radius-s);padding:5px 6px;font-size:11px;
+}
+.formula-fn-doc{font-size:11px;color:var(--muted);line-height:1.5;margin:-2px 0 6px;min-height:15px;}
 .type-picker{display:flex;flex-wrap:wrap;gap:4px;}
 .type-picker button{
   background:var(--ink-2);border:1px solid var(--line-soft);color:var(--paper-dim);
@@ -2436,7 +2443,7 @@ Object.assign(TRANSFORMS, {
     preservesIdentity: true,
     params:[
       { key:'name', type:'text', label:'New column name', default:'New column' },
-      { key:'expr', type:'sql', label:'Formula (SQL expression)', default:'', placeholder:'e.g. price * quantity' },
+      { key:'expr', type:'sql', label:'Formula (SQL expression)', default:'', placeholder:'e.g. price * quantity', formulaBuilder:true },
     ],
     validate(d, ctx){
       if (!d.name) return 'Name the new column.';
@@ -2454,7 +2461,7 @@ Object.assign(TRANSFORMS, {
     preservesIdentity: true,
     params:[
       { key:'name', type:'text', label:'New column name', default:'New column' },
-      { key:'condition', type:'sql', label:'Condition (SQL boolean)', default:'', placeholder:'e.g. amount > 100' },
+      { key:'condition', type:'sql', label:'Condition (SQL boolean)', default:'', placeholder:'e.g. amount > 100', formulaBuilder:true },
       { key:'valueType', type:'enum', label:'Treat then/else as', default:'text', reactive: true,
         options:[{value:'text',label:'Text'},{value:'number',label:'Number'},{value:'expr',label:'SQL expression'}] },
       { key:'thenValue', type:'text', label:'Then', default:'',
@@ -3903,16 +3910,40 @@ box.appendChild(el('strong',{}, (errorIndex!=null && errorIndex>=0) ? `Step ${er
 box.appendChild(el('span',{}, error));
 }
 function renderRowCountLabel(preview){
-const lbl = $('#sbRows');
-if (!lbl) return;
+const targets = [$('#sbRows'), $('#rowCountLabel')].filter(Boolean);
+if (!targets.length) return;
+targets.forEach(lbl => { lbl.innerHTML = ''; });
 if (state.currentRowCountKnown && state.currentRowCountExact != null){
 const n = state.currentRowCountExact;
-lbl.innerHTML = `<strong>${n.toLocaleString()}</strong> row${n===1?'':'s'}`;
+targets.forEach(lbl => { lbl.appendChild(el('strong',{}, n.toLocaleString())); lbl.append(` row${n===1?'':'s'}`); });
 } else if (!preview.hasMore){
 const n = preview.rows.length;
-lbl.innerHTML = `<strong>${n.toLocaleString()}</strong> row${n===1?'':'s'}`;
+targets.forEach(lbl => { lbl.appendChild(el('strong',{}, n.toLocaleString())); lbl.append(` row${n===1?'':'s'}`); });
 } else {
-lbl.innerHTML = `<strong>${state.currentRowCountLowerBound.toLocaleString()}+</strong> rows`;
+targets.forEach(lbl => {
+lbl.appendChild(el('span',{class:'rc-approx', title:'Click to fetch the exact row count', onclick:fetchExactRowCount},
+el('strong',{}, `≈${state.currentRowCountLowerBound.toLocaleString()}+`),
+));
+lbl.append(' rows');
+});
+}
+}
+let rowCountFetchToken = 0;
+async function fetchExactRowCount(){
+if (!state.currentPlan || state.currentRowCountKnown) return;
+const token = ++rowCountFetchToken;
+const targets = [$('#sbRows'), $('#rowCountLabel')].filter(Boolean);
+targets.forEach(lbl => { lbl.innerHTML = ''; lbl.appendChild(el('span',{class:'rc-approx is-loading'}, 'Counting…')); });
+try {
+const n = await state.engine.count(state.currentPlan);
+if (token !== rowCountFetchToken) return;
+state.currentRowCountKnown = true;
+state.currentRowCountExact = n;
+renderRowCountLabel(lastPreview || { hasMore:false, rows:[] });
+} catch(e){
+if (token !== rowCountFetchToken) return;
+toast(`Couldn’t get exact count: ${e.message}`);
+renderRowCountLabel(lastPreview || { hasMore:true, rows:[] });
 }
 }
 function startCellEdit(colName, rid, td, currentValue){
@@ -4559,6 +4590,75 @@ const wasNew = insp.isNew;
 closeInspector();
 if (wasNew) revealSelectedStepCard();
 }
+const FORMULA_OPERATORS = [
+{ label:'+  add', text:' + ' }, { label:'−  subtract', text:' - ' },
+{ label:'×  multiply', text:' * ' }, { label:'÷  divide', text:' / ' },
+{ label:'=  equals', text:' = ' }, { label:'≠  not equal', text:' <> ' },
+{ label:'>  greater than', text:' > ' }, { label:'<  less than', text:' < ' },
+{ label:'≥  greater or equal', text:' >= ' }, { label:'≤  less or equal', text:' <= ' },
+{ label:'AND', text:' AND ' }, { label:'OR', text:' OR ' }, { label:'NOT', text:'NOT ' },
+{ label:'LIKE (pattern match)', text:` LIKE '%…%'` },
+{ label:'IS NULL', text:' IS NULL' }, { label:'IS NOT NULL', text:' IS NOT NULL' },
+];
+const FORMULA_FUNCTIONS = [
+{ name:'UPPER', template:'UPPER()', doc:'Convert text to uppercase.' },
+{ name:'LOWER', template:'LOWER()', doc:'Convert text to lowercase.' },
+{ name:'TRIM', template:'TRIM()', doc:'Remove leading and trailing whitespace.' },
+{ name:'LENGTH', template:'LENGTH()', doc:'Number of characters in a string.' },
+{ name:'ROUND', template:'ROUND(, 2)', doc:'Round a number to N decimal places.' },
+{ name:'ABS', template:'ABS()', doc:'Absolute (non-negative) value.' },
+{ name:'COALESCE', template:'COALESCE(, )', doc:'First non-null value from a list.' },
+{ name:'CONCAT', template:'CONCAT(, )', doc:'Join text values together.' },
+{ name:'SUBSTRING', template:'SUBSTRING(, 1, 3)', doc:'Extract part of a string (start, length).' },
+{ name:'REPLACE', template:`REPLACE(, 'old', 'new')`, doc:'Replace occurrences of text within a string.' },
+{ name:'CAST', template:'CAST( AS DOUBLE)', doc:"Convert a value's type (DOUBLE, INTEGER, VARCHAR, DATE…)." },
+{ name:'STRFTIME', template:`STRFTIME(, '%Y-%m-%d')`, doc:'Format a date/timestamp as text.' },
+{ name:'DATE_TRUNC', template:`DATE_TRUNC('month', )`, doc:"Truncate a date to a unit (year, month, week, day)." },
+{ name:'EXTRACT', template:'EXTRACT(year FROM )', doc:'Pull a date part out (year, month, day, hour…).' },
+{ name:'CASE WHEN', template:'CASE WHEN  THEN  ELSE  END', doc:'Conditional expression.' },
+];
+function insertAtCursor(ta, text, caretOffset){
+const start = ta.selectionStart ?? ta.value.length;
+const end = ta.selectionEnd ?? ta.value.length;
+ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+const pos = start + (caretOffset ?? text.length);
+ta.focus();
+ta.setSelectionRange(pos, pos);
+}
+function buildFormulaAssistBar(ta, cols, onChange){
+const colSel = el('select',{},
+el('option',{value:''}, 'Insert column…'),
+...cols.map(c => el('option',{value:c.name}, c.name)),
+);
+colSel.addEventListener('change', () => {
+if (!colSel.value) return;
+insertAtCursor(ta, q(colSel.value));
+colSel.value = '';
+onChange();
+});
+const opSel = el('select',{}, el('option',{value:''}, 'Insert operator…'), ...FORMULA_OPERATORS.map((o,i)=>el('option',{value:String(i)}, o.label)));
+opSel.addEventListener('change', () => {
+if (opSel.value === '') return;
+insertAtCursor(ta, FORMULA_OPERATORS[Number(opSel.value)].text);
+opSel.value = '';
+onChange();
+});
+const fnSel = el('select',{}, el('option',{value:''}, 'Insert function…'), ...FORMULA_FUNCTIONS.map((f,i)=>el('option',{value:String(i)}, f.name)));
+const doc = el('div',{class:'formula-fn-doc'});
+fnSel.addEventListener('change', () => {
+if (fnSel.value === ''){ doc.textContent=''; return; }
+const f = FORMULA_FUNCTIONS[Number(fnSel.value)];
+const caret = f.template.indexOf('(') + 1;
+insertAtCursor(ta, f.template, caret);
+doc.textContent = `${f.name}() — ${f.doc}`;
+fnSel.value = '';
+onChange();
+});
+return el('div',{},
+el('div',{class:'formula-assist-bar'}, colSel, opSel, fnSel),
+doc,
+);
+}
 function renderField(p, data, checkpoint, onChange){
 if (p.visible && !p.visible(data)) return null;
 const resolving = !checkpoint;
@@ -4616,6 +4716,10 @@ if (p.type === 'sql'){
 const ta = el('textarea',{class:'sql-textarea'+(p.big?'':''), 'data-field-key':p.key, placeholder:p.placeholder||'', style:p.big?'min-height:120px;':''});
 ta.value = data[p.key] ?? '';
 ta.addEventListener('input', ()=>{ data[p.key]=ta.value; fire(); });
+if (p.formulaBuilder && !resolving){
+const bar = buildFormulaAssistBar(ta, cols, ()=>{ data[p.key]=ta.value; fire(); });
+return wrap(el('div',{}, bar, ta));
+}
 return wrap(ta);
 }
 if (p.type === 'text'){
