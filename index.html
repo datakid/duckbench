@@ -1581,7 +1581,7 @@ function setEngineStatus(kind, label){
 const SOURCE_TABLE = 'source';
 
 const columnsCache = new Map();
-const COLUMNS_CACHE_CAP = 50;
+const COLUMNS_CACHE_CAP = 400;
 
 async function getColumns(sql){
   if (columnsCache.has(sql)){
