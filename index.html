@@ -114,7 +114,7 @@ input,select,textarea{font-family:inherit;}
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:0.001ms !important;animation-iteration-count:1 !important;transition-duration:0.001ms !important;}
 }
-#app{min-height:100vh;display:flex;flex-direction:column;}
+#app{height:100vh;display:flex;flex-direction:column;overflow:hidden;}
 .masthead{
   display:flex;align-items:center;justify-content:space-between;
   padding:14px 22px;
@@ -214,6 +214,7 @@ input,select,textarea{font-family:inherit;}
 .icon-btn svg{width:15px;height:15px;}
 .import-screen{
   flex:1;display:flex;align-items:center;justify-content:center;padding:40px;position:relative;
+  min-height:0;overflow-y:auto;
 }
 .pond-decoration{
   position:absolute;bottom:0;left:0;right:0;height:220px;pointer-events:none;
@@ -296,9 +297,15 @@ input,select,textarea{font-family:inherit;}
 .import-check-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--paper-dim);}
 .import-reject-note{
   margin-top:2px;padding:8px 10px;border-radius:var(--radius-s);
-  background:rgba(var(--brass-rgb),0.1);border:1px solid rgba(var(--brass-rgb),0.3);
-  color:var(--brass-bright);font-size:11.5px;line-height:1.5;
+  background:rgba(var(--rust-rgb),0.1);border:1px solid rgba(var(--rust-rgb),0.3);
+  color:var(--rust-text);font-size:11.5px;line-height:1.5;
 }
+.import-progress{display:flex;flex-direction:column;gap:6px;margin-top:2px;}
+.import-progress-label{display:flex;justify-content:space-between;font-size:11.5px;color:var(--paper-dim);}
+.import-progress-track{height:6px;border-radius:3px;background:var(--ink-3);overflow:hidden;position:relative;}
+.import-progress-fill{height:100%;background:var(--brass);border-radius:3px;transition:width .2s var(--ease-smooth);}
+.import-progress-fill.is-indeterminate{position:absolute;top:0;left:0;width:35%;animation:importIndeterminate 1.1s ease-in-out infinite;}
+@keyframes importIndeterminate{0%{left:-35%;}100%{left:100%;}}
 .workbench{flex:1;display:flex;flex-direction:column;min-height:0;}
 .workbench-body{flex:1;display:flex;min-height:0;}
 .steps-rail{
@@ -3130,13 +3137,17 @@ function createArqueroEngine(){
       const hasRidCol = table.columnNames().includes(RID);
       const total = table.numRows();
       const hasMore = total > limit;
-      const sliceTable = table.slice(0, limit);
+      const n = Math.min(limit, total);
       const names = cols.map(c=>c.name);
-      const rows = sliceTable.objects().map(obj => {
-        const row = names.map(n => obj[n] === undefined ? null : obj[n]);
-        if (hasRidCol) row.push(obj[RID]);
-        return row;
-      });
+      const colArrays = names.map(name => table.array(name));
+      const ridArray = hasRidCol ? table.array(RID) : null;
+      const rows = new Array(n);
+      for (let i=0;i<n;i++){
+        const row = new Array(colArrays.length);
+        for (let c=0;c<colArrays.length;c++){ const v = colArrays[c][i]; row[c] = v === undefined ? null : v; }
+        if (hasRidCol) row.push(ridArray[i]);
+        rows[i] = row;
+      }
       return { columns: cols, rows, hasMore, ridIndex: hasRidCol ? cols.length : -1, ms: performance.now()-t0 };
     },
     async count(plan){
@@ -3643,6 +3654,12 @@ renderGrid(preview);
 renderRowCountLabel(preview);
 return preview;
 }
+async function computeAndRenderPreview(source, plan, token, stepLabel){
+const preview = await renderDataView({ source, plan, token });
+if (!preview) return null;
+setStatusBar({ rows: preview.hasMore?'200+':preview.rows.length, cols: preview.columns.length, step: stepLabel, duration: `${preview.ms.toFixed(0)} ms` });
+return preview;
+}
 async function refreshPreview(){
 if (!state.hasSource) return;
 if (!lastPreview) $('#gridSkeleton').hidden = false;
@@ -3656,9 +3673,7 @@ renderGridError(plan);
 setStatusBar({ step: describeStatusStep(upto), duration: null });
 return;
 }
-const preview = await renderDataView({ source: 'pipeline', plan, token: myToken });
-if (!preview) return;
-setStatusBar({ rows: preview.hasMore?'200+':preview.rows.length, cols: preview.columns.length, step: describeStatusStep(upto), duration: `${preview.ms.toFixed(0)} ms` });
+await computeAndRenderPreview('pipeline', plan, myToken, describeStatusStep(upto));
 }
 function describeStatusStep(upto){
 if (upto < 0 || !state.steps.length) return 'at source';
@@ -4103,10 +4118,65 @@ const headerCheck = el('input',{type:'checkbox', checked:true, onchange:e=>{ pen
 pendingImport.firstRowHeader = true;
 box.appendChild(el('label',{class:'import-check-row'}, headerCheck, 'First row is column headers'));
 }
-box.appendChild(el('div',{style:'display:flex;gap:8px;margin-top:2px;'},
+box.appendChild(el('div',{id:'importActionRow', style:'display:flex;gap:8px;margin-top:2px;'},
 el('button',{class:'btn-solid btn-small', style:'flex:1;justify-content:center;', onclick:runImport}, `Import ${file.name}`),
 el('button',{class:'btn-ghost btn-small', onclick:()=>{ pendingImport=null; box.hidden=true; box.innerHTML=''; $('#fileInput').value=''; }}, 'Cancel'),
 ));
+}
+function restoreImportActionRow(){
+const box = $('#importOptions');
+const old = $('#importActionRow');
+if (!pendingImport){ return; }
+const row = el('div',{id:'importActionRow', style:'display:flex;gap:8px;margin-top:2px;'},
+el('button',{class:'btn-solid btn-small', style:'flex:1;justify-content:center;', onclick:runImport}, `Import ${pendingImport.file.name}`),
+el('button',{class:'btn-ghost btn-small', onclick:()=>{ pendingImport=null; box.hidden=true; box.innerHTML=''; $('#fileInput').value=''; }}, 'Cancel'),
+);
+if (old) old.replaceWith(row); else box.appendChild(row);
+}
+function setImportProgress(frac, label){
+const box = $('#importOptions');
+let row = $('#importActionRow');
+if (!row || !row.classList.contains('import-progress')){
+if (row) row.remove();
+row = el('div',{id:'importActionRow', class:'import-progress'},
+el('div',{class:'import-progress-label'}, el('span',{class:'ip-label'}, label), el('span',{class:'ip-pct'}, '')),
+el('div',{class:'import-progress-track'}, el('div',{class:'import-progress-fill'})),
+);
+box.appendChild(row);
+}
+row.querySelector('.ip-label').textContent = label;
+const fill = row.querySelector('.import-progress-fill');
+if (frac == null){
+fill.classList.add('is-indeterminate');
+fill.style.width = '';
+row.querySelector('.ip-pct').textContent = '';
+} else {
+fill.classList.remove('is-indeterminate');
+fill.style.width = `${Math.round(frac*100)}%`;
+row.querySelector('.ip-pct').textContent = `${Math.round(frac*100)}%`;
+}
+}
+function makeProgressReporter(label){
+let last = -1;
+return f => { const pct = Math.round(f*100); if (pct !== last){ last = pct; setImportProgress(f, label); } };
+}
+async function readFileWithProgress(file, onProgress){
+if (!file.stream){ return new Uint8Array(await file.arrayBuffer()); }
+const reader = file.stream().getReader();
+const total = file.size;
+let received = 0;
+const chunks = [];
+while (true){
+const { done, value } = await reader.read();
+if (done) break;
+chunks.push(value);
+received += value.length;
+if (total) onProgress(received/total);
+}
+const out = new Uint8Array(received);
+let offset = 0;
+for (const c of chunks){ out.set(c, offset); offset += c.length; }
+return out;
 }
 function showImportError(msg){
 const e = $('#importError');
@@ -4117,6 +4187,8 @@ async function runImport(){
 const { file, format, sheet, workbook, skipRows, firstRowHeader } = pendingImport;
 showImportError(null);
 setEngineStatus('loading', 'importing…');
+setImportProgress(0, 'Reading file…');
+const engineLabel = () => state.engine.id === 'duckdb' ? 'Full (DuckDB)' : 'Express (Arquero)';
 try {
 if (state.selectedEngineId && state.engine.id !== state.selectedEngineId) {
 state.engine = createEngine(state.selectedEngineId);
@@ -4124,18 +4196,23 @@ state.engine = createEngine(state.selectedEngineId);
 if (!state.conn && state.engine.id === 'duckdb') await state.engine.init();
 if (state.engine.id === 'arquero') await state.engine.init();
 if (format === 'parquet'){
-  const buffer = new Uint8Array(await file.arrayBuffer());
+  const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
+  setImportProgress(null, `Loading into ${engineLabel()}…`);
   await state.engine.loadFile({ format, fileName: file.name, buffer });
 } else if (format === 'excel'){
-  const fullWb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
+  const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
+  setImportProgress(null, 'Parsing spreadsheet…');
+  const fullWb = XLSX.read(buffer, { type:'array', cellDates:true });
   const ws = fullWb.Sheets[sheet];
   const csvText = XLSX.utils.sheet_to_csv(ws, { skipHidden:false });
   const lines = csvText.split(/\r?\n/);
   const trimmed = (skipRows>0 ? lines.slice(skipRows) : lines).join('\n');
+  setImportProgress(null, `Loading into ${engineLabel()}…`);
   await state.engine.loadFile({ format, fileName: `${file.name}.csv`, csvText: trimmed, firstRowHeader });
 } else {
-  const buffer = new Uint8Array(await file.arrayBuffer());
+  const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
   const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
+  setImportProgress(null, `Loading into ${engineLabel()}…`);
   await state.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader, skipRows, delim });
 }
 
@@ -4170,6 +4247,7 @@ toast(`Recipe applied — ${state.steps.length} step${state.steps.length===1?'':
 saveSessionSnapshot();
 } catch(e){
 showImportError(e.message || String(e));
+restoreImportActionRow();
 if (!state.conn && state.engine.id === 'duckdb') setEngineStatus('error', `Couldn’t start DuckDB: ${e.message}`);
 } finally {
 if (state.conn && state.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${state.duckdbVersion}`);
@@ -4352,9 +4430,8 @@ if (state.inspectorToken !== myToken) return;
 insp.error = e.message; renderInspectorError();
 return;
 }
-const preview = await renderDataView({ source: 'inspector', plan, token: myToken });
+const preview = await computeAndRenderPreview('inspector', plan, myToken, `previewing “${t.label}”`);
 if (!preview) return;
-setStatusBar({ rows: preview.hasMore?'200+':preview.rows.length, cols: preview.columns.length, step: `previewing “${t.label}”`, duration: `${preview.ms.toFixed(0)} ms` });
 if (insp.type === 'change_type' && insp.data.column){
 state.engine.tryCastFailCount(plan, insp.data.column, insp.data.targetType).then(n => {
 if (state.inspector !== insp || state.inspectorToken !== myToken) return;
