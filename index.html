@@ -1777,7 +1777,7 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
     } catch(e){
       return { sql: from, hasRid, columns: richColumns, error: e.message || String(e), errorIndex: i };
     }
-    richColumns = (await getColumns(from)).filter(c=>c.name!==RID);
+    richColumns = t.columnsUnchanged ? richColumns : (await getColumns(from)).filter(c=>c.name!==RID);
     hasRid = hasRid && (typeof t.preservesIdentity === 'function' ? t.preservesIdentity(data) : !!t.preservesIdentity);
   }
   return { sql: from, hasRid, columns: richColumns, error: null, errorIndex: -1 };
@@ -2249,6 +2249,7 @@ function dedupeName(name, existingCols){
 const TRANSFORMS = {
   filter: {
     label: 'Filter rows', category: 'row', code: 'FLT',
+    columnsUnchanged: true,
     ribbon: { tab:'home', group:'Reduce rows', icon:'filter', size:'large' },
     context: { header:true, order:10 },
     preservesIdentity: true,
@@ -2350,6 +2351,7 @@ const TRANSFORMS = {
   },
   sort: {
     label: 'Sort rows', category:'row', code:'SRT',
+    columnsUnchanged: true,
     ribbon:{ tab:'home', group:'Reduce rows', icon:'sort', size:'large' },
     context:{ header:true, order:20 },
     preservesIdentity: true,
@@ -2376,6 +2378,7 @@ const TRANSFORMS = {
   },
   remove_duplicates: {
     label:'Remove duplicate rows', category:'row', code:'DUP',
+    columnsUnchanged: true,
     ribbon:{ tab:'home', group:'Reduce rows', icon:'layers', size:'large' },
     preservesIdentity: false,
     params:[
@@ -2401,6 +2404,7 @@ const TRANSFORMS = {
   },
   remove_blank_rows: {
     label:'Remove blank rows', category:'row', code:'BLK',
+    columnsUnchanged: true,
     ribbon:{ tab:'home', group:'Reduce rows', icon:'eraser', size:'small' },
     preservesIdentity: true,
     params:[],
@@ -2498,6 +2502,7 @@ const TRANSFORMS = {
   },
   limit: {
     label:'Keep top rows', category:'row', code:'LIM',
+    columnsUnchanged: true,
     ribbon:{ tab:'home', group:'Reduce rows', icon:'scissors', size:'small' },
     preservesIdentity: true,
     params:[
@@ -3227,6 +3232,7 @@ Object.assign(TRANSFORMS, {
   },
   delete_rows: {
     label:'Delete rows', category:'row', code:'DEL',
+    columnsUnchanged: true,
     preservesIdentity: true,
     params:[ { key:'rids', type:'ridset', label:'Rows', default:()=>[] } ],
     validate(d, ctx){
