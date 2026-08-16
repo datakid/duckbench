@@ -1489,10 +1489,10 @@ function dismissToast(t){
 }
 
 function toggleTheme(){
-  state.theme = state.theme === 'light' ? 'dark' : 'light';
-  if (state.theme === 'light') document.documentElement.setAttribute('data-theme','light');
+  uiState.theme = uiState.theme === 'light' ? 'dark' : 'light';
+  if (uiState.theme === 'light') document.documentElement.setAttribute('data-theme','light');
   else document.documentElement.removeAttribute('data-theme');
-  localStorage.setItem('duckbench-theme', state.theme);
+  localStorage.setItem('duckbench-theme', uiState.theme);
 }
 
 function switchPane(name){
@@ -1662,7 +1662,7 @@ while (true){
 const { done, value } = await reader.read();
 if (done) break;
 received += value.length;
-if (state.duckdbVersion === version) break;
+if (dataState.duckdbVersion === version) break;
 setEngineStatus('loading', `fetching duckdb-wasm@${version}… ${Math.round(received/total*100)}%`);
 }
 } catch(e){}
@@ -1683,10 +1683,10 @@ async function loadDuckDB(version){
   URL.revokeObjectURL(workerUrl);
   await db.open({ query: { castTimestampToDate: true } });
   const conn = await db.connect();
-  if (state.conn) { try { await state.conn.close(); } catch {} }
-  if (state.db && state.db !== db) { try { await state.db.terminate(); } catch {} }
-  state.db = db; state.conn = conn; state.duckdbVersion = version;
-  state.duckdbBundleName = bundle.mainModule.includes('eh') ? 'eh' : (bundle.mainModule.includes('coi') ? 'coi' : 'mvp');
+  if (dataState.conn) { try { await dataState.conn.close(); } catch {} }
+  if (dataState.db && dataState.db !== db) { try { await dataState.db.terminate(); } catch {} }
+  dataState.db = db; dataState.conn = conn; dataState.duckdbVersion = version;
+  dataState.duckdbBundleName = bundle.mainModule.includes('eh') ? 'eh' : (bundle.mainModule.includes('coi') ? 'coi' : 'mvp');
   localStorage.setItem('duckbench-duckdb-version', version);
   setEngineStatus('ready', `DuckDB ${version}`);
   updateVersionUI();
@@ -1728,7 +1728,7 @@ async function getColumns(sql){
     columnsCache.set(sql, v);
     return v;
   }
-  const res = await state.conn.query(`DESCRIBE (${sql})`);
+  const res = await dataState.conn.query(`DESCRIBE (${sql})`);
   const { fieldNames, rows } = extractRows(res);
   const nameIdx = fieldNames.indexOf('column_name');
   const typeIdx = fieldNames.indexOf('column_type');
@@ -1744,7 +1744,7 @@ function clearColumnsCache(){
 }
 
 async function queryOneRaw(sql){
-  const res = await state.conn.query(sql);
+  const res = await dataState.conn.query(sql);
   if (res.numRows === 0) return null;
   const obj = {};
   res.schema.fields.forEach((f,i) => { obj[f.name] = res.getChildAt(i).get(0); });
@@ -1752,7 +1752,7 @@ async function queryOneRaw(sql){
 }
 
 async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColumns){
-  if (!baseFrom && !state.hasSource){
+  if (!baseFrom && !dataState.hasSource){
     return { sql: null, hasRid: true, columns: [], error: null, errorIndex: -1 };
   }
   let from = baseFrom ?? `SELECT * FROM ${q(SOURCE_TABLE)}`;
@@ -1786,31 +1786,31 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
 async function ensureCheckpoint(steps, uptoIndex){
   const prefix = steps.slice(0, uptoIndex);
   const sig = JSON.stringify(prefix.map(s=>({t:s.type,d:s.data,x:!!s.disabled})));
-  const cached = state.checkpointCache.get(sig);
+  const cached = dataState.checkpointCache.get(sig);
   if (cached && cached.materialized) return cached;
   if (cached && !cached.materialized){
     const table = uid('ckpt_');
-    await state.conn.query(`CREATE OR REPLACE TEMP TABLE ${q(table)} AS ${cached.sql}`);
+    await dataState.conn.query(`CREATE OR REPLACE TEMP TABLE ${q(table)} AS ${cached.sql}`);
     const entry = { materialized:true, table, hasRid: cached.hasRid, columns: cached.columns };
-    state.checkpointCache.clear();
-    state.checkpointCache.set(sig, entry);
+    dataState.checkpointCache.clear();
+    dataState.checkpointCache.set(sig, entry);
     return entry;
   }
   const compiled = await compilePipeline(steps, uptoIndex - 1);
   if (compiled.error) throw Object.assign(new Error(compiled.error), { stepIndex: compiled.errorIndex });
-  for (const oldEntry of state.checkpointCache.values()){
-    if (oldEntry.materialized){ try { await state.conn.query(`DROP TABLE IF EXISTS ${q(oldEntry.table)}`); } catch {} }
+  for (const oldEntry of dataState.checkpointCache.values()){
+    if (oldEntry.materialized){ try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q(oldEntry.table)}`); } catch {} }
   }
-  state.checkpointCache.clear();
+  dataState.checkpointCache.clear();
   const entry = { materialized:false, sql: compiled.sql, hasRid: compiled.hasRid, columns: compiled.columns };
-  state.checkpointCache.set(sig, entry);
+  dataState.checkpointCache.set(sig, entry);
   return entry;
 }
 async function dropAllCheckpoints(){
-  for (const entry of state.checkpointCache.values()){
-    if (entry.materialized){ try { await state.conn.query(`DROP TABLE IF EXISTS ${q(entry.table)}`); } catch {} }
+  for (const entry of dataState.checkpointCache.values()){
+    if (entry.materialized){ try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q(entry.table)}`); } catch {} }
   }
-  state.checkpointCache.clear();
+  dataState.checkpointCache.clear();
 }
 function checkpointFrom(checkpoint){
   return checkpoint.materialized ? `(SELECT * FROM ${q(checkpoint.table)})` : `(${checkpoint.sql})`;
@@ -1843,7 +1843,7 @@ async function runPreview(sql, limit=200){
   const hasRid = colTypes.some(c=>c.name===RID);
   const selectList = nonRid.map(c => isRiskyDisplayType(c.type) ? `CAST(${q(c.name)} AS VARCHAR) AS ${q(c.name)}` : q(c.name));
   const wrapped = `SELECT ${selectList.join(', ') || 'NULL'}${hasRid?`, ${q(RID)}`:''} FROM (${sql}) LIMIT ${limit+1}`;
-  const result = await state.conn.query(wrapped);
+  const result = await dataState.conn.query(wrapped);
   const { rows } = extractRows(result);
   const hasMore = rows.length > limit;
   const shownRows = hasMore ? rows.slice(0, limit) : rows;
@@ -1854,14 +1854,14 @@ async function runPreview(sql, limit=200){
 }
 
 async function fetchExactCount(sql){
-  const res = await state.conn.query(`SELECT COUNT(*) AS n FROM (${sql})`);
+  const res = await dataState.conn.query(`SELECT COUNT(*) AS n FROM (${sql})`);
   if (currentPlanSql() !== sql) return null;
   const n = res.getChildAt(0).get(0);
   return typeof n === 'bigint' ? Number(n) : n;
 }
 
 async function fetchTryCastFailCount(sql, column, targetType){
-  const res = await state.conn.query(
+  const res = await dataState.conn.query(
     `SELECT COUNT(*) AS n FROM (${sql}) WHERE ${q(column)} IS NOT NULL AND TRY_CAST(${q(column)} AS ${targetType}) IS NULL`
   );
   const n = res.getChildAt(0).get(0);
@@ -1870,7 +1870,7 @@ async function fetchTryCastFailCount(sql, column, targetType){
 
 async function fetchDistinctValues(sql, column, { search='', cap=1000 } = {}){
   const where = search ? `WHERE CAST(${q(column)} AS VARCHAR) ILIKE ${esc('%'+search+'%')}` : '';
-  const res = await state.conn.query(
+  const res = await dataState.conn.query(
     `SELECT ${q(column)} AS v, COUNT(*) AS n FROM (${sql}) ${where} GROUP BY 1 ORDER BY n DESC LIMIT ${cap+1}`
   );
   const { rows } = extractRows(res);
@@ -1880,7 +1880,7 @@ async function fetchDistinctValues(sql, column, { search='', cap=1000 } = {}){
 
 async function fetchColumnStats(sql, column, type){
   if (/^(LIST|STRUCT|MAP|BLOB|UNION)/i.test(type||'')) {
-    const res = await state.conn.query(`SELECT COUNT(*) AS total, COUNT(${q(column)}) AS nonnull FROM (${sql})`);
+    const res = await dataState.conn.query(`SELECT COUNT(*) AS total, COUNT(${q(column)}) AS nonnull FROM (${sql})`);
     if (currentPlanSql() !== sql) return null;
     const { rows } = extractRows(res);
     return { unsupported:true, total: Number(rows[0][0]), nonNull: Number(rows[0][1]) };
@@ -1888,7 +1888,7 @@ async function fetchColumnStats(sql, column, type){
   const numeric = isNumericType(type) && !isDecimalType(type);
   const parts = [`COUNT(*) AS total`, `COUNT(${q(column)}) AS nonnull`, `approx_count_distinct(${q(column)}) AS distinct_n`];
   if (numeric) parts.push(`MIN(${q(column)}) AS mn`, `MAX(${q(column)}) AS mx`, `AVG(${q(column)}) AS avg_v`, `MEDIAN(${q(column)}) AS median_v`);
-  const res = await state.conn.query(`SELECT ${parts.join(', ')} FROM (${sql})`);
+  const res = await dataState.conn.query(`SELECT ${parts.join(', ')} FROM (${sql})`);
   if (currentPlanSql() !== sql) return null;
   const { rows } = extractRows(res);
   const r = rows[0];
@@ -1898,7 +1898,7 @@ async function fetchColumnStats(sql, column, type){
     out.min = asNum(r[3]); out.max = asNum(r[4]); out.avg = asNum(r[5]); out.median = asNum(r[6]);
     if (out.nonNull > 0 && out.max > out.min){
       const nb = 12;
-      const bres = await state.conn.query(`SELECT LEAST(${nb-1}, GREATEST(0, FLOOR((${q(column)} - ${out.min}) / (${out.max}-${out.min}) * ${nb}))) AS bucket, COUNT(*) AS n FROM (${sql}) WHERE ${q(column)} IS NOT NULL GROUP BY bucket`);
+      const bres = await dataState.conn.query(`SELECT LEAST(${nb-1}, GREATEST(0, FLOOR((${q(column)} - ${out.min}) / (${out.max}-${out.min}) * ${nb}))) AS bucket, COUNT(*) AS n FROM (${sql}) WHERE ${q(column)} IS NOT NULL GROUP BY bucket`);
       if (currentPlanSql() !== sql) return null;
       const { rows: brows } = extractRows(bres);
       const buckets = new Array(nb).fill(0);
@@ -1908,13 +1908,13 @@ async function fetchColumnStats(sql, column, type){
       out.histogram = [out.nonNull];
     }
     if (out.nonNull > 0){
-      const sres = await state.conn.query(`SELECT DISTINCT ${q(column)} FROM (${sql}) WHERE ${q(column)} IS NOT NULL LIMIT 8`);
+      const sres = await dataState.conn.query(`SELECT DISTINCT ${q(column)} FROM (${sql}) WHERE ${q(column)} IS NOT NULL LIMIT 8`);
       if (currentPlanSql() !== sql) return null;
       const { rows: srows } = extractRows(sres);
       out.samples = srows.map(sr => asNum(sr[0]));
     }
   } else {
-    const tres = await state.conn.query(`SELECT ${q(column)} AS v, COUNT(*) AS n FROM (${sql}) WHERE ${q(column)} IS NOT NULL GROUP BY ${q(column)} ORDER BY n DESC LIMIT 20`);
+    const tres = await dataState.conn.query(`SELECT ${q(column)} AS v, COUNT(*) AS n FROM (${sql}) WHERE ${q(column)} IS NOT NULL GROUP BY ${q(column)} ORDER BY n DESC LIMIT 20`);
     if (currentPlanSql() !== sql) return null;
     const { rows: trows } = extractRows(tres);
     out.topValues = trows.map(tr => ({ value: tr[0], count: asNum(tr[1]) }));
@@ -1923,7 +1923,7 @@ async function fetchColumnStats(sql, column, type){
 }
 
 async function wrapSelectForDisplay(sql){
-  const described = await state.conn.query(`DESCRIBE (${sql})`);
+  const described = await dataState.conn.query(`DESCRIBE (${sql})`);
   const colTypes = [];
   for (let i=0;i<described.numRows;i++) colTypes.push({ name: described.getChildAt(0).get(i), type: described.getChildAt(1).get(i) });
   const nonRid = colTypes.filter(c=>c.name!==RID);
@@ -1937,80 +1937,80 @@ async function refreshSourceSchema(){
 
 async function loadFileImpl({ format, fileName, buffer, csvText, firstRowHeader, skipRows, delim }){
   if (format === 'parquet'){
-    await state.db.registerFileBuffer(fileName, buffer);
+    await dataState.db.registerFileBuffer(fileName, buffer);
     try {
-      await state.conn.query(`CREATE OR REPLACE TABLE ${q(SOURCE_TABLE)} AS SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM read_parquet(${esc(fileName)})`);
-      state.rejectCount = 0;
+      await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(SOURCE_TABLE)} AS SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM read_parquet(${esc(fileName)})`);
+      dataState.rejectCount = 0;
     } finally {
-      try { await state.db.dropFile(fileName); } catch {}
+      try { await dataState.db.dropFile(fileName); } catch {}
     }
     return;
   }
   let primary, fallback;
   if (format === 'excel'){
-    await state.db.registerFileText(fileName, csvText);
+    await dataState.db.registerFileText(fileName, csvText);
     primary = `read_csv(${esc(fileName)}, header=${firstRowHeader}, store_rejects=true, all_varchar=false)`;
     fallback = `read_csv(${esc(fileName)}, header=${firstRowHeader}, ignore_errors=true, all_varchar=false)`;
   } else {
-    await state.db.registerFileBuffer(fileName, buffer);
+    await dataState.db.registerFileBuffer(fileName, buffer);
     primary = `read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, store_rejects=true${delim||''})`;
     fallback = `read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, ignore_errors=true${delim||''})`;
   }
-  try { await state.conn.query(`DROP TABLE IF EXISTS reject_scans`); } catch {}
-  try { await state.conn.query(`DROP TABLE IF EXISTS reject_errors`); } catch {}
+  try { await dataState.conn.query(`DROP TABLE IF EXISTS reject_scans`); } catch {}
+  try { await dataState.conn.query(`DROP TABLE IF EXISTS reject_errors`); } catch {}
   try {
     try {
-      await state.conn.query(`CREATE OR REPLACE TABLE ${q(SOURCE_TABLE)} AS SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${primary}`);
+      await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(SOURCE_TABLE)} AS SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${primary}`);
     } catch(e){
-      await state.conn.query(`CREATE OR REPLACE TABLE ${q(SOURCE_TABLE)} AS SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${fallback}`);
+      await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(SOURCE_TABLE)} AS SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${fallback}`);
     }
-    state.rejectCount = 0;
+    dataState.rejectCount = 0;
     try {
-      const res = await state.conn.query(`SELECT COUNT(*) AS n FROM reject_errors`);
+      const res = await dataState.conn.query(`SELECT COUNT(*) AS n FROM reject_errors`);
       const n = res.getChildAt(0).get(0);
-      state.rejectCount = typeof n==='bigint' ? Number(n) : (n||0);
+      dataState.rejectCount = typeof n==='bigint' ? Number(n) : (n||0);
     } catch {}
   } finally {
-    try { await state.db.dropFile(fileName); } catch {}
+    try { await dataState.db.dropFile(fileName); } catch {}
   }
 }
 
 async function loadSecondaryTableImpl(tableName, { format, fileName, buffer, csvText, firstRowHeader, skipRows, delim }){
   if (format === 'parquet'){
-    await state.db.registerFileBuffer(fileName, buffer);
+    await dataState.db.registerFileBuffer(fileName, buffer);
     try {
-      await state.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_parquet(${esc(fileName)})`);
+      await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_parquet(${esc(fileName)})`);
     } finally {
-      try { await state.db.dropFile(fileName); } catch(e){}
+      try { await dataState.db.dropFile(fileName); } catch(e){}
     }
     return;
   }
   if (format === 'excel'){
-    await state.db.registerFileText(fileName, csvText);
+    await dataState.db.registerFileText(fileName, csvText);
     try {
-      await state.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, ignore_errors=true, all_varchar=false)`);
+      await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, ignore_errors=true, all_varchar=false)`);
     } finally {
-      try { await state.db.dropFile(fileName); } catch(e){}
+      try { await dataState.db.dropFile(fileName); } catch(e){}
     }
     return;
   }
-  await state.db.registerFileBuffer(fileName, buffer);
+  await dataState.db.registerFileBuffer(fileName, buffer);
   try {
-    await state.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, ignore_errors=true${delim||''})`);
+    await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, ignore_errors=true${delim||''})`);
   } finally {
-    try { await state.db.dropFile(fileName); } catch(e){}
+    try { await dataState.db.dropFile(fileName); } catch(e){}
   }
 }
 async function fetchSkippedRowsDetail(){
-  const res = await state.conn.query(`SELECT line, column_idx, error_type, csv_line, error_message FROM reject_errors ORDER BY line LIMIT 200`);
+  const res = await dataState.conn.query(`SELECT line, column_idx, error_type, csv_line, error_message FROM reject_errors ORDER BY line LIMIT 200`);
   const { rows } = extractRows(res);
   return rows.map(r => ({ line: r[0], errorType: r[2], csvLine: r[3], errorMessage: r[4] }));
 }
 
 function updateVersionUI(){
-  $('#engineVersionBtn').textContent = state.duckdbVersion ? `DuckDB ${state.duckdbVersion}` : 'DuckDB —';
-  if ($('#versionRunning')) $('#versionRunning').textContent = state.duckdbVersion || '—';
-  if ($('#versionBundle')) $('#versionBundle').textContent = state.duckdbBundleName || '—';
+  $('#engineVersionBtn').textContent = dataState.duckdbVersion ? `DuckDB ${dataState.duckdbVersion}` : 'DuckDB —';
+  if ($('#versionRunning')) $('#versionRunning').textContent = dataState.duckdbVersion || '—';
+  if ($('#versionBundle')) $('#versionBundle').textContent = dataState.duckdbBundleName || '—';
 }
 function openVersionPanel(){
   updateVersionUI();
@@ -2031,7 +2031,7 @@ async function handleCheckLatest(){
     body.appendChild(document.createTextNode('Latest stable: '));
     body.appendChild(el('strong',{}, version));
     if (dateStr) body.appendChild(document.createTextNode(` · published ${dateStr}`));
-    if (version !== state.duckdbVersion){
+    if (version !== dataState.duckdbVersion){
       body.classList.add('is-stale');
       const loadBtn = el('button',{class:'btn-solid btn-small', style:'margin-left:10px;', onclick:async ()=>{
         loadBtn.disabled = true; loadBtn.textContent = 'Loading…';
@@ -2078,7 +2078,7 @@ function sqlOf(plan){
   return duckDbPlanSql.get(plan);
 }
 function currentPlanSql(){
-  return state.currentPlan ? duckDbPlanSql.get(state.currentPlan) : null;
+  return dataState.currentPlan ? duckDbPlanSql.get(dataState.currentPlan) : null;
 }
 
 async function exportPlanImpl(plan, format){
@@ -2086,27 +2086,27 @@ async function exportPlanImpl(plan, format){
   const exportSql = plan.hasRid ? `SELECT * EXCLUDE (${q(RID)}) FROM (${sql})` : sql;
   if (format === 'parquet'){
     const target = `${uid('exp_')}.parquet`;
-    await state.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT PARQUET)`);
-    const buf = await state.db.copyFileToBuffer(target);
-    try { await state.db.dropFile(target); } catch {}
+    await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT PARQUET)`);
+    const buf = await dataState.db.copyFileToBuffer(target);
+    try { await dataState.db.dropFile(target); } catch {}
     const blob = new Blob([buf], {type:'application/octet-stream'});
     blob.truncated = false;
     return blob;
   }
   if (format === 'csv'){
     const target = `${uid('exp_')}.csv`;
-    await state.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT CSV, HEADER TRUE)`);
-    const buf = await state.db.copyFileToBuffer(target);
-    try { await state.db.dropFile(target); } catch {}
+    await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT CSV, HEADER TRUE)`);
+    const buf = await dataState.db.copyFileToBuffer(target);
+    try { await dataState.db.dropFile(target); } catch {}
     const blob = new Blob([buf], {type:'text/csv'});
     blob.truncated = false;
     return blob;
   }
   if (format === 'json' || format === 'jsonl'){
     const target = `${uid('exp_')}.json`;
-    await state.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT JSON, ARRAY ${format==='json'?'TRUE':'FALSE'})`);
-    const buf = await state.db.copyFileToBuffer(target);
-    try { await state.db.dropFile(target); } catch {}
+    await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT JSON, ARRAY ${format==='json'?'TRUE':'FALSE'})`);
+    const buf = await dataState.db.copyFileToBuffer(target);
+    try { await dataState.db.dropFile(target); } catch {}
     const blob = new Blob([buf], {type: format==='json' ? 'application/json' : 'application/x-ndjson'});
     blob.truncated = false;
     return blob;
@@ -2115,7 +2115,7 @@ async function exportPlanImpl(plan, format){
     await ensureSheetJS();
     const XLSX_ROW_CEILING = 1048575;
     const { sql: safeSql, columns } = await wrapSelectForDisplay(sql);
-    const res = await state.conn.query(`${safeSql} LIMIT ${XLSX_ROW_CEILING + 1}`);
+    const res = await dataState.conn.query(`${safeSql} LIMIT ${XLSX_ROW_CEILING + 1}`);
     const { rows } = extractRows(res);
     const truncated = rows.length > XLSX_ROW_CEILING;
     const aoa = [columns.map(c=>c.name), ...(truncated ? rows.slice(0, XLSX_ROW_CEILING) : rows)];
@@ -2134,9 +2134,9 @@ async function exportCustomCsvImpl(plan, cols, limit, nullStr){
   const selectList = cols.map(c=>q(c)).join(', ');
   const exportSql = `SELECT ${selectList} FROM (${sql})${limit ? ` LIMIT ${limit}` : ''}`;
   const target = `${uid('exp_')}.csv`;
-  await state.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT CSV, HEADER TRUE, NULLSTR ${esc(nullStr||'')})`);
-  const buf = await state.db.copyFileToBuffer(target);
-  try { await state.db.dropFile(target); } catch {}
+  await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT CSV, HEADER TRUE, NULLSTR ${esc(nullStr||'')})`);
+  const buf = await dataState.db.copyFileToBuffer(target);
+  try { await dataState.db.dropFile(target); } catch {}
   return new Blob([buf], {type:'text/csv'});
 }
 
@@ -2146,7 +2146,7 @@ function createDuckDBEngine(){
     label: 'DuckDB (full SQL)',
     capabilities: new Set(['sql','window','joins','regex','pivot','approxCountDistinct']),
     async init(opts={}){
-      const version = opts.version || state.duckdbVersion || (typeof localStorage!=='undefined' && localStorage.getItem('duckbench-duckdb-version')) || DEFAULT_DUCKDB_VERSION;
+      const version = opts.version || dataState.duckdbVersion || (typeof localStorage!=='undefined' && localStorage.getItem('duckbench-duckdb-version')) || DEFAULT_DUCKDB_VERSION;
       await loadDuckDB(version);
     },
     async loadFile(fileSpec, opts={}){
@@ -2183,12 +2183,12 @@ function createDuckDBEngine(){
       return getColumns(`SELECT * FROM ${q('src_'+id)}`);
     },
     async secondarySourceRowCount(id){
-      const res = await state.conn.query(`SELECT COUNT(*) AS n FROM ${q('src_'+id)}`);
+      const res = await dataState.conn.query(`SELECT COUNT(*) AS n FROM ${q('src_'+id)}`);
       const { rows } = extractRows(res);
       return typeof rows[0][0]==='bigint' ? Number(rows[0][0]) : rows[0][0];
     },
     async dropSecondarySource(id){
-      try { await state.conn.query(`DROP TABLE IF EXISTS ${q('src_'+id)}`); } catch(e){}
+      try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q('src_'+id)}`); } catch(e){}
     },
     async export(plan, format){
       return exportPlanImpl(plan, format);
@@ -3158,14 +3158,14 @@ Object.assign(TRANSFORMS, {
     preservesIdentity: false,
     params:[
       { key:'rightSource', type:'enum', label:'Join with', default:'', reactive:true,
-        options:()=>state.secondarySources.map(s=>({value:s.id,label:`${s.name}${s.rowCount!=null?` (${s.rowCount.toLocaleString()} rows)`:''}`})) },
+        options:()=>dataState.secondarySources.map(s=>({value:s.id,label:`${s.name}${s.rowCount!=null?` (${s.rowCount.toLocaleString()} rows)`:''}`})) },
       { key:'leftKey', type:'column', label:'Left key (this table)', default:'' },
       { key:'rightKey', type:'rightColumn', label:'Right key (joined table)', default:'' },
       { key:'joinType', type:'enum', label:'Join type', default:'inner',
         options:[{value:'inner',label:'Inner — matching rows only'},{value:'left',label:'Left — keep all rows from this table'},{value:'right',label:'Right — keep all rows from the joined table'},{value:'full',label:'Full — keep all rows from both'}] },
     ],
     validate(d){
-      if (!state.secondarySources.length) return 'Add a source to join with first — use the Sources panel at the top of the rail.';
+      if (!dataState.secondarySources.length) return 'Add a source to join with first — use the Sources panel at the top of the rail.';
       if (!d.rightSource) return 'Pick a source to join with.';
       if (!d.leftKey) return 'Pick the key column from this table.';
       if (!d.rightKey) return 'Pick the key column from the joined table.';
@@ -3177,12 +3177,12 @@ Object.assign(TRANSFORMS, {
       return `SELECT l.*, r.* EXCLUDE (${q(d.rightKey)}) FROM (${from}) AS l ${jt} JOIN ${q(rt)} AS r ON l.${q(d.leftKey)} = r.${q(d.rightKey)}`;
     },
     summary(d){
-      const src = state.secondarySources.find(s=>s.id===d.rightSource);
+      const src = dataState.secondarySources.find(s=>s.id===d.rightSource);
       return src ? `with ${src.name} on ${d.leftKey||'?'} = ${d.rightKey||'?'} (${d.joinType})` : 'not configured';
     },
     engines: ['duckdb','arquero'],
     toAq(d, table, ctx){
-      const right = state.secondaryAqTables[d.rightSource];
+      const right = dataState.secondaryAqTables[d.rightSource];
       if (!right) throw new Error('Joined source not loaded.');
       const opts = { left: d.joinType==='left'||d.joinType==='full', right: d.joinType==='right'||d.joinType==='full', suffix:['','_right'] };
       return table.join(right, [d.leftKey, d.rightKey], undefined, opts);
@@ -3306,10 +3306,10 @@ function tableOf(plan){
 
 async function compileAq(steps, uptoIndex){
   const aq = await loadAq();
-  if (!state.aqSourceTable){
+  if (!dataState.aqSourceTable){
     return { table: null, hasRid: true, columns: [], error: null, errorIndex: -1 };
   }
-  let table = state.aqSourceTable;
+  let table = dataState.aqSourceTable;
   let hasRid = true;
   let columns = columnsMetaOf(table).filter(c=>c.name!==RID);
   const end = uptoIndex ?? steps.length - 1;
@@ -3357,8 +3357,8 @@ function createArqueroEngine(){
       const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
       let table = aq.fromCSV(text, { parse: 'auto', delimiter, header: firstRowHeader !== false });
       table = table.derive({ [RID]: () => aq.op.row_number() }).relocate(RID, { before: table.columnNames()[0] });
-      state.aqSourceTable = table;
-      state.rejectCount = 0;
+      dataState.aqSourceTable = table;
+      dataState.rejectCount = 0;
     },
     async getColumns(plan){
       const table = tableOf(plan);
@@ -3398,18 +3398,18 @@ function createArqueroEngine(){
       if (skipRows > 0) text = text.split(/\r?\n/).slice(skipRows).join('\n');
       const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
       const table = aq.fromCSV(text, { parse:'auto', delimiter, header: firstRowHeader !== false });
-      state.secondaryAqTables[id] = table;
+      dataState.secondaryAqTables[id] = table;
     },
     async getSecondarySourceColumns(id){
-      const table = state.secondaryAqTables[id];
+      const table = dataState.secondaryAqTables[id];
       return table ? columnsMetaOf(table) : [];
     },
     async secondarySourceRowCount(id){
-      const table = state.secondaryAqTables[id];
+      const table = dataState.secondaryAqTables[id];
       return table ? table.numRows() : 0;
     },
     async dropSecondarySource(id){
-      delete state.secondaryAqTables[id];
+      delete dataState.secondaryAqTables[id];
     },
     async distinct(plan, col, opts={}){
       const { search='', cap=1000 } = opts;
@@ -3543,39 +3543,41 @@ function createEngine(id){
   throw new Error(`Unknown engine: ${id}`);
 }
 
-const state = {
+const uiState = {
+  selectedStepIndex: null,
+  inspector: null,
+  rowSelection: new Set(),
+  selectionAnchorRowIndex: null,
+  ribbonTab: 'home',
+  showQuality: false,
+  theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
+  keyColumn: null,
+  activeCell: null,
+  focusedColumn: null,
+};
+const dataState = {
   engine: createEngine('duckdb'),
   db: null, conn: null,
   aqSourceTable: null,
   duckdbVersion: null, duckdbBundleName: null,
   sourceFileName: null, sourceFormat: null, hasSource: false,
-sourceFile: null, sourceImportOptions: null, pendingRecipe: null,
-secondarySources: [], secondaryAqTables: {},
-  steps: [],                 
-  selectedStepIndex: null,   
-  inspector: null,           
-  history: [], historyPast: [], historyFuture: [],
-  rowSelection: new Set(),   
-  selectionAnchorRid: null,
-  ribbonTab: 'home',
-  ribbonCollapsed: false,
-  showQuality: false,
-  theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
+  sourceFile: null, sourceImportOptions: null, pendingRecipe: null,
+  secondarySources: [], secondaryAqTables: {},
+  steps: [],
+  historyPast: [], historyFuture: [],
   pipelineToken: 0, inspectorToken: 0,
   statsGenToken: 0,
-  keyColumn: null,
-  activeCell: null,
   currentColumns: [],
   currentPlan: null,
-  currentRidColIndex: -1,
+  currentRidIndex: -1,
+  currentPipelineHasRid: false,
   currentRowCountKnown: false, currentRowCountExact: null, currentRowCountLowerBound: 0,
   checkpointCache: new Map(),
-  lastQueryMs: null,
-  selectedColumnForStats: null,
   rejectCount: 0,
+  selectedEngineId: null,
 };
 
-function resetHistory(){ state.historyPast = []; state.historyFuture = []; updateUndoRedoButtons(); }
+function resetHistory(){ dataState.historyPast = []; dataState.historyFuture = []; updateUndoRedoButtons(); }
 const SESSION_DB_NAME = 'duckbench';
 const SESSION_STORE = 'sessions';
 const SESSION_KEY = 'last';
@@ -3594,17 +3596,17 @@ clearTimeout(sessionSaveTimer);
 sessionSaveTimer = setTimeout(saveSessionSnapshot, 500);
 }
 async function saveSessionSnapshot(){
-if (!state.hasSource || !state.sourceFile) return;
+if (!dataState.hasSource || !dataState.sourceFile) return;
 try {
 const db = await openSessionDB();
 const tx = db.transaction(SESSION_STORE, 'readwrite');
 tx.objectStore(SESSION_STORE).put({
-file: state.sourceFile,
-fileName: state.sourceFileName,
-format: state.sourceFormat,
-importOptions: state.sourceImportOptions,
-engineId: state.engine.id,
-steps: state.steps,
+file: dataState.sourceFile,
+fileName: dataState.sourceFileName,
+format: dataState.sourceFormat,
+importOptions: dataState.sourceImportOptions,
+engineId: dataState.engine.id,
+steps: dataState.steps,
 savedAt: Date.now(),
 }, SESSION_KEY);
 await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
@@ -3667,11 +3669,11 @@ workbook: null,
 skipRows: snapshot.importOptions?.skipRows || 0,
 firstRowHeader: snapshot.importOptions?.firstRowHeader !== false,
 };
-state.selectedEngineId = snapshot.engineId;
+dataState.selectedEngineId = snapshot.engineId;
 await runImport();
-if (state.hasSource){
-state.steps = Array.isArray(snapshot.steps) ? snapshot.steps : [];
-state.selectedStepIndex = null;
+if (dataState.hasSource){
+dataState.steps = Array.isArray(snapshot.steps) ? snapshot.steps : [];
+uiState.selectedStepIndex = null;
 resetHistory();
 renderAll();
 await refreshPreview();
@@ -3679,16 +3681,16 @@ saveSessionSnapshot();
 }
 }
 function saveRecipe(){
-if (!state.hasSource) return;
+if (!dataState.hasSource) return;
 const recipe = {
 duckbenchRecipe: 1,
 savedAt: new Date().toISOString(),
-sourceFileName: state.sourceFileName,
-engineId: state.engine.id,
-steps: state.steps,
+sourceFileName: dataState.sourceFileName,
+engineId: dataState.engine.id,
+steps: dataState.steps,
 };
 const blob = new Blob([JSON.stringify(recipe, null, 2)], { type:'application/json' });
-downloadBlob(blob, `${(state.sourceFileName||'recipe').replace(/\.[^.]+$/,'')}.duckbench.json`);
+downloadBlob(blob, `${(dataState.sourceFileName||'recipe').replace(/\.[^.]+$/,'')}.duckbench.json`);
 toast('Recipe saved.');
 }
 async function handleRecipeFileSelected(file){
@@ -3696,21 +3698,21 @@ try {
 const text = await file.text();
 const recipe = JSON.parse(text);
 if (!recipe || !Array.isArray(recipe.steps)) throw new Error('Not a valid recipe file');
-if (state.hasSource){
-if (state.steps.length){
-const ok = await confirmDialog(`Replace the current ${state.steps.length} step${state.steps.length===1?'':'s'} with this recipe's ${recipe.steps.length}?`);
+if (dataState.hasSource){
+if (dataState.steps.length){
+const ok = await confirmDialog(`Replace the current ${dataState.steps.length} step${dataState.steps.length===1?'':'s'} with this recipe's ${recipe.steps.length}?`);
 if (!ok) return;
 }
 closeInspector();
-state.steps = recipe.steps;
-state.selectedStepIndex = null;
+dataState.steps = recipe.steps;
+uiState.selectedStepIndex = null;
 resetHistory();
 renderAll();
 await refreshPreview();
 saveSessionSnapshot();
 toast(`Recipe applied — ${recipe.steps.length} step${recipe.steps.length===1?'':'s'}.`);
 } else {
-state.pendingRecipe = recipe;
+dataState.pendingRecipe = recipe;
 toast('Recipe loaded — now drop or choose the data file to apply it to.');
 }
 } catch(e){
@@ -3718,42 +3720,42 @@ toast(`Couldn’t read that recipe: ${e.message}`);
 }
 }
 function applyStepsChange(newSteps){
-  state.historyPast.push(JSON.stringify({ steps: state.steps, selectedStepIndex: state.selectedStepIndex }));
-  if (state.historyPast.length > 60) state.historyPast.shift();
-  state.historyFuture = [];
-  state.steps = newSteps;
+  dataState.historyPast.push(JSON.stringify({ steps: dataState.steps, selectedStepIndex: uiState.selectedStepIndex }));
+  if (dataState.historyPast.length > 60) dataState.historyPast.shift();
+  dataState.historyFuture = [];
+  dataState.steps = newSteps;
   afterStepsChanged();
 }
 function undo(){
-  if (!state.historyPast.length) return;
-  state.historyFuture.push(JSON.stringify({ steps: state.steps, selectedStepIndex: state.selectedStepIndex }));
-  const prev = JSON.parse(state.historyPast.pop());
-  state.steps = prev.steps;
-  state.selectedStepIndex = prev.selectedStepIndex;
+  if (!dataState.historyPast.length) return;
+  dataState.historyFuture.push(JSON.stringify({ steps: dataState.steps, selectedStepIndex: uiState.selectedStepIndex }));
+  const prev = JSON.parse(dataState.historyPast.pop());
+  dataState.steps = prev.steps;
+  uiState.selectedStepIndex = prev.selectedStepIndex;
   closeInspector();
   afterStepsChanged();
 }
 function redo(){
-  if (!state.historyFuture.length) return;
-  state.historyPast.push(JSON.stringify({ steps: state.steps, selectedStepIndex: state.selectedStepIndex }));
-  const next = JSON.parse(state.historyFuture.pop());
-  state.steps = next.steps;
-  state.selectedStepIndex = next.selectedStepIndex;
+  if (!dataState.historyFuture.length) return;
+  dataState.historyPast.push(JSON.stringify({ steps: dataState.steps, selectedStepIndex: uiState.selectedStepIndex }));
+  const next = JSON.parse(dataState.historyFuture.pop());
+  dataState.steps = next.steps;
+  uiState.selectedStepIndex = next.selectedStepIndex;
   closeInspector();
   afterStepsChanged();
 }
 function updateUndoRedoButtons(){
 const undoBtn = $('#undoBtn'), redoBtn = $('#redoBtn');
-undoBtn.disabled = !state.historyPast.length;
-redoBtn.disabled = !state.historyFuture.length;
-undoBtn.title = state.historyPast.length ? `Undo (⌘Z) — ${state.historyPast.length} step${state.historyPast.length===1?'':'s'} back available` : 'Undo (⌘Z)';
-redoBtn.title = state.historyFuture.length ? `Redo (⌘⇧Z) — ${state.historyFuture.length} step${state.historyFuture.length===1?'':'s'} forward available` : 'Redo (⌘⇧Z)';
+undoBtn.disabled = !dataState.historyPast.length;
+redoBtn.disabled = !dataState.historyFuture.length;
+undoBtn.title = dataState.historyPast.length ? `Undo (⌘Z) — ${dataState.historyPast.length} step${dataState.historyPast.length===1?'':'s'} back available` : 'Undo (⌘Z)';
+redoBtn.title = dataState.historyFuture.length ? `Redo (⌘⇧Z) — ${dataState.historyFuture.length} step${dataState.historyFuture.length===1?'':'s'} forward available` : 'Redo (⌘⇧Z)';
 }
 function afterStepsChanged(){
-if (state.selectedStepIndex !== null && state.selectedStepIndex >= state.steps.length){
-state.selectedStepIndex = state.steps.length ? state.steps.length - 1 : null;
+if (uiState.selectedStepIndex !== null && uiState.selectedStepIndex >= dataState.steps.length){
+uiState.selectedStepIndex = dataState.steps.length ? dataState.steps.length - 1 : null;
 }
-state.rowSelection.clear();
+uiState.rowSelection.clear();
 updateUndoRedoButtons();
 renderStepsList();
 renderRibbon();
@@ -3761,8 +3763,8 @@ refreshPreview();
 queueSessionSnapshot();
 }
 function selectStep(i){
-state.selectedStepIndex = i;
-state.rowSelection.clear();
+uiState.selectedStepIndex = i;
+uiState.rowSelection.clear();
 closeInspector();
 renderStepsList();
 renderRailSource();
@@ -3771,47 +3773,47 @@ refreshPreview();
 }
 function openInsertMenuAt(afterIndex){
 closeInspector();
-state.selectedStepIndex = afterIndex;
+uiState.selectedStepIndex = afterIndex;
 renderStepsList();
 openPalette();
 }
 function toggleStepDisabled(i){
-const steps = state.steps.map((s,idx)=> idx===i ? {...s, disabled: !s.disabled} : s);
+const steps = dataState.steps.map((s,idx)=> idx===i ? {...s, disabled: !s.disabled} : s);
 applyStepsChange(steps);
 }
 function duplicateStep(i){
-const copy = JSON.parse(JSON.stringify(state.steps[i]));
+const copy = JSON.parse(JSON.stringify(dataState.steps[i]));
 copy.id = uid('step_');
-const steps = [...state.steps.slice(0,i+1), copy, ...state.steps.slice(i+1)];
+const steps = [...dataState.steps.slice(0,i+1), copy, ...dataState.steps.slice(i+1)];
 applyStepsChange(steps);
 }
 function moveStep(i, dir){
 const j = i+dir;
-if (j<0 || j>=state.steps.length) return;
+if (j<0 || j>=dataState.steps.length) return;
 reorderStep(i, j);
 }
 function reorderStep(from, to){
-const steps = state.steps.slice();
+const steps = dataState.steps.slice();
 const [moved] = steps.splice(from,1);
 steps.splice(to,0,moved);
-if (state.selectedStepIndex === from) state.selectedStepIndex = to;
+if (uiState.selectedStepIndex === from) uiState.selectedStepIndex = to;
 applyStepsChange(steps);
 }
 async function deleteStep(i){
-const ok = await confirmDialog(`Delete step ${i+1} (${TRANSFORMS[state.steps[i].type]?.label})? Steps after it will re-run without it.`);
+const ok = await confirmDialog(`Delete step ${i+1} (${TRANSFORMS[dataState.steps[i].type]?.label})? Steps after it will re-run without it.`);
 if (!ok) return;
-const steps = state.steps.filter((_,idx)=>idx!==i);
+const steps = dataState.steps.filter((_,idx)=>idx!==i);
 applyStepsChange(steps);
 }
 async function clearAllSteps(){
-if (!state.steps.length) return;
-const ok = await confirmDialog(`Remove all ${state.steps.length} steps? This can be undone.`);
+if (!dataState.steps.length) return;
+const ok = await confirmDialog(`Remove all ${dataState.steps.length} steps? This can be undone.`);
 if (!ok) return;
 applyStepsChange([]);
 }
 function buildDraftCtx(){
-const cols = (state.currentColumns||[]).map(c=>c.name);
-return { columns: cols, firstColumn: cols[0]||null, hasRid: !!state.currentPipelineHasRid, q, esc, lit: sqlLiteral };
+const cols = (dataState.currentColumns||[]).map(c=>c.name);
+return { columns: cols, firstColumn: cols[0]||null, hasRid: !!dataState.currentPipelineHasRid, q, esc, lit: sqlLiteral };
 }
 function buildDefaultDraft(type, seedPartial={}){
 const t = TRANSFORMS[type];
@@ -3829,9 +3831,9 @@ const t = TRANSFORMS[type];
 const ctx = buildDraftCtx();
 const err = t.validate ? t.validate(draft, ctx) : null;
 if (err) return err;
-const insertAt = state.selectedStepIndex !== null ? state.selectedStepIndex + 1 : state.steps.length;
-const steps = [...state.steps.slice(0,insertAt), { id: uid('step_'), type, data: draft, disabled:false }, ...state.steps.slice(insertAt)];
-state.selectedStepIndex = insertAt;
+const insertAt = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex + 1 : dataState.steps.length;
+const steps = [...dataState.steps.slice(0,insertAt), { id: uid('step_'), type, data: draft, disabled:false }, ...dataState.steps.slice(insertAt)];
+uiState.selectedStepIndex = insertAt;
 applyStepsChange(steps);
 return null;
 }
@@ -3854,15 +3856,15 @@ toast(`Added: ${t.label}${summary ? ' — ' + summary : ''}`, { actionLabel:'Und
 return null;
 }
 function commitEditStep(index, draft){
-const t = TRANSFORMS[state.steps[index].type];
+const t = TRANSFORMS[dataState.steps[index].type];
 const ctx = buildDraftCtx();
 const err = t.validate ? t.validate(draft, ctx) : null;
 if (err) return err;
-const steps = state.steps.map((s,i) => i===index ? { ...s, data: draft } : s);
+const steps = dataState.steps.map((s,i) => i===index ? { ...s, data: draft } : s);
 applyStepsChange(steps);
 return null;
 }
-function currentSelectionForSeed(){ return { column: state.focusedColumn || null }; }
+function currentSelectionForSeed(){ return { column: uiState.focusedColumn || null }; }
 function renderAll(){
 renderRailSource();
 renderSourcesPanel();
@@ -3878,13 +3880,13 @@ document.body.appendChild(a); a.click(); a.remove();
 setTimeout(()=>URL.revokeObjectURL(url), 4000);
 }
 async function exportData(format){
-const steps = state.steps;
-const plan = await state.engine.compile(steps, steps.length-1);
+const steps = dataState.steps;
+const plan = await dataState.engine.compile(steps, steps.length-1);
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
-const baseName = (state.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
+const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
 const ext = format==='parquet'?'parquet':format==='csv'?'csv':format==='json'?'json':format==='jsonl'?'jsonl':'xlsx';
 try {
-const blob = await state.engine.export(plan, format);
+const blob = await dataState.engine.export(plan, format);
 downloadBlob(blob, `${baseName}.${ext}`);
 if (format === 'parquet') toast('Parquet file downloaded.');
 else if (format === 'csv') toast('CSV file downloaded.');
@@ -3902,7 +3904,7 @@ catch { toast('Couldn’t copy — your browser blocked clipboard access.'); }
 function copyAsSqlInsert(){
 if (!lastPreview || !lastPreview.rows.length){ toast('Nothing to copy — no data loaded.'); return; }
 const cols = lastPreview.columns;
-const table = (state.sourceFileName||'data').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]+/g,'_') || 'data';
+const table = (dataState.sourceFileName||'data').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_]+/g,'_') || 'data';
 const lit = (v, type) => {
 if (v === null || v === undefined) return 'NULL';
 if (isNumericType(type) && !isDecimalType(type)) return typeof v==='bigint' ? v.toString() : String(v);
@@ -3924,11 +3926,11 @@ const rows = lastPreview.rows.map(row => `| ${cols.map((c,i)=>mdEsc(formatCellVa
 copyTextToClipboard([header, sep, ...rows].join('\n'), `Copied a ${lastPreview.rows.length}-row Markdown table${lastPreview.hasMore?' (first 200 rows only)':''}.`);
 }
 function openExportOptionsDialog(){
-if (!state.hasSource || !state.currentColumns.length){ toast('Import data first.'); return; }
+if (!dataState.hasSource || !dataState.currentColumns.length){ toast('Import data first.'); return; }
 const overlay = el('div',{class:'confirm-overlay'});
 const box = el('div',{class:'confirm-box', role:'dialog', 'aria-modal':'true', style:'max-width:420px;width:90vw;text-align:left;'});
 box.appendChild(el('h3',{style:'margin-top:0;'}, 'Export options (CSV)'));
-const colChecks = state.currentColumns.map(c => el('label',{class:'checkbox-row'}, el('input',{type:'checkbox', checked:true, 'data-col':c.name}), c.name));
+const colChecks = dataState.currentColumns.map(c => el('label',{class:'checkbox-row'}, el('input',{type:'checkbox', checked:true, 'data-col':c.name}), c.name));
 const rangeAll = el('input',{type:'radio', name:'exp-range', checked:true});
 const rangeN = el('input',{type:'radio', name:'exp-range'});
 const rangeInput = el('input',{type:'number', min:'1', value:'100', style:'width:70px;'});
@@ -3963,11 +3965,11 @@ await runCustomCsvExport(chosenCols, limit, nullInput.value);
 });
 }
 async function runCustomCsvExport(cols, limit, nullStr){
-const plan = await state.engine.compile(state.steps, state.steps.length-1);
+const plan = await dataState.engine.compile(dataState.steps, dataState.steps.length-1);
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
 try {
-const blob = await state.engine.exportCustomCsv(plan, cols, limit, nullStr);
-const baseName = (state.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
+const blob = await dataState.engine.exportCustomCsv(plan, cols, limit, nullStr);
+const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
 downloadBlob(blob, `${baseName}.csv`);
 toast('CSV file downloaded.');
 } catch(e){
@@ -4001,19 +4003,19 @@ async function renderDataView({ source, plan, token }){
 const tokenField = source === 'inspector' ? 'inspectorToken' : 'pipelineToken';
 let preview;
 try {
-preview = await state.engine.preview(plan, 200);
+preview = await dataState.engine.preview(plan, 200);
 } catch(e){
-if (state[tokenField] !== token) return null;
+if (dataState[tokenField] !== token) return null;
 renderGridError({ error: e.message });
 return null;
 }
-if (!preview || state[tokenField] !== token) return null;
-state.currentColumns = preview.columns;
-state.currentRidIndex = preview.ridIndex;
-state.currentPlan = plan;
-state.currentPipelineHasRid = plan.hasRid;
-state.currentRowCountKnown = false;
-state.currentRowCountLowerBound = preview.hasMore ? 200 : preview.rows.length;
+if (!preview || dataState[tokenField] !== token) return null;
+dataState.currentColumns = preview.columns;
+dataState.currentRidIndex = preview.ridIndex;
+dataState.currentPlan = plan;
+dataState.currentPipelineHasRid = plan.hasRid;
+dataState.currentRowCountKnown = false;
+dataState.currentRowCountLowerBound = preview.hasMore ? 200 : preview.rows.length;
 renderGrid(preview);
 renderRowCountLabel(preview);
 return preview;
@@ -4025,12 +4027,12 @@ setStatusBar({ rows: preview.hasMore?'200+':preview.rows.length, cols: preview.c
 return preview;
 }
 async function refreshPreview(){
-if (!state.hasSource) return;
+if (!dataState.hasSource) return;
 if (!lastPreview) $('#gridSkeleton').hidden = false;
-const upto = state.selectedStepIndex !== null ? state.selectedStepIndex : state.steps.length - 1;
-const myToken = ++state.pipelineToken;
-const plan = await state.engine.compile(state.steps, upto);
-if (state.pipelineToken !== myToken) return;
+const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length - 1;
+const myToken = ++dataState.pipelineToken;
+const plan = await dataState.engine.compile(dataState.steps, upto);
+if (dataState.pipelineToken !== myToken) return;
 renderStepErrorFlags(plan);
 if (plan.error){
 renderGridError(plan);
@@ -4040,8 +4042,8 @@ return;
 await computeAndRenderPreview('pipeline', plan, myToken, describeStatusStep(upto));
 }
 function describeStatusStep(upto){
-if (upto < 0 || !state.steps.length) return 'at source';
-const step = state.steps[upto];
+if (upto < 0 || !dataState.steps.length) return 'at source';
+const step = dataState.steps[upto];
 const t = TRANSFORMS[step.type];
 return `after step ${upto+1} · ${t?.label||step.type}`;
 }
@@ -4053,10 +4055,10 @@ $('#sbDuration').textContent = duration || '';
 if (performance.memory){ $('#sbMemory').textContent = `${(performance.memory.usedJSHeapSize/1e6).toFixed(0)} MB`; }
 }
 function activeFilterColumns(){
-const upto = state.selectedStepIndex !== null ? state.selectedStepIndex : state.steps.length-1;
+const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length-1;
 const set = new Set();
 for (let i=0;i<=upto;i++){
-const s = state.steps[i];
+const s = dataState.steps[i];
 if (s && !s.disabled && s.type==='filter' && s.data?.column) set.add(s.data.column);
 }
 return set;
@@ -4089,7 +4091,7 @@ tbody.innerHTML = '';
 const frag = document.createDocumentFragment();
 preview.rows.forEach((row, rowIndex) => {
 const rid = preview.ridIndex>=0 ? row[preview.ridIndex] : null;
-frag.appendChild(buildBodyRow(row, rowIndex, preview.columns, rid, state.currentPipelineHasRid));
+frag.appendChild(buildBodyRow(row, rowIndex, preview.columns, rid, dataState.currentPipelineHasRid));
 });
 tbody.appendChild(frag);
 if (tbody.dataset.wired !== '1'){
@@ -4101,16 +4103,16 @@ const existingRows = [...tbody.children];
 preview.rows.forEach((row, rowIndex) => {
 const rid = preview.ridIndex>=0 ? row[preview.ridIndex] : null;
 if (existingRows[rowIndex]){
-updateBodyRowInPlace(existingRows[rowIndex], row, rowIndex, preview.columns, rid, state.currentPipelineHasRid);
+updateBodyRowInPlace(existingRows[rowIndex], row, rowIndex, preview.columns, rid, dataState.currentPipelineHasRid);
 } else {
-tbody.appendChild(buildBodyRow(row, rowIndex, preview.columns, rid, state.currentPipelineHasRid));
+tbody.appendChild(buildBodyRow(row, rowIndex, preview.columns, rid, dataState.currentPipelineHasRid));
 }
 });
 for (let i = preview.rows.length; i < existingRows.length; i++) existingRows[i].remove();
 }
 lastPreview = preview;
 lastPreviewColKey = newColKey;
-table.classList.toggle('has-selection', state.rowSelection.size>0);
+table.classList.toggle('has-selection', uiState.rowSelection.size>0);
 renderSelectionBar();
 }
 function wireDelegatedGridEvents(tbody){
@@ -4127,7 +4129,7 @@ if (!td || !td.dataset.col) return;
 e.preventDefault();
 const tr = td.closest('tr');
 const { colName, rid, raw } = resolveCellFromDom(tr, td);
-openCellContextMenu(colName, rid, raw, e.clientX, e.clientY, state.currentPipelineHasRid);
+openCellContextMenu(colName, rid, raw, e.clientX, e.clientY, dataState.currentPipelineHasRid);
 });
 tbody.addEventListener('change', (e) => {
 if (!e.target.matches('.row-check')) return;
@@ -4140,7 +4142,7 @@ tbody.addEventListener('click', (e) => {
 if (e.target.closest('.row-check')) { e.stopPropagation(); return; }
 const gutter = e.target.closest('td.row-gutter');
 if (gutter){
-if (!state.currentPipelineHasRid) return;
+if (!dataState.currentPipelineHasRid) return;
 const tr = gutter.closest('tr');
 const rowIndex = Number(tr.dataset.rowIndex);
 const rid = tr.dataset.rid === '' ? null : tr.dataset.rid;
@@ -4161,19 +4163,19 @@ const prev = tbody.querySelector('td.is-active-cell');
 if (prev) prev.classList.remove('is-active-cell');
 const tr = tbody.querySelector(`tr[data-row-index="${rowIndex}"]`);
 const td = tr ? tr.querySelector(`td[data-col="${CSS.escape(colName)}"]`) : null;
-if (!td){ state.activeCell = null; return; }
+if (!td){ uiState.activeCell = null; return; }
 td.classList.add('is-active-cell');
-state.activeCell = { rowIndex, colName };
+uiState.activeCell = { rowIndex, colName };
 if (opts.scroll !== false) td.scrollIntoView({ block:'nearest', inline:'nearest' });
 }
 function selectAllVisibleRows(){
-if (!state.currentPipelineHasRid || !lastPreview){ toast("Row selection isn’t available here — an earlier step reshaped the rows."); return; }
+if (!dataState.currentPipelineHasRid || !lastPreview){ toast("Row selection isn’t available here — an earlier step reshaped the rows."); return; }
 lastPreview.rows.forEach((row, i) => {
 const rid = lastPreview.ridIndex>=0 ? row[lastPreview.ridIndex] : null;
-if (rid!=null) state.rowSelection.add(String(rid));
+if (rid!=null) uiState.rowSelection.add(String(rid));
 });
 syncRowSelectionDom();
-$('#previewTable').classList.toggle('has-selection', state.rowSelection.size>0);
+$('#previewTable').classList.toggle('has-selection', uiState.rowSelection.size>0);
 renderSelectionBar();
 }
 function handleGridKeydown(e){
@@ -4183,17 +4185,17 @@ const mod = e.metaKey || e.ctrlKey;
 if (mod && e.key.toLowerCase()==='a'){ e.preventDefault(); selectAllVisibleRows(); return; }
 if (mod && e.key.toLowerCase()==='f'){
 e.preventDefault();
-if (state.activeCell){
-const th = document.querySelector(`.th-cell[data-col="${CSS.escape(state.activeCell.colName)}"] .th-inner`);
-if (th) openFilterPopover(state.activeCell.colName, th);
+if (uiState.activeCell){
+const th = document.querySelector(`.th-cell[data-col="${CSS.escape(uiState.activeCell.colName)}"] .th-inner`);
+if (th) openFilterPopover(uiState.activeCell.colName, th);
 }
 return;
 }
-if (!state.activeCell){
+if (!uiState.activeCell){
 if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter'].includes(e.key)){ e.preventDefault(); setActiveCell(0, cols[0].name); }
 return;
 }
-const { rowIndex, colName } = state.activeCell;
+const { rowIndex, colName } = uiState.activeCell;
 const colIdx = cols.findIndex(c=>c.name===colName);
 if (e.key === 'ArrowUp'){ e.preventDefault(); setActiveCell(Math.max(0, rowIndex-1), colName); }
 else if (e.key === 'ArrowDown'){ e.preventDefault(); setActiveCell(Math.min(lastPreview.rows.length-1, rowIndex+1), colName); }
@@ -4235,7 +4237,7 @@ const badge = el('span',{class:`th-type-badge ${typeBadgeClass(col.type)}`, titl
 const inner = el('div',{class:'th-inner'},
 el('div',{class:'th-toprow'},
 el('div',{class:'th-name-wrap'},
-col.name === state.keyColumn ? el('span',{class:'th-key-badge', title:'Key column'}, htmlIcon('key',11)) : null,
+col.name === uiState.keyColumn ? el('span',{class:'th-key-badge', title:'Key column'}, htmlIcon('key',11)) : null,
 nameSpan,
 isFiltered ? el('span',{class:'th-filter-dot', title:'A filter step targets this column'}) : null,
 ),
@@ -4246,25 +4248,25 @@ el('div',{class:'th-quality'}, el('div',{class:'th-quality-valid', style:`width:
 th.appendChild(inner);
 inner.addEventListener('click', (e) => {
 if (e.target === nameSpan || e.target === badge || nameSpan.isContentEditable) return;
-state.focusedColumn = col.name; renderRibbon();
+uiState.focusedColumn = col.name; renderRibbon();
 openFilterPopover(col.name, inner);
 });
-nameSpan.addEventListener('click', (e) => { e.stopPropagation(); state.focusedColumn = col.name; renderRibbon(); openFilterPopover(col.name, inner); });
+nameSpan.addEventListener('click', (e) => { e.stopPropagation(); uiState.focusedColumn = col.name; renderRibbon(); openFilterPopover(col.name, inner); });
 nameSpan.addEventListener('dblclick', (e) => { e.stopPropagation(); startInlineRename(col.name, nameSpan); });
 badge.addEventListener('click', (e) => { e.stopPropagation(); openTypePopover(col.name, badge); });
-th.addEventListener('contextmenu', (e) => { e.preventDefault(); state.focusedColumn = col.name; renderRibbon(); openHeaderContextMenu(col.name, e.clientX, e.clientY); });
-th.addEventListener('dblclick', (e) => { e.stopPropagation(); state.focusedColumn = col.name; renderRibbon(); openColumnProfile(col.name); });
+th.addEventListener('contextmenu', (e) => { e.preventDefault(); uiState.focusedColumn = col.name; renderRibbon(); openHeaderContextMenu(col.name, e.clientX, e.clientY); });
+th.addEventListener('dblclick', (e) => { e.stopPropagation(); uiState.focusedColumn = col.name; renderRibbon(); openColumnProfile(col.name); });
 th.tabIndex = 0; th.setAttribute('role','button'); th.setAttribute('aria-label', `Column ${col.name}, ${col.type}`);
 th.addEventListener('keydown', (e) => { if (e.key==='Enter' || e.key===' '){ e.preventDefault(); inner.click(); } });
 return th;
 }
 function buildBodyRow(row, rowIndex, columns, rid, hasRid){
 const tr = el('tr', { 'data-row-index': rowIndex, 'data-rid': rid==null?'':String(rid) });
-if (hasRid && rid!=null && state.rowSelection.has(String(rid))) tr.classList.add('is-row-selected');
+if (hasRid && rid!=null && uiState.rowSelection.has(String(rid))) tr.classList.add('is-row-selected');
 const gutter = el('td',{class:'row-gutter'});
 const gutterInner = el('div',{class:'row-gutter-cell'});
 if (hasRid){
-const cb = el('input',{type:'checkbox', class:'row-check', checked: rid!=null && state.rowSelection.has(String(rid))?true:null});
+const cb = el('input',{type:'checkbox', class:'row-check', checked: rid!=null && uiState.rowSelection.has(String(rid))?true:null});
 gutterInner.appendChild(cb);
 }
 gutterInner.appendChild(el('span',{class:'row-gutter-num'}, String(rowIndex+1)));
@@ -4287,7 +4289,7 @@ return tr;
 function updateBodyRowInPlace(tr, row, rowIndex, columns, rid, hasRid){
 tr.dataset.rowIndex = rowIndex;
 tr.dataset.rid = rid==null ? '' : String(rid);
-tr.classList.toggle('is-row-selected', hasRid && rid!=null && state.rowSelection.has(String(rid)));
+tr.classList.toggle('is-row-selected', hasRid && rid!=null && uiState.rowSelection.has(String(rid)));
 const gutter = tr.children[0];
 const gutterInner = gutter.firstChild;
 gutterInner.querySelector('.row-gutter-num').textContent = String(rowIndex+1);
@@ -4297,7 +4299,7 @@ if (!cb){
 cb = el('input',{type:'checkbox', class:'row-check'});
 gutterInner.insertBefore(cb, gutterInner.firstChild);
 }
-cb.checked = rid!=null && state.rowSelection.has(String(rid));
+cb.checked = rid!=null && uiState.rowSelection.has(String(rid));
 gutter.removeAttribute('title');
 } else {
 if (cb) cb.remove();
@@ -4306,7 +4308,7 @@ gutter.title = 'Row selection isn’t available here — an earlier step reshape
 columns.forEach((col, i) => {
 const td = tr.children[i+1];
 const raw = row[i];
-const isActive = state.activeCell && state.activeCell.rowIndex===rowIndex && state.activeCell.colName===col.name;
+const isActive = uiState.activeCell && uiState.activeCell.rowIndex===rowIndex && uiState.activeCell.colName===col.name;
 td.className = [isNumericType(col.type)?'col-numeric':'', isActive?'is-active-cell':''].filter(Boolean).join(' ');
 td.dataset.col = col.name;
 if (td.classList.contains('is-editing')) return;
@@ -4332,8 +4334,8 @@ function renderRowCountLabel(preview){
 const targets = [$('#sbRows'), $('#rowCountLabel')].filter(Boolean);
 if (!targets.length) return;
 targets.forEach(lbl => { lbl.innerHTML = ''; });
-if (state.currentRowCountKnown && state.currentRowCountExact != null){
-const n = state.currentRowCountExact;
+if (dataState.currentRowCountKnown && dataState.currentRowCountExact != null){
+const n = dataState.currentRowCountExact;
 targets.forEach(lbl => { lbl.appendChild(el('strong',{}, n.toLocaleString())); lbl.append(` row${n===1?'':'s'}`); });
 } else if (!preview.hasMore){
 const n = preview.rows.length;
@@ -4341,7 +4343,7 @@ targets.forEach(lbl => { lbl.appendChild(el('strong',{}, n.toLocaleString())); l
 } else {
 targets.forEach(lbl => {
 lbl.appendChild(el('span',{class:'rc-approx', title:'Click to fetch the exact row count', onclick:fetchExactRowCount},
-el('strong',{}, `≈${state.currentRowCountLowerBound.toLocaleString()}+`),
+el('strong',{}, `≈${dataState.currentRowCountLowerBound.toLocaleString()}+`),
 ));
 lbl.append(' rows');
 });
@@ -4349,15 +4351,15 @@ lbl.append(' rows');
 }
 let rowCountFetchToken = 0;
 async function fetchExactRowCount(){
-if (!state.currentPlan || state.currentRowCountKnown) return;
+if (!dataState.currentPlan || dataState.currentRowCountKnown) return;
 const token = ++rowCountFetchToken;
 const targets = [$('#sbRows'), $('#rowCountLabel')].filter(Boolean);
 targets.forEach(lbl => { lbl.innerHTML = ''; lbl.appendChild(el('span',{class:'rc-approx is-loading'}, 'Counting…')); });
 try {
-const n = await state.engine.count(state.currentPlan);
+const n = await dataState.engine.count(dataState.currentPlan);
 if (token !== rowCountFetchToken) return;
-state.currentRowCountKnown = true;
-state.currentRowCountExact = n;
+dataState.currentRowCountKnown = true;
+dataState.currentRowCountExact = n;
 renderRowCountLabel(lastPreview || { hasMore:false, rows:[] });
 } catch(e){
 if (token !== rowCountFetchToken) return;
@@ -4393,7 +4395,7 @@ if (e.key==='Escape'){ e.preventDefault(); td.classList.remove('is-editing'); re
 });
 }
 function renderCellStatic(td, raw, colName){
-const col = state.currentColumns.find(c=>c.name===colName);
+const col = dataState.currentColumns.find(c=>c.name===colName);
 td.innerHTML = '';
 if (raw===null||raw===undefined) td.appendChild(el('span',{class:'null-cell'},'—'));
 else td.textContent = String(formatCellValue(raw, col?.type));
@@ -4401,49 +4403,49 @@ else td.textContent = String(formatCellValue(raw, col?.type));
 function toggleRowSelection(rid, rowIndex, shiftKey){
 if (rid == null) return;
 const key = String(rid);
-if (shiftKey && state.selectionAnchorRowIndex != null){
+if (shiftKey && uiState.selectionAnchorRowIndex != null){
 const rows = $$('#previewTable tbody tr');
-const lo = Math.min(state.selectionAnchorRowIndex, rowIndex);
-const hi = Math.max(state.selectionAnchorRowIndex, rowIndex);
+const lo = Math.min(uiState.selectionAnchorRowIndex, rowIndex);
+const hi = Math.max(uiState.selectionAnchorRowIndex, rowIndex);
 for (let i=lo; i<=hi; i++){
 const r = rows[i];
-if (r && r.dataset.rid) state.rowSelection.add(r.dataset.rid);
+if (r && r.dataset.rid) uiState.rowSelection.add(r.dataset.rid);
 }
 } else {
-if (state.rowSelection.has(key)) state.rowSelection.delete(key); else state.rowSelection.add(key);
-state.selectionAnchorRowIndex = rowIndex;
+if (uiState.rowSelection.has(key)) uiState.rowSelection.delete(key); else uiState.rowSelection.add(key);
+uiState.selectionAnchorRowIndex = rowIndex;
 }
 syncRowSelectionDom();
 }
 function syncRowSelectionDom(){
 $$('#previewTable tbody tr').forEach(tr => {
-const selected = tr.dataset.rid && state.rowSelection.has(tr.dataset.rid);
+const selected = tr.dataset.rid && uiState.rowSelection.has(tr.dataset.rid);
 tr.classList.toggle('is-row-selected', !!selected);
 const cb = tr.querySelector('.row-check');
 if (cb) cb.checked = !!selected;
 });
-$('#previewTable').classList.toggle('has-selection', state.rowSelection.size>0);
+$('#previewTable').classList.toggle('has-selection', uiState.rowSelection.size>0);
 renderSelectionBar();
 }
 function renderSelectionBar(){
 let bar = $('#selectionBar');
-if (state.rowSelection.size === 0){ bar?.remove(); return; }
+if (uiState.rowSelection.size === 0){ bar?.remove(); return; }
 if (!bar){
 bar = el('div',{id:'selectionBar', style:'display:flex;align-items:center;gap:10px;padding:8px 16px;background:rgba(var(--brass-rgb),0.1);border-bottom:1px solid rgba(var(--brass-rgb),0.3);font-size:12.5px;color:var(--brass-bright);flex-shrink:0;'});
 $('#previewPane').insertBefore(bar, $('#previewPane').firstChild);
-bar.appendChild(el('span',{}, `${state.rowSelection.size} row${state.rowSelection.size===1?'':'s'} selected`));
+bar.appendChild(el('span',{}, `${uiState.rowSelection.size} row${uiState.rowSelection.size===1?'':'s'} selected`));
 bar.appendChild(el('button',{class:'btn-solid btn-small', onclick:deleteSelectedRows}, 'Delete selected'));
-bar.appendChild(el('button',{class:'btn-ghost btn-small', onclick:()=>{ state.rowSelection.clear(); syncRowSelectionDom(); refreshPreview(); }}, 'Clear selection'));
+bar.appendChild(el('button',{class:'btn-ghost btn-small', onclick:()=>{ uiState.rowSelection.clear(); syncRowSelectionDom(); refreshPreview(); }}, 'Clear selection'));
 }
 }
 function deleteSelectedRows(){
-const rids = Array.from(state.rowSelection);
+const rids = Array.from(uiState.rowSelection);
 const err = commitNewStep('delete_rows', { rids });
 if (err){ toast(err); return; }
-state.rowSelection.clear();
+uiState.rowSelection.clear();
 }
 async function openColumnProfile(colName){
-const col = state.currentColumns.find(c=>c.name===colName);
+const col = dataState.currentColumns.find(c=>c.name===colName);
 if (!col) return;
 closeInspector();
 const box = $('#columnProfile');
@@ -4457,17 +4459,17 @@ cpCloseBtn,
 ));
 const body = el('div',{class:'column-profile-body'}, el('div',{class:'cp-section-label'}, 'Loading…'));
 box.appendChild(body);
-const token = ++state.statsGenToken;
+const token = ++dataState.statsGenToken;
 let stats;
 try {
-stats = await state.engine.stats(state.currentPlan, colName);
+stats = await dataState.engine.stats(dataState.currentPlan, colName);
 } catch(e){
-if (token !== state.statsGenToken) return;
+if (token !== dataState.statsGenToken) return;
 body.innerHTML = '';
 body.appendChild(el('div',{class:'cp-section-label'}, 'Couldn’t compute stats.'));
 return;
 }
-if (token !== state.statsGenToken) return;
+if (token !== dataState.statsGenToken) return;
 body.innerHTML = '';
 if (!stats){ body.appendChild(el('div',{class:'cp-section-label'}, 'No data.')); return; }
 if (stats.unsupported){
@@ -4516,11 +4518,11 @@ renderColumnProfileActions(colName);
 }
 function renderColumnProfileActions(colName){
 const box = $('#columnProfile');
-const isKey = state.keyColumn === colName;
+const isKey = uiState.keyColumn === colName;
 box.appendChild(el('div',{class:'cp-actions'},
 el('button',{class:'btn-ghost btn-small', onclick:()=>commitInstantStep('filter', { column:colName, mode:'operator', operator:'is_not_null', value:'' })}, 'Filter empties'),
 el('button',{class:'btn-ghost btn-small', onclick:()=>{
-state.keyColumn = isKey ? null : colName;
+uiState.keyColumn = isKey ? null : colName;
 toast(isKey ? 'Removed key column.' : `Set “${colName}” as key column.`);
 refreshPreview();
 openColumnProfile(colName);
@@ -4638,17 +4640,17 @@ const { file, format, sheet, workbook, skipRows, firstRowHeader } = pendingImpor
 showImportError(null);
 setEngineStatus('loading', 'importing…');
 setImportProgress(0, 'Reading file…');
-const engineLabel = () => state.engine.id === 'duckdb' ? 'Full (DuckDB)' : 'Express (Arquero)';
+const engineLabel = () => dataState.engine.id === 'duckdb' ? 'Full (DuckDB)' : 'Express (Arquero)';
 try {
-if (state.selectedEngineId && state.engine.id !== state.selectedEngineId) {
-state.engine = createEngine(state.selectedEngineId);
+if (dataState.selectedEngineId && dataState.engine.id !== dataState.selectedEngineId) {
+dataState.engine = createEngine(dataState.selectedEngineId);
 }
-if (!state.conn && state.engine.id === 'duckdb') await state.engine.init();
-if (state.engine.id === 'arquero') await state.engine.init();
+if (!dataState.conn && dataState.engine.id === 'duckdb') await dataState.engine.init();
+if (dataState.engine.id === 'arquero') await dataState.engine.init();
 if (format === 'parquet'){
   const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
   setImportProgress(null, `Loading into ${engineLabel()}…`);
-  await state.engine.loadFile({ format, fileName: file.name, buffer });
+  await dataState.engine.loadFile({ format, fileName: file.name, buffer });
 } else if (format === 'excel'){
   const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
   setImportProgress(null, 'Parsing spreadsheet…');
@@ -4658,21 +4660,21 @@ if (format === 'parquet'){
   const lines = csvText.split(/\r?\n/);
   const trimmed = (skipRows>0 ? lines.slice(skipRows) : lines).join('\n');
   setImportProgress(null, `Loading into ${engineLabel()}…`);
-  await state.engine.loadFile({ format, fileName: `${file.name}.csv`, csvText: trimmed, firstRowHeader });
+  await dataState.engine.loadFile({ format, fileName: `${file.name}.csv`, csvText: trimmed, firstRowHeader });
 } else {
   const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
   const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
   setImportProgress(null, `Loading into ${engineLabel()}…`);
-  await state.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader, skipRows, delim });
+  await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader, skipRows, delim });
 }
 
-state.hasSource = true;
-state.sourceFileName = file.name;
-state.sourceFormat = format;
-state.sourceFile = file;
-state.sourceImportOptions = { sheet, skipRows, firstRowHeader };
-state.steps = [];
-state.selectedStepIndex = null;
+dataState.hasSource = true;
+dataState.sourceFileName = file.name;
+dataState.sourceFormat = format;
+dataState.sourceFile = file;
+dataState.sourceImportOptions = { sheet, skipRows, firstRowHeader };
+dataState.steps = [];
+uiState.selectedStepIndex = null;
 await refreshSourceSchema();
 resetHistory();
 $('#importOptions').hidden = true;
@@ -4685,64 +4687,64 @@ await refreshPreview();
 $('#saveRecipeBtn').hidden = false;
 $('#resumeCard').hidden = true;
 advanceTourPastImport();
-if (state.pendingRecipe){
-const recipe = state.pendingRecipe;
-state.pendingRecipe = null;
-state.steps = Array.isArray(recipe.steps) ? recipe.steps : [];
-state.selectedStepIndex = null;
+if (dataState.pendingRecipe){
+const recipe = dataState.pendingRecipe;
+dataState.pendingRecipe = null;
+dataState.steps = Array.isArray(recipe.steps) ? recipe.steps : [];
+uiState.selectedStepIndex = null;
 resetHistory();
 renderAll();
 await refreshPreview();
-toast(`Recipe applied — ${state.steps.length} step${state.steps.length===1?'':'s'}.`);
+toast(`Recipe applied — ${dataState.steps.length} step${dataState.steps.length===1?'':'s'}.`);
 }
 saveSessionSnapshot();
 } catch(e){
 showImportError(e.message || String(e));
 restoreImportActionRow();
-if (!state.conn && state.engine.id === 'duckdb') setEngineStatus('error', `Couldn’t start DuckDB: ${e.message}`);
+if (!dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('error', `Couldn’t start DuckDB: ${e.message}`);
 } finally {
-if (state.conn && state.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${state.duckdbVersion}`);
-if (state.engine.id === 'arquero') setEngineStatus('ready', 'Express · Arquero');
+if (dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${dataState.duckdbVersion}`);
+if (dataState.engine.id === 'arquero') setEngineStatus('ready', 'Express · Arquero');
 }
 }
 async function switchEngineMidSession(targetId){
-if (state.engine.id === targetId) return;
-if (!state.sourceFile){ toast("Can't switch engines — reimport the file to enable this."); return; }
+if (dataState.engine.id === targetId) return;
+if (!dataState.sourceFile){ toast("Can't switch engines — reimport the file to enable this."); return; }
 const targetLabel = targetId === 'duckdb' ? 'Full (DuckDB)' : 'Express (Arquero)';
-if (state.steps.length){
-const n = state.steps.length;
+if (dataState.steps.length){
+const n = dataState.steps.length;
 const warn = targetId === 'arquero' ? ` Any step that needs the Full engine will show an error until you remove or edit it.` : '';
 const ok = await confirmDialog(`Switch to ${targetLabel}? The file will reload and all ${n} step${n===1?'':'s'} will re-run against the new engine.${warn}`);
 if (!ok) return;
 }
-const savedSteps = state.steps;
-const savedSelected = state.selectedStepIndex;
+const savedSteps = dataState.steps;
+const savedSelected = uiState.selectedStepIndex;
 setEngineStatus('loading', 'switching engines…');
 try {
-state.engine = createEngine(targetId);
-state.selectedEngineId = targetId;
-if (!state.conn && targetId === 'duckdb') await state.engine.init();
-if (targetId === 'arquero') await state.engine.init();
-const file = state.sourceFile;
-const format = state.sourceFormat;
-const opts = state.sourceImportOptions || {};
+dataState.engine = createEngine(targetId);
+dataState.selectedEngineId = targetId;
+if (!dataState.conn && targetId === 'duckdb') await dataState.engine.init();
+if (targetId === 'arquero') await dataState.engine.init();
+const file = dataState.sourceFile;
+const format = dataState.sourceFormat;
+const opts = dataState.sourceImportOptions || {};
 if (format === 'parquet'){
 const buffer = new Uint8Array(await file.arrayBuffer());
-await state.engine.loadFile({ format, fileName: file.name, buffer });
+await dataState.engine.loadFile({ format, fileName: file.name, buffer });
 } else if (format === 'excel'){
 const fullWb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
 const ws = fullWb.Sheets[opts.sheet];
 const csvText = XLSX.utils.sheet_to_csv(ws, { skipHidden:false });
 const lines = csvText.split(/\r?\n/);
 const trimmed = (opts.skipRows>0 ? lines.slice(opts.skipRows) : lines).join('\n');
-await state.engine.loadFile({ format, fileName: `${file.name}.csv`, csvText: trimmed, firstRowHeader: opts.firstRowHeader });
+await dataState.engine.loadFile({ format, fileName: `${file.name}.csv`, csvText: trimmed, firstRowHeader: opts.firstRowHeader });
 } else {
 const buffer = new Uint8Array(await file.arrayBuffer());
 const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
-await state.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader: opts.firstRowHeader, skipRows: opts.skipRows, delim });
+await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader: opts.firstRowHeader, skipRows: opts.skipRows, delim });
 }
-state.steps = savedSteps;
-state.selectedStepIndex = savedSelected;
+dataState.steps = savedSteps;
+uiState.selectedStepIndex = savedSelected;
 await refreshSourceSchema();
 closeInspector();
 resetHistory();
@@ -4753,17 +4755,17 @@ saveSessionSnapshot();
 } catch(e){
 toast(`Couldn’t switch engines: ${e.message}`);
 } finally {
-if (state.conn && state.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${state.duckdbVersion}`);
-if (state.engine.id === 'arquero') setEngineStatus('ready', 'Express · Arquero');
+if (dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${dataState.duckdbVersion}`);
+if (dataState.engine.id === 'arquero') setEngineStatus('ready', 'Express · Arquero');
 }
 }
 async function switchToFullAndRetry(retryFn){
 await switchEngineMidSession('duckdb');
-if (state.engine.id === 'duckdb') retryFn();
+if (dataState.engine.id === 'duckdb') retryFn();
 }
 async function toggleEngineMidSession(){
-if (!state.hasSource) return;
-await switchEngineMidSession(state.engine.id === 'duckdb' ? 'arquero' : 'duckdb');
+if (!dataState.hasSource) return;
+await switchEngineMidSession(dataState.engine.id === 'duckdb' ? 'arquero' : 'duckdb');
 }
 async function viewSkippedRows(){
 const overlay = el('div',{class:'confirm-overlay'});
@@ -4779,7 +4781,7 @@ const entry = ModalStack.push(overlay, { onClose: () => overlay.remove() });
 overlay.addEventListener('mousedown', e => { if (e.target === overlay) ModalStack.pop(entry); });
 closeBtn.addEventListener('click', () => ModalStack.pop(entry));
 try {
-const rows = await state.engine.skippedRows();
+const rows = await dataState.engine.skippedRows();
 body.innerHTML = '';
 if (!rows.length){
 body.appendChild(el('p',{class:'inspector-hint'}, 'No skipped-row detail is available for the current import.'));
@@ -4806,41 +4808,41 @@ body.appendChild(el('p',{class:'inspector-hint'}, `Couldn’t load skipped-row d
 function openInspectorForAdd(type, draft){
 switchPane('preview');
 $('#columnProfile').hidden = true;
-state.inspectorToken++;
-state.inspector = { forIndex:null, isNew:true, type, data:draft, checkpoint:null, error:null, failNote:null };
+dataState.inspectorToken++;
+uiState.inspector = { forIndex:null, isNew:true, type, data:draft, checkpoint:null, error:null, failNote:null };
 renderInspector();
 primeInspectorCheckpoint();
 }
 function openInspectorForEdit(index){
 switchPane('preview');
 $('#columnProfile').hidden = true;
-state.inspectorToken++;
-const step = state.steps[index];
+dataState.inspectorToken++;
+const step = dataState.steps[index];
 const data = JSON.parse(JSON.stringify(step.data));
 delete data.__resolved;
-state.inspector = { forIndex:index, isNew:false, type:step.type, data, checkpoint:null, error:null, failNote:null };
+uiState.inspector = { forIndex:index, isNew:false, type:step.type, data, checkpoint:null, error:null, failNote:null };
 renderInspector();
 primeInspectorCheckpoint();
 }
 function closeInspector(){
-if (!state.inspector) return;
-state.inspector = null;
-state.inspectorToken++;
+if (!uiState.inspector) return;
+uiState.inspector = null;
+dataState.inspectorToken++;
 $('#inspector').hidden = true;
 $('#inspector').innerHTML = '';
 dropAllCheckpoints();
 refreshPreview();
 }
 async function primeInspectorCheckpoint(){
-const insp = state.inspector; if (!insp) return;
-insp.insertPosition = insp.isNew ? (state.selectedStepIndex!==null ? state.selectedStepIndex+1 : state.steps.length) : insp.forIndex;
-try { insp.checkpoint = await state.engine.checkpoint(state.steps, insp.insertPosition); }
+const insp = uiState.inspector; if (!insp) return;
+insp.insertPosition = insp.isNew ? (uiState.selectedStepIndex!==null ? uiState.selectedStepIndex+1 : dataState.steps.length) : insp.forIndex;
+try { insp.checkpoint = await dataState.engine.checkpoint(dataState.steps, insp.insertPosition); }
 catch(e){
-if (state.inspector !== insp) return;
+if (uiState.inspector !== insp) return;
 insp.checkpoint = null; insp.error = e.message; renderInspectorError();
 return;
 }
-if (state.inspector !== insp) return;
+if (uiState.inspector !== insp) return;
 renderInspector();
 await refreshInspectorPreview();
 }
@@ -4850,9 +4852,9 @@ if (!_debouncedInspectorPreview) _debouncedInspectorPreview = debounce(()=>refre
 return _debouncedInspectorPreview();
 }
 async function refreshInspectorPreview(){
-const insp = state.inspector;
+const insp = uiState.inspector;
 if (!insp || !insp.checkpoint) return;
-const myToken = ++state.inspectorToken;
+const myToken = ++dataState.inspectorToken;
 const t = TRANSFORMS[insp.type];
 const colNames = insp.checkpoint.columns.map(c=>c.name);
 const ctx = { columns: colNames, columnsMeta: insp.checkpoint.columns, hasRid: insp.checkpoint.hasRid, firstColumn: colNames[0]||null, q, esc, lit: sqlLiteral };
@@ -4863,29 +4865,29 @@ renderInspectorIdentityWarning();
 if (err) return;
 let plan, data = insp.data;
 try {
-if (t.resolve && !data.__resolved && state.engine.id === 'duckdb'){
+if (t.resolve && !data.__resolved && dataState.engine.id === 'duckdb'){
 const from = checkpointFrom(insp.checkpoint);
 data = await t.resolve(data, from, { queryOne: queryOneRaw, columns: colNames, hasRid: insp.checkpoint.hasRid });
 data.__resolved = true;
 insp.data = data;
 }
-if (state.inspector !== insp || state.inspectorToken !== myToken) return;
-if (state.engine.id === 'duckdb'){
-plan = await state.engine.compile([{ type: insp.type, data, disabled: false }], 0, insp.checkpoint);
+if (uiState.inspector !== insp || dataState.inspectorToken !== myToken) return;
+if (dataState.engine.id === 'duckdb'){
+plan = await dataState.engine.compile([{ type: insp.type, data, disabled: false }], 0, insp.checkpoint);
 } else {
-const testSteps = [...state.steps.slice(0, insp.insertPosition), { type: insp.type, data, disabled: false }];
-plan = await state.engine.compile(testSteps, testSteps.length-1);
+const testSteps = [...dataState.steps.slice(0, insp.insertPosition), { type: insp.type, data, disabled: false }];
+plan = await dataState.engine.compile(testSteps, testSteps.length-1);
 }
 } catch(e){
-if (state.inspectorToken !== myToken) return;
+if (dataState.inspectorToken !== myToken) return;
 insp.error = e.message; renderInspectorError();
 return;
 }
 const preview = await computeAndRenderPreview('inspector', plan, myToken, `previewing “${t.label}”`);
 if (!preview) return;
 if (insp.type === 'change_type' && insp.data.column){
-state.engine.tryCastFailCount(plan, insp.data.column, insp.data.targetType).then(n => {
-if (state.inspector !== insp || state.inspectorToken !== myToken) return;
+dataState.engine.tryCastFailCount(plan, insp.data.column, insp.data.targetType).then(n => {
+if (uiState.inspector !== insp || dataState.inspectorToken !== myToken) return;
 insp.failNote = n>0 ? `${n.toLocaleString()} value${n===1?'':'s'} won’t fit ${insp.data.targetType} and will become empty.` : null;
 renderInspectorFailNote();
 }).catch(()=>{});
@@ -4903,18 +4905,18 @@ renderInspectorFailNote();
 function renderInspectorError(){
 const box = $('#inspectorFormError');
 if (!box) return;
-if (state.inspector?.error){ box.hidden = false; box.textContent = state.inspector.error; }
+if (uiState.inspector?.error){ box.hidden = false; box.textContent = uiState.inspector.error; }
 else box.hidden = true;
 }
 function renderInspectorFailNote(){
 const box = $('#inspectorFailNote');
 if (!box) return;
-if (state.inspector?.failNote){ box.hidden = false; box.textContent = state.inspector.failNote; }
+if (uiState.inspector?.failNote){ box.hidden = false; box.textContent = uiState.inspector.failNote; }
 else box.hidden = true;
 }
 function renderInspectorIdentityWarning(){
 const box = $('#inspectorIdentityWarning');
-const insp = state.inspector;
+const insp = uiState.inspector;
 if (!box || !insp) return;
 const t = TRANSFORMS[insp.type];
 const willBreak = insp.checkpoint && insp.checkpoint.hasRid &&
@@ -4927,7 +4929,7 @@ box.appendChild(document.createTextNode('This step means rows below it can no lo
 }
 }
 function renderInspector(){
-const insp = state.inspector;
+const insp = uiState.inspector;
 const panel = $('#inspector');
 panel.hidden = false;
 panel.innerHTML = '';
@@ -4945,7 +4947,7 @@ const failBox = el('div',{id:'inspectorFailNote', class:'fail-count-note'}); fai
 const identityBox = el('div',{id:'inspectorIdentityWarning', class:'identity-warning'}); identityBox.hidden = true;
 body.appendChild(errorBox);
 body.appendChild(identityBox);
-if (state.engine.id === 'arquero' && (!t.engines?.includes('arquero'))){
+if (dataState.engine.id === 'arquero' && (!t.engines?.includes('arquero'))){
 const retryBox = el('div',{class:'inspector-error'});
 retryBox.appendChild(htmlIcon('warn',14));
 retryBox.appendChild(el('span',{}, `“${t.label}” needs the Full (DuckDB) engine — Express doesn't support it.`));
@@ -4969,7 +4971,7 @@ body.appendChild(impactBox);
 }
 }
 panel.appendChild(body);
-const engineIncompatible = state.engine.id === 'arquero' && !t.engines?.includes('arquero');
+const engineIncompatible = dataState.engine.id === 'arquero' && !t.engines?.includes('arquero');
 const notReady = !insp.checkpoint || engineIncompatible;
 panel.appendChild(el('div',{class:'inspector-foot'},
 el('button',{class:'btn-ghost', onclick:closeInspector}, 'Cancel'),
@@ -5000,26 +5002,26 @@ if (!box) return;
 box.innerHTML = '';
 box.appendChild(el('div',{class:'inspector-hint'}, 'Computing…'));
 const idx = insp.forIndex;
-const lastIdx = state.steps.length - 1;
-const newSteps = state.steps.map((s,i) => i===idx ? { ...s, data: JSON.parse(JSON.stringify(insp.data)) } : s);
+const lastIdx = dataState.steps.length - 1;
+const newSteps = dataState.steps.map((s,i) => i===idx ? { ...s, data: JSON.parse(JSON.stringify(insp.data)) } : s);
 try {
 const [oldPlan, newPlan] = await Promise.all([
-state.engine.compile(state.steps, lastIdx),
-state.engine.compile(newSteps, lastIdx),
+dataState.engine.compile(dataState.steps, lastIdx),
+dataState.engine.compile(newSteps, lastIdx),
 ]);
-if (state.inspector !== insp) return;
+if (uiState.inspector !== insp) return;
 if (newPlan.error){
 box.innerHTML = '';
 box.appendChild(el('div',{class:'inspector-hint'}, `This change breaks a later step: ${newPlan.error}`));
 return;
 }
 const [oldPrev, newPrev, oldCount, newCount] = await Promise.all([
-state.engine.preview(oldPlan, 1),
-state.engine.preview(newPlan, 1),
-state.engine.count(oldPlan),
-state.engine.count(newPlan),
+dataState.engine.preview(oldPlan, 1),
+dataState.engine.preview(newPlan, 1),
+dataState.engine.count(oldPlan),
+dataState.engine.count(newPlan),
 ]);
-if (state.inspector !== insp) return;
+if (uiState.inspector !== insp) return;
 const oldCols = new Set(oldPrev.columns.map(c=>c.name));
 const newCols = new Set(newPrev.columns.map(c=>c.name));
 const added = [...newCols].filter(c=>!oldCols.has(c));
@@ -5036,16 +5038,16 @@ el('span',{},'Columns'),
 el('span',{}, (added.length||removed.length) ? [added.length?`+${added.length} added`:null, removed.length?`−${removed.length} removed`:null].filter(Boolean).join(', ') : 'unchanged'),
 ));
 } catch(e){
-if (state.inspector !== insp) return;
+if (uiState.inspector !== insp) return;
 box.innerHTML = '';
 box.appendChild(el('div',{class:'inspector-hint'}, `Couldn’t compute impact: ${e.message}`));
 }
 }
 async function commitInspector(){
-const insp = state.inspector;
+const insp = uiState.inspector;
 if (!insp) return;
 const t = TRANSFORMS[insp.type];
-if (t.resolve && !insp.data.__resolved && state.engine.id === 'duckdb'){
+if (t.resolve && !insp.data.__resolved && dataState.engine.id === 'duckdb'){
 try {
 const from = checkpointFrom(insp.checkpoint);
 const colNames = insp.checkpoint.columns.map(c=>c.name);
@@ -5146,7 +5148,7 @@ const sel = el('select',{ 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.ta
 return wrap(sel);
 }
 if (p.type === 'rightColumn'){
-const src = state.secondarySources.find(s=>s.id===data.rightSource);
+const src = dataState.secondarySources.find(s=>s.id===data.rightSource);
 const rightCols = src ? src.columns : [];
 if (!src) return wrap(el('div',{class:'inspector-hint'}, 'Pick a source first.'));
 const sel = el('select',{ 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.target.value; fire(); } },
@@ -5268,10 +5270,10 @@ return null;
 function renderRailSource(){
 const box = $('#railSource');
 box.innerHTML = '';
-if (!state.hasSource) return;
-box.appendChild(el('div',{class:'rail-source-name', title:state.sourceFileName||''}, state.sourceFileName||''));
-if (state.rejectCount > 0){
-const note = el('div',{class:'import-reject-note'}, `${state.rejectCount.toLocaleString()} row${state.rejectCount===1?'':'s'} couldn’t be parsed and ${state.rejectCount===1?'was':'were'} skipped on import. `);
+if (!dataState.hasSource) return;
+box.appendChild(el('div',{class:'rail-source-name', title:dataState.sourceFileName||''}, dataState.sourceFileName||''));
+if (dataState.rejectCount > 0){
+const note = el('div',{class:'import-reject-note'}, `${dataState.rejectCount.toLocaleString()} row${dataState.rejectCount===1?'':'s'} couldn’t be parsed and ${dataState.rejectCount===1?'was':'were'} skipped on import. `);
 const link = el('a',{href:'#', class:'import-reject-link'}, 'View skipped rows');
 link.addEventListener('click', (e) => { e.preventDefault(); viewSkippedRows(); });
 note.appendChild(link);
@@ -5282,8 +5284,8 @@ function renderSourcesPanel(){
 const box = $('#sourcesPanel');
 if (!box) return;
 box.innerHTML = '';
-if (!state.hasSource) return;
-state.secondarySources.forEach(s => {
+if (!dataState.hasSource) return;
+dataState.secondarySources.forEach(s => {
 box.appendChild(el('div',{class:'source-card'},
 el('div',{class:'source-card-icon'}, htmlIcon('table',12)),
 el('div',{class:'source-card-body'},
@@ -5298,13 +5300,13 @@ box.appendChild(el('button',{class:'source-add-btn', type:'button', onclick:()=>
 async function handleSecondarySourceFile(file){
 const ext = (file.name.split('.').pop()||'').toLowerCase();
 const format = ext==='parquet' ? 'parquet' : (ext==='xlsx'||ext==='xls') ? 'excel' : 'csv';
-if ((format === 'excel' || format === 'parquet') && state.engine.id === 'arquero'){
+if ((format === 'excel' || format === 'parquet') && dataState.engine.id === 'arquero'){
 toast(`${format==='excel'?'Excel':'Parquet'} secondary sources need Full mode — switch engines first.`);
 return;
 }
 const id = `s${Date.now().toString(36)}${Math.floor(Math.random()*1000)}`;
 const entry = { id, name: file.name, format, file, rowCount:null, columns:[] };
-state.secondarySources.push(entry);
+dataState.secondarySources.push(entry);
 renderSourcesPanel();
 toast(`Loading ${file.name}…`);
 try {
@@ -5323,46 +5325,46 @@ const buffer = new Uint8Array(await file.arrayBuffer());
 const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
 fileSpec = { format, fileName:file.name, buffer, firstRowHeader:true, skipRows:0, delim };
 }
-await state.engine.loadSecondarySource(id, fileSpec);
-entry.columns = await state.engine.getSecondarySourceColumns(id);
-entry.rowCount = await state.engine.secondarySourceRowCount(id);
+await dataState.engine.loadSecondarySource(id, fileSpec);
+entry.columns = await dataState.engine.getSecondarySourceColumns(id);
+entry.rowCount = await dataState.engine.secondarySourceRowCount(id);
 renderSourcesPanel();
 toast(`${file.name} ready to join.`);
 } catch(e){
-state.secondarySources = state.secondarySources.filter(s=>s.id!==id);
+dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
 renderSourcesPanel();
 toast(`Couldn’t load ${file.name}: ${e.message}`);
 }
 }
 async function removeSecondarySource(id){
-const entry = state.secondarySources.find(s=>s.id===id);
+const entry = dataState.secondarySources.find(s=>s.id===id);
 if (!entry) return;
-const usedBy = state.steps.filter(s=>s.type==='join' && s.data.rightSource===id);
+const usedBy = dataState.steps.filter(s=>s.type==='join' && s.data.rightSource===id);
 if (usedBy.length){
 const ok = await confirmDialog(`${usedBy.length} join step${usedBy.length===1?' uses':'s use'} this source. Remove it anyway? That step will show an error.`);
 if (!ok) return;
 }
-try { await state.engine.dropSecondarySource(id); } catch(e){}
-state.secondarySources = state.secondarySources.filter(s=>s.id!==id);
+try { await dataState.engine.dropSecondarySource(id); } catch(e){}
+dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
 renderSourcesPanel();
 refreshPreview();
 }
 function renderStepsList(){
 const list = $('#stepsList');
 list.innerHTML = '';
-if (!state.steps.length){
+if (!dataState.steps.length){
 list.appendChild(el('li',{class:'steps-empty'}, 'No steps yet. Click a column header, right-click a cell, or press ', el('kbd',{class:'palette-kbd'},'⌘K'), ' to add the first one.'));
 return;
 }
-state.steps.forEach((step, i) => {
+dataState.steps.forEach((step, i) => {
 const t = TRANSFORMS[step.type];
 if (!t) return;
 const li = el('li', { class:'step-item', style:`animation-delay:${i*30}ms` });
 const card = el('div', {
-class: `step-card cat-${t.category}` + (state.selectedStepIndex===i?' is-selected':'') + (step.disabled?' is-disabled':'') + (step.hasError?' is-error':''),
+class: `step-card cat-${t.category}` + (uiState.selectedStepIndex===i?' is-selected':'') + (step.disabled?' is-disabled':'') + (step.hasError?' is-error':''),
 draggable:'true', 'data-step-index':i,
 onclick:()=>selectStep(i), ondblclick:()=>openInspectorForEdit(i),
-oncontextmenu:(e)=>{ e.preventDefault(); state.selectedStepIndex=i; renderStepsList(); openStepContextMenu(i, e.clientX, e.clientY); },
+oncontextmenu:(e)=>{ e.preventDefault(); uiState.selectedStepIndex=i; renderStepsList(); openStepContextMenu(i, e.clientX, e.clientY); },
 },
 el('div',{class:'step-eyebrow'},
 el('span',{class:'step-num'}, String(i+1)),
@@ -5376,14 +5378,14 @@ mini('Edit', ()=>openInspectorForEdit(i)),
 mini(step.disabled?'Enable':'Disable', ()=>toggleStepDisabled(i)),
 mini('Duplicate', ()=>duplicateStep(i)),
 mini('↑', ()=>moveStep(i,-1), i===0),
-mini('↓', ()=>moveStep(i,1), i===state.steps.length-1),
+mini('↓', ()=>moveStep(i,1), i===dataState.steps.length-1),
 mini('Delete', ()=>deleteStep(i)),
 ),
 );
 wireStepDrag(card, i);
 li.appendChild(card);
 list.appendChild(li);
-if (i < state.steps.length - 1){
+if (i < dataState.steps.length - 1){
 const gap = el('li',{class:'step-gap'},
 el('button',{class:'step-gap-add', type:'button', title:'Insert step here', 'aria-label':'Insert step here', onclick:(e)=>{ e.stopPropagation(); openInsertMenuAt(i); }}, '+'),
 );
@@ -5410,14 +5412,14 @@ reorderStep(from, index);
 });
 }
 function renderStepErrorFlags(compiled){
-state.steps.forEach((s,i) => { s.hasError = false; s.errorMessage = null; });
-if (compiled.error && compiled.errorIndex >= 0 && state.steps[compiled.errorIndex]){
-state.steps[compiled.errorIndex].hasError = true;
-state.steps[compiled.errorIndex].errorMessage = compiled.error;
+dataState.steps.forEach((s,i) => { s.hasError = false; s.errorMessage = null; });
+if (compiled.error && compiled.errorIndex >= 0 && dataState.steps[compiled.errorIndex]){
+dataState.steps[compiled.errorIndex].hasError = true;
+dataState.steps[compiled.errorIndex].errorMessage = compiled.error;
 }
 $$('.step-card').forEach(card => {
 const i = Number(card.dataset.stepIndex);
-const has = state.steps[i]?.hasError;
+const has = dataState.steps[i]?.hasError;
 card.classList.toggle('is-error', !!has);
 });
 }
@@ -5433,9 +5435,9 @@ pop.style.top = `${Math.max(8,top)}px`;
 });
 }
 function findExistingFilterStepIndex(colName){
-const upto = state.selectedStepIndex !== null ? state.selectedStepIndex : state.steps.length-1;
+const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length-1;
 for (let i=upto; i>=0; i--){
-const s = state.steps[i];
+const s = dataState.steps[i];
 if (s && s.type==='filter' && s.data?.column===colName && s.data?.mode==='values') return i;
 }
 return -1;
@@ -5443,7 +5445,7 @@ return -1;
 async function openFilterPopover(colName, anchorEl){
 ModalStack.closeLight();
 const existingIdx = findExistingFilterStepIndex(colName);
-const existing = existingIdx>=0 ? state.steps[existingIdx].data : null;
+const existing = existingIdx>=0 ? dataState.steps[existingIdx].data : null;
 const selected = new Set();
 const valueMap = new Map();
 if (existing) existing.values.list.forEach(v => { const k = v===null?'\u0000':String(v); selected.add(k); valueMap.set(k, v); });
@@ -5472,12 +5474,12 @@ el('button',{class:'btn-solid btn-small', onclick:apply}, existing?'Update filte
 document.body.appendChild(pop);
 const entry = ModalStack.push(pop, { light:true, trigger:anchorEl, onClose:()=>pop.remove() });
 positionPopoverWithinViewport(pop, rect);
-const upto = state.selectedStepIndex !== null ? state.selectedStepIndex : state.steps.length-1;
+const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length-1;
 const baseUpto = existingIdx>=0 ? existingIdx-1 : upto;
-const plan = await state.engine.compile(state.steps, baseUpto);
+const plan = await dataState.engine.compile(dataState.steps, baseUpto);
 async function loadList(search){
 try {
-const { values, truncated } = await state.engine.distinct(plan, colName, { search, cap:1000 });
+const { values, truncated } = await dataState.engine.distinct(plan, colName, { search, cap:1000 });
 listBox.innerHTML = '';
 if (!values.length){ listBox.appendChild(el('div',{class:'filter-pop-empty'},'No matching values')); noteBox.hidden=true; return; }
 values.forEach(({value,count}) => {
@@ -5532,10 +5534,10 @@ positionPopoverWithinViewport(pop, rect);
 }
 async function checkTryCastFailures(colName, targetType){
 try {
-const upto = state.selectedStepIndex;
-const plan = await state.engine.compile(state.steps, upto-1);
+const upto = uiState.selectedStepIndex;
+const plan = await dataState.engine.compile(dataState.steps, upto-1);
 if (plan.error) return;
-const n = await state.engine.tryCastFailCount(plan, colName, targetType);
+const n = await dataState.engine.tryCastFailCount(plan, colName, targetType);
 if (n > 0) toast(`${n.toLocaleString()} value${n===1?'':'s'} in “${colName}” didn’t fit ${targetType} and became empty.`);
 } catch {}
 }
@@ -5564,7 +5566,7 @@ nameSpan.addEventListener('keydown', onKey);
 }
 function openStepContextMenu(index, x, y){
 ModalStack.closeLight();
-const step = state.steps[index];
+const step = dataState.steps[index];
 if (!step) return;
 const pop = el('div',{class:'popover ctx-menu', style:`left:${x}px;top:${y}px;`});
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInspectorForEdit(index); }}, htmlIcon('edit'),'Edit'));
@@ -5572,7 +5574,7 @@ pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); duplicateStep(index); }}, htmlIcon('copy'),'Duplicate'));
 pop.appendChild(el('div',{class:'ctx-menu-divider'}));
 pop.appendChild(el('button',{class:'ctx-menu-item', disabled: index===0, onclick:()=>{ ModalStack.pop(entry); moveStep(index,-1); }}, '↑','Move up'));
-pop.appendChild(el('button',{class:'ctx-menu-item', disabled: index===state.steps.length-1, onclick:()=>{ ModalStack.pop(entry); moveStep(index,1); }}, '↓','Move down'));
+pop.appendChild(el('button',{class:'ctx-menu-item', disabled: index===dataState.steps.length-1, onclick:()=>{ ModalStack.pop(entry); moveStep(index,1); }}, '↓','Move down'));
 pop.appendChild(el('div',{class:'ctx-menu-divider'}));
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInsertMenuAt(index-1); }}, '+','Insert step above'));
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInsertMenuAt(index); }}, '+','Insert step below'));
@@ -5652,21 +5654,21 @@ const RIBBON_TABS = [
 function renderRibbon(){
 const tabsBox = $('#ribbonTabs');
 tabsBox.innerHTML = '';
-const hasFocusedColumn = !!state.focusedColumn && (state.currentColumns||[]).some(c=>c.name===state.focusedColumn);
-const tabs = hasFocusedColumn ? [...RIBBON_TABS, { id:'column', label:`Column: ${state.focusedColumn}`, contextual:true }] : RIBBON_TABS;
-if (!tabs.find(t=>t.id===state.ribbonTab)) state.ribbonTab = 'home';
+const hasFocusedColumn = !!uiState.focusedColumn && (dataState.currentColumns||[]).some(c=>c.name===uiState.focusedColumn);
+const tabs = hasFocusedColumn ? [...RIBBON_TABS, { id:'column', label:`Column: ${uiState.focusedColumn}`, contextual:true }] : RIBBON_TABS;
+if (!tabs.find(t=>t.id===uiState.ribbonTab)) uiState.ribbonTab = 'home';
 tabs.forEach(t => {
 tabsBox.appendChild(el('button', {
-class:'ribbon-tab'+(t.id===state.ribbonTab?' is-active':'')+(t.contextual?' is-contextual':''),
-onclick:()=>{ state.ribbonTab=t.id; renderRibbon(); },
+class:'ribbon-tab'+(t.id===uiState.ribbonTab?' is-active':'')+(t.contextual?' is-contextual':''),
+onclick:()=>{ uiState.ribbonTab=t.id; renderRibbon(); },
 ondblclick:()=>{ $('#ribbon').classList.toggle('is-collapsed'); },
 }, t.label));
 });
 const groupsBox = $('#ribbonGroups');
 groupsBox.innerHTML = '';
-if (state.ribbonTab === 'view'){ renderViewTab(groupsBox); return; }
-if (state.ribbonTab === 'column'){ renderColumnTab(groupsBox); return; }
-const entries = STEP_TYPES.filter(t => t.ribbon?.tab === state.ribbonTab);
+if (uiState.ribbonTab === 'view'){ renderViewTab(groupsBox); return; }
+if (uiState.ribbonTab === 'column'){ renderColumnTab(groupsBox); return; }
+const entries = STEP_TYPES.filter(t => t.ribbon?.tab === uiState.ribbonTab);
 const groups = [];
 entries.forEach(t => {
 let g = groups.find(g=>g.name===t.ribbon.group);
@@ -5683,7 +5685,7 @@ el('div',{class:'ribbon-group-label'}, name),
 }
 function ribbonButtonEl(t){
 const small = t.ribbon.size === 'small';
-const needsFull = state.engine.id === 'arquero' && !(t.engines||[]).includes('arquero');
+const needsFull = dataState.engine.id === 'arquero' && !(t.engines||[]).includes('arquero');
 return el('button', {
 class:`ribbon-btn cat-${t.category}${small?' is-small':''}${needsFull?' needs-full':''}`,
 title: needsFull ? 'Needs Full engine — click to switch.' : t.label,
@@ -5696,7 +5698,7 @@ needsFull ? el('span',{class:'engine-pill'}, 'Full') : null,
 }
 function renderColumnTab(groupsBox){
 const items = STEP_TYPES.filter(t => t.context?.header).sort((a,b)=>(a.context.order||99)-(b.context.order||99));
-groupsBox.appendChild(ribbonGroupEl(`“${state.focusedColumn}”`, items));
+groupsBox.appendChild(ribbonGroupEl(`“${uiState.focusedColumn}”`, items));
 }
 function renderViewTab(groupsBox){
 groupsBox.appendChild(el('div',{class:'ribbon-group'},
@@ -5709,9 +5711,9 @@ el('div',{class:'ribbon-group-label'},'Display'),
 ));
 }
 function toggleQuality(){
-state.showQuality = !state.showQuality;
-$('#previewTable').classList.toggle('show-quality', state.showQuality);
-$('#qualityToggleBtn').classList.toggle('is-active', state.showQuality);
+uiState.showQuality = !uiState.showQuality;
+$('#previewTable').classList.toggle('show-quality', uiState.showQuality);
+$('#qualityToggleBtn').classList.toggle('is-active', uiState.showQuality);
 }
 let paletteActiveIndex = 0;
 function openPalette(){
@@ -5750,7 +5752,7 @@ box._matches = matches;
 return;
 }
 matches.forEach((t, i) => {
-const needsFull = state.engine.id === 'arquero' && !(t.engines||[]).includes('arquero');
+const needsFull = dataState.engine.id === 'arquero' && !(t.engines||[]).includes('arquero');
 box.appendChild(el('div',{
 class: `palette-item cat-${t.category}` + (i===paletteActiveIndex?' is-active':'') + (needsFull?' needs-full':''),
 onclick:()=>choosePaletteItem(t.type),
@@ -5832,7 +5834,7 @@ fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFileS
 dropZone.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handleFileSelected(f); });
 $$('#enginePicker .engine-option').forEach(btn => {
 btn.addEventListener('click', () => {
-state.selectedEngineId = btn.dataset.engine;
+dataState.selectedEngineId = btn.dataset.engine;
 $$('#enginePicker .engine-option').forEach(b => {
 b.classList.toggle('is-selected', b === btn);
 b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
@@ -5841,7 +5843,7 @@ b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
 });
 document.addEventListener('keydown', (e) => {
 const mod = e.metaKey || e.ctrlKey;
-if (mod && e.key.toLowerCase()==='k'){ e.preventDefault(); if (state.hasSource) openPalette(); return; }
+if (mod && e.key.toLowerCase()==='k'){ e.preventDefault(); if (dataState.hasSource) openPalette(); return; }
 if (mod && e.key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); undo(); return; }
 if (mod && (e.key.toLowerCase()==='y' || (e.key.toLowerCase()==='z' && e.shiftKey))){ e.preventDefault(); redo(); return; }
 if (e.key === '?' && !ModalStack.top() && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA'){
