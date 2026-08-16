@@ -644,6 +644,7 @@ tr.is-row-selected .row-gutter{background:rgba(var(--brass-rgb),0.06);box-shadow
 .th-quality-empty{background:rgba(var(--rust-rgb),0.5);height:100%;}
 .preview-table:not(.show-quality) .th-quality{display:none;}
 .col-numeric{text-align:right;}
+td.is-active-cell{box-shadow:inset 0 0 0 2px var(--brass);position:relative;z-index:1;}
 .preview-table td.col-numeric{font-variant-numeric:tabular-nums;}
 .num-sep{opacity:0.42;}
 .preview-table td{
@@ -1160,7 +1161,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
             <div class="grid-skeleton-row"></div>
           </div>
           <div class="grid-shell">
-            <div class="grid-scroll">
+            <div class="grid-scroll" id="gridScroll" tabindex="0">
               <table id="previewTable" class="preview-table">
                 <thead><tr></tr></thead>
                 <tbody></tbody>
@@ -3343,6 +3344,7 @@ sourceFile: null, sourceImportOptions: null, pendingRecipe: null,
   pipelineToken: 0, inspectorToken: 0,
   statsGenToken: 0,
   keyColumn: null,
+  activeCell: null,
   currentColumns: [],
   currentPlan: null,
   currentRidColIndex: -1,
@@ -3916,12 +3918,73 @@ toggleRowSelection(rid, rowIndex, e.shiftKey);
 tbody.addEventListener('click', (e) => {
 if (e.target.closest('.row-check')) { e.stopPropagation(); return; }
 const gutter = e.target.closest('td.row-gutter');
-if (!gutter || !state.currentPipelineHasRid) return;
+if (gutter){
+if (!state.currentPipelineHasRid) return;
 const tr = gutter.closest('tr');
 const rowIndex = Number(tr.dataset.rowIndex);
 const rid = tr.dataset.rid === '' ? null : tr.dataset.rid;
 toggleRowSelection(rid, rowIndex, e.shiftKey);
+return;
+}
+const td = e.target.closest('td[data-col]');
+if (td){
+const tr = td.closest('tr');
+setActiveCell(Number(tr.dataset.rowIndex), td.dataset.col, { scroll:false });
+}
 });
+}
+function setActiveCell(rowIndex, colName, opts={}){
+const tbody = $('#previewTable tbody');
+if (!tbody) return;
+const prev = tbody.querySelector('td.is-active-cell');
+if (prev) prev.classList.remove('is-active-cell');
+const tr = tbody.querySelector(`tr[data-row-index="${rowIndex}"]`);
+const td = tr ? tr.querySelector(`td[data-col="${CSS.escape(colName)}"]`) : null;
+if (!td){ state.activeCell = null; return; }
+td.classList.add('is-active-cell');
+state.activeCell = { rowIndex, colName };
+if (opts.scroll !== false) td.scrollIntoView({ block:'nearest', inline:'nearest' });
+}
+function selectAllVisibleRows(){
+if (!state.currentPipelineHasRid || !lastPreview){ toast("Row selection isn’t available here — an earlier step reshaped the rows."); return; }
+lastPreview.rows.forEach((row, i) => {
+const rid = lastPreview.ridIndex>=0 ? row[lastPreview.ridIndex] : null;
+if (rid!=null) state.rowSelection.add(String(rid));
+});
+syncRowSelectionDom();
+$('#previewTable').classList.toggle('has-selection', state.rowSelection.size>0);
+renderSelectionBar();
+}
+function handleGridKeydown(e){
+if (!lastPreview || !lastPreview.rows.length) return;
+const cols = lastPreview.columns;
+const mod = e.metaKey || e.ctrlKey;
+if (mod && e.key.toLowerCase()==='a'){ e.preventDefault(); selectAllVisibleRows(); return; }
+if (mod && e.key.toLowerCase()==='f'){
+e.preventDefault();
+if (state.activeCell){
+const th = document.querySelector(`.th-cell[data-col="${CSS.escape(state.activeCell.colName)}"] .th-inner`);
+if (th) openFilterPopover(state.activeCell.colName, th);
+}
+return;
+}
+if (!state.activeCell){
+if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter'].includes(e.key)){ e.preventDefault(); setActiveCell(0, cols[0].name); }
+return;
+}
+const { rowIndex, colName } = state.activeCell;
+const colIdx = cols.findIndex(c=>c.name===colName);
+if (e.key === 'ArrowUp'){ e.preventDefault(); setActiveCell(Math.max(0, rowIndex-1), colName); }
+else if (e.key === 'ArrowDown'){ e.preventDefault(); setActiveCell(Math.min(lastPreview.rows.length-1, rowIndex+1), colName); }
+else if (e.key === 'ArrowLeft'){ e.preventDefault(); if (colIdx>0) setActiveCell(rowIndex, cols[colIdx-1].name); }
+else if (e.key === 'ArrowRight'){ e.preventDefault(); if (colIdx<cols.length-1) setActiveCell(rowIndex, cols[colIdx+1].name); }
+else if (e.key === 'Enter'){
+e.preventDefault();
+const tbody = $('#previewTable tbody');
+const tr = tbody.querySelector(`tr[data-row-index="${rowIndex}"]`);
+const td = tr ? tr.querySelector(`td[data-col="${CSS.escape(colName)}"]`) : null;
+if (td){ const { raw } = resolveCellFromDom(tr, td); const rid = tr.dataset.rid===''?null:tr.dataset.rid; startCellEdit(colName, rid, td, raw); }
+}
 }
 function resolveCellFromDom(tr, td){
 const colName = td.dataset.col;
@@ -4022,7 +4085,8 @@ gutter.title = 'Row selection isn’t available here — an earlier step reshape
 columns.forEach((col, i) => {
 const td = tr.children[i+1];
 const raw = row[i];
-td.className = isNumericType(col.type) ? 'col-numeric' : '';
+const isActive = state.activeCell && state.activeCell.rowIndex===rowIndex && state.activeCell.colName===col.name;
+td.className = [isNumericType(col.type)?'col-numeric':'', isActive?'is-active-cell':''].filter(Boolean).join(' ');
 td.dataset.col = col.name;
 if (td.classList.contains('is-editing')) return;
 td.innerHTML = '';
@@ -5371,6 +5435,7 @@ $('#engineVersionBtn').addEventListener('click', openVersionPanel);
 $('#saveRecipeBtn').addEventListener('click', saveRecipe);
 $('#loadRecipeBtn').addEventListener('click', () => $('#recipeFileInput').click());
 $('#recipeFileInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleRecipeFileSelected(f); e.target.value=''; });
+$('#gridScroll').addEventListener('keydown', handleGridKeydown);
 $('#checkLatestBtn').addEventListener('click', handleCheckLatest);
 $('#versionManualApply').addEventListener('click', handleManualVersionApply);
 $('#versionManualInput').addEventListener('keydown', e => { if (e.key==='Enter') handleManualVersionApply(); });
