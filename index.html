@@ -1101,6 +1101,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
       </label>
       <input type="file" id="fileInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" hidden>
       <button id="sampleDataBtn" class="sample-data-link" type="button">Don't have a file handy? Try sample sales data →</button>
+      <button id="tourStartBtn" class="sample-data-link" type="button" hidden>New here? Take a 30-second tour →</button>
       <div id="importOptions" class="import-options" hidden></div>
       <p id="importError" class="import-error" hidden></p>
     </div>
@@ -5534,6 +5535,7 @@ $('#loadRecipeBtn').addEventListener('click', () => $('#recipeFileInput').click(
 $('#recipeFileInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleRecipeFileSelected(f); e.target.value=''; });
 $('#gridScroll').addEventListener('keydown', handleGridKeydown);
 $('#sampleDataBtn').addEventListener('click', loadSampleData);
+$('#tourStartBtn').addEventListener('click', () => showTourStep(0));
 $('#checkLatestBtn').addEventListener('click', handleCheckLatest);
 $('#versionManualApply').addEventListener('click', handleManualVersionApply);
 $('#versionManualInput').addEventListener('keydown', e => { if (e.key==='Enter') handleManualVersionApply(); });
@@ -5598,7 +5600,7 @@ if (pendingImport) await runImport();
 }
 const TOUR_KEY = 'duckbench-tour-done';
 function tourDone(){ try { return localStorage.getItem(TOUR_KEY) === '1'; } catch(e){ return true; } }
-function markTourDone(){ try { localStorage.setItem(TOUR_KEY, '1'); } catch(e){} $('#tourCard').hidden = true; }
+function markTourDone(){ try { localStorage.setItem(TOUR_KEY, '1'); } catch(e){} $('#tourCard').hidden = true; $('#tourStartBtn').hidden = true; }
 const TOUR_STEPS = [
 { anchor:'import', title:'Welcome to Duckbench', body:'Drop a CSV, Excel, or Parquet file above to get started — or try the sample data link below if you don’t have one handy.' },
 { anchor:'grid', title:'Explore your columns', body:'Click any column header to filter, rename, check its type, or open a full profile. Right-click for more options.' },
@@ -5632,7 +5634,7 @@ renderRibbon();
 updateVersionUI();
 setEngineStatus('idle', 'Choose a file to begin');
 checkForResumableSession();
-if (!tourDone()) showTourStep(0);
+$('#tourStartBtn').hidden = tourDone();
 }
 document.addEventListener('DOMContentLoaded', init);
 </script>
