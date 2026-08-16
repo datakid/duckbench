@@ -279,6 +279,25 @@ input,select,textarea{font-family:inherit;}
 .drop-zone-inner p{margin:0;font-size:13.5px;}
 .drop-zone-inner strong{color:var(--paper);font-weight:500;}
 .drop-hint{font-family:var(--font-mono);font-size:11px;color:var(--muted);letter-spacing:0.04em;}
+.sample-data-link{
+  display:block;width:100%;text-align:center;margin-top:10px;background:none;border:none;
+  color:var(--muted);font-size:12px;cursor:pointer;transition:color .15s;padding:2px;
+}
+.sample-data-link:hover{color:var(--brass);}
+.tour-card{
+  position:fixed;z-index:150;width:280px;max-width:calc(100vw - 32px);
+  background:var(--ink-1);border:1px solid rgba(var(--brass-rgb),0.35);border-radius:var(--radius-l);
+  box-shadow:var(--shadow-panel);padding:16px;animation:riseIn .25s var(--ease-smooth);
+}
+.tour-card-step{font-family:var(--font-mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--brass);margin-bottom:6px;}
+.tour-card-title{font-family:var(--font-display);font-weight:500;font-size:15px;color:var(--paper);margin-bottom:6px;}
+.tour-card-body{font-size:12.5px;color:var(--paper-dim);line-height:1.55;margin-bottom:14px;}
+.tour-card-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.tour-card-skip{background:none;border:none;color:var(--muted);font-size:11.5px;cursor:pointer;padding:4px;}
+.tour-card-skip:hover{color:var(--paper-dim);text-decoration:underline;}
+.tour-card[data-anchor="import"]{left:40px;bottom:40px;}
+.tour-card[data-anchor="grid"]{top:132px;left:50%;transform:translateX(-50%);}
+.tour-card[data-anchor="palette"]{top:76px;right:24px;}
 .import-error{
   margin:18px 0 0;padding:10px 12px;border-radius:var(--radius-s);
   background:rgba(var(--rust-rgb),0.12);border:1px solid rgba(var(--rust-rgb),0.35);
@@ -1081,6 +1100,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
         </div>
       </label>
       <input type="file" id="fileInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" hidden>
+      <button id="sampleDataBtn" class="sample-data-link" type="button">Don't have a file handy? Try sample sales data →</button>
       <div id="importOptions" class="import-options" hidden></div>
       <p id="importError" class="import-error" hidden></p>
     </div>
@@ -1200,6 +1220,8 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
       <span class="statusbar-item" id="sbMemory"></span>
     </div>
   </main>
+
+  <div id="tourCard" class="tour-card" hidden></div>
 
   <div id="confirmOverlay" class="confirm-overlay" hidden>
     <div class="confirm-box" role="dialog" aria-modal="true" aria-labelledby="confirmMsg">
@@ -1476,6 +1498,80 @@ const DEFAULT_DUCKDB_VERSION = '1.32.0';
 const NPM_REGISTRY_URL = 'https://registry.npmjs.org/@duckdb/duckdb-wasm';
 
 const RID = '__rid'; 
+const SAMPLE_SALES_CSV = `order_id,order_date,customer,product,category,region,quantity,unit_price,discount,status
+1001,2026-01-31,Sam Patel,Wireless Mouse,Electronics,North,2,24.99,0,Refunded
+1002,2026-05-22,Jordan Lee,Mechanical Keyboard,Electronics,South,1,79.99,0,Completed
+1003,2026-05-12,Quinn Brooks,Water Bottle,lifestyle,Central,2,15.00,0.2,Completed
+1004,2026-02-28,,Fountain Pen,Stationery,South,1,18.50,,Refunded
+1005,2026-04-21,Taylor Chen,Desk Lamp,Office,North,2,29.95,,Completed
+1006,2026-04-10,Morgan Diaz,Mechanical Keyboard,Electronics,North,3,79.99,0.15,Refunded
+1007,2026-04-30,Drew Kim,Sticky Notes Pack,stationery,East,4,6.99,0,Pending
+1008,2026-04-05,Quinn Brooks,Water Bottle,Lifestyle,South,1,15.00,0,Pending
+1009,2026-03-18,Morgan Diaz,Mechanical Keyboard,Electronics,West,1,79.99,0.1,Refunded
+1010,2026-04-06,Morgan Diaz,USB-C Hub,Electronics,North,2,34.50,0.2,Shipped
+1011,2026-02-15,Riley Cooper,Sticky Notes Pack,Stationery,East,1,6.99,0.1,Refunded
+1012,2026-05-25,,Standing Desk Mat,Office,North,1,45.00,0,Pending
+1013,2026-03-24,Reese Hart,Notebook Set,Stationery,East,2,12.99,0.15,Completed
+1014,2026-05-10,Morgan Diaz,Notebook Set,Stationery,South,5,12.99,0,Completed
+1015,2026-05-26,Riley Cooper,Sticky Notes Pack,Stationery,East,4,6.99,0.15,Completed
+1016,2026-02-07,Jordan Lee,Sticky Notes Pack,Stationery,South,1,6.99,,Refunded
+1017,2026-02-12,Riley Cooper,Webcam HD,Electronics,Central,1,55.00,0.1,Completed
+1018,2026-05-18,Reese Hart,Ergonomic Chair,Office,North,1,189.99,0.2,Refunded
+1019,2026-05-20,Morgan Diaz,Webcam HD,Electronics,West,3,55.00,0,Completed
+1020,2026-04-29,,Wireless Mouse,Electronics,South,2,24.99,0.15,Shipped
+1021,2026-01-30,Taylor Chen,Laptop Stand,Office,South,2,39.99,0,Shipped
+1022,2026-05-18,Alex Rivera,Wireless Charger,electronics,North,3,27.50,0.1,Completed
+1023,2026-03-22,Reese Hart,Standing Desk Mat,office,West,1,45.00,0,Pending
+1024,2026-01-20,Quinn Brooks,Webcam HD,Electronics,West,1,55.00,0,Shipped
+1025,2026-02-14,Drew Kim,Ergonomic Chair,Office,South,4,189.99,0,Refunded
+1026,2026-03-23,Drew Kim,Notebook Set,Stationery,West,3,12.99,0.1,Completed
+1027,2026-03-07,Drew Kim,Standing Desk Mat,office,South,1,45.00,0.15,Shipped
+1028,2026-02-28,Jordan Lee,Wireless Mouse,electronics,North,1,24.99,0,Pending
+1029,2026-03-28,Jamie Fox,Mechanical Keyboard,Electronics,South,2,79.99,0.2,Shipped
+1030,2026-02-05,,Desk Plant,Lifestyle,West,5,22.00,0,Pending
+1031,2026-04-17,Riley Cooper,Standing Desk Mat,office,West,4,45.00,0,Completed
+1032,2026-01-16,Riley Cooper,Travel Backpack,Lifestyle,East,1,65.00,0,Pending
+1033,2026-01-30,Riley Cooper,Standing Desk Mat,Office,South,5,45.00,0,Completed
+1034,2026-05-01,,Standing Desk Mat,Office,Central,1,45.00,0.1,Completed
+1035,2026-01-15,,Travel Backpack,Lifestyle,South,1,65.00,0,Completed
+1036,2026-04-17,Sam Patel,Fountain Pen,Stationery,West,4,18.50,0,Completed
+1037,2026-04-12,Riley Cooper,Ergonomic Chair,Office,Central,5,189.99,0,Refunded
+1038,2026-05-07,Avery Scott,USB-C Hub,Electronics,Central,2,34.50,0,Completed
+1039,2026-03-24,,Wireless Mouse,electronics,Central,5,24.99,0.15,Completed
+1040,2026-01-17,Avery Scott,Sticky Notes Pack,stationery,North,1,6.99,0,Refunded
+1041,2026-03-04,Avery Scott,Notebook Set,stationery,North,2,12.99,0.15,Shipped
+1042,2026-01-23,Casey Nguyen,Notebook Set,Stationery,East,3,12.99,0,Completed
+1043,2026-03-11,Taylor Chen,Notebook Set,stationery,North,2,12.99,0.1,Completed
+1044,2026-04-30,Drew Kim,Water Bottle,Lifestyle,South,1,15.00,0,Shipped
+1045,2026-03-11,Taylor Chen,USB-C Hub,Electronics,East,1,34.50,0,Completed
+1046,2026-04-25,,Laptop Stand,Office,Central,2,39.99,0.15,Completed
+1047,2026-05-24,Morgan Diaz,Ergonomic Chair,Office,North,1,189.99,0,Completed
+1048,2026-05-24,Taylor Chen,USB-C Hub,Electronics,South,2,34.50,0.2,Refunded
+1049,2026-03-11,Quinn Brooks,Sticky Notes Pack,Stationery,West,1,6.99,0,Pending
+1050,2026-03-14,Morgan Diaz,Wireless Mouse,electronics,South,1,24.99,0.2,Refunded
+1051,2026-04-26,Jordan Lee,Sticky Notes Pack,Stationery,South,1,6.99,0,Shipped
+1052,2026-01-12,Sam Patel,Laptop Stand,Office,North,1,39.99,0.1,Completed
+1053,2026-04-06,Casey Nguyen,Wireless Charger,Electronics,South,1,27.50,0,Refunded
+1054,2026-01-29,Reese Hart,Desk Lamp,Office,South,4,29.95,0.15,Completed
+1055,2026-02-13,Sam Patel,Webcam HD,Electronics,East,4,55.00,0,Pending
+1056,2026-04-18,Sam Patel,Webcam HD,Electronics,North,2,55.00,0,Completed
+1057,2026-01-12,Jamie Fox,Laptop Stand,Office,East,2,39.99,,Completed
+1058,2026-03-02,Taylor Chen,Standing Desk Mat,office,East,2,45.00,0.1,Pending
+1059,2026-01-20,,Webcam HD,Electronics,Central,4,55.00,0.2,Completed
+1060,2026-01-10,Avery Scott,Mechanical Keyboard,Electronics,East,2,79.99,0,Completed
+1061,2026-01-30,Avery Scott,Water Bottle,Lifestyle,Central,3,15.00,0.1,Completed
+1062,2026-04-11,Reese Hart,Wireless Charger,Electronics,West,2,27.50,0,Completed
+1063,2026-05-16,Riley Cooper,Wireless Charger,Electronics,North,2,27.50,0,Refunded
+1064,2026-03-28,Morgan Diaz,Water Bottle,Lifestyle,Central,1,15.00,0.2,Completed
+1065,2026-04-17,Sam Patel,Desk Lamp,Office,South,2,29.95,0.15,Completed
+1066,2026-04-10,Avery Scott,Travel Backpack,Lifestyle,East,1,65.00,0.15,Completed
+1067,2026-05-23,Riley Cooper,Laptop Stand,office,Central,2,39.99,0,Shipped
+1068,2026-03-26,Jamie Fox,Fountain Pen,Stationery,South,2,18.50,0.15,Refunded
+1069,2026-01-24,,Ergonomic Chair,Office,South,3,189.99,0,Refunded
+1070,2026-03-23,Alex Rivera,Standing Desk Mat,Office,South,1,45.00,0,Completed
+1010,2026-04-06,Morgan Diaz,USB-C Hub,Electronics,North,2,34.50,0.2,Shipped
+1025,2026-02-14,Drew Kim,Ergonomic Chair,Office,South,4,189.99,0,Refunded`;
+
 
 const q = (name) => `"${String(name).replace(/"/g, '""')}"`; 
 const esc = (v) => `'${String(v).replace(/'/g, "''")}'`;      
@@ -4463,6 +4559,7 @@ renderAll();
 await refreshPreview();
 $('#saveRecipeBtn').hidden = false;
 $('#resumeCard').hidden = true;
+advanceTourPastImport();
 if (state.pendingRecipe){
 const recipe = state.pendingRecipe;
 state.pendingRecipe = null;
@@ -5436,6 +5533,7 @@ $('#saveRecipeBtn').addEventListener('click', saveRecipe);
 $('#loadRecipeBtn').addEventListener('click', () => $('#recipeFileInput').click());
 $('#recipeFileInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleRecipeFileSelected(f); e.target.value=''; });
 $('#gridScroll').addEventListener('keydown', handleGridKeydown);
+$('#sampleDataBtn').addEventListener('click', loadSampleData);
 $('#checkLatestBtn').addEventListener('click', handleCheckLatest);
 $('#versionManualApply').addEventListener('click', handleManualVersionApply);
 $('#versionManualInput').addEventListener('keydown', e => { if (e.key==='Enter') handleManualVersionApply(); });
@@ -5493,12 +5591,48 @@ ModalStack.push($('#helpOverlay'));
 }
 });
 }
+async function loadSampleData(){
+const file = new File([SAMPLE_SALES_CSV], 'sample_sales_data.csv', { type:'text/csv' });
+await handleFileSelected(file);
+if (pendingImport) await runImport();
+}
+const TOUR_KEY = 'duckbench-tour-done';
+function tourDone(){ try { return localStorage.getItem(TOUR_KEY) === '1'; } catch(e){ return true; } }
+function markTourDone(){ try { localStorage.setItem(TOUR_KEY, '1'); } catch(e){} $('#tourCard').hidden = true; }
+const TOUR_STEPS = [
+{ anchor:'import', title:'Welcome to Duckbench', body:'Drop a CSV, Excel, or Parquet file above to get started — or try the sample data link below if you don’t have one handy.' },
+{ anchor:'grid', title:'Explore your columns', body:'Click any column header to filter, rename, check its type, or open a full profile. Right-click for more options.' },
+{ anchor:'palette', title:'Add transforms fast', body:'Press ⌘K (or Ctrl+K) anytime to search for a transform instead of clicking through the ribbon.' },
+];
+let tourStepIndex = -1;
+function showTourStep(i){
+if (tourDone()) return;
+tourStepIndex = i;
+const step = TOUR_STEPS[i];
+if (!step){ markTourDone(); return; }
+const card = $('#tourCard');
+card.dataset.anchor = step.anchor;
+card.innerHTML = '';
+card.appendChild(el('div',{class:'tour-card-step'}, `${i+1} of ${TOUR_STEPS.length}`));
+card.appendChild(el('div',{class:'tour-card-title'}, step.title));
+card.appendChild(el('div',{class:'tour-card-body'}, step.body));
+card.appendChild(el('div',{class:'tour-card-actions'},
+el('button',{class:'tour-card-skip', onclick:markTourDone}, 'Skip tour'),
+el('button',{class:'btn-solid btn-small', onclick:()=>{ if (i+1 < TOUR_STEPS.length) showTourStep(i+1); else markTourDone(); }}, i+1 < TOUR_STEPS.length ? 'Next' : 'Got it'),
+));
+card.hidden = false;
+}
+function advanceTourPastImport(){
+if (tourDone() || tourStepIndex !== 0) return;
+setTimeout(()=>showTourStep(1), 600);
+}
 async function init(){
 wireStaticUI();
 renderRibbon();
 updateVersionUI();
 setEngineStatus('idle', 'Choose a file to begin');
 checkForResumableSession();
+if (!tourDone()) showTourStep(0);
 }
 document.addEventListener('DOMContentLoaded', init);
 </script>
