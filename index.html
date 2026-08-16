@@ -333,6 +333,24 @@ input,select,textarea{font-family:inherit;}
   background:var(--ink-1);
   display:flex;flex-direction:column;min-height:0;
 }
+.sources-panel{padding:12px 14px 4px;display:flex;flex-direction:column;gap:6px;flex-shrink:0;}
+.sources-panel:empty{display:none;}
+.source-card{
+  display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:var(--radius-s);
+  background:var(--ink-2);border:1px solid var(--line-soft);font-size:11.5px;
+}
+.source-card-icon{width:20px;height:20px;flex-shrink:0;border-radius:5px;background:rgba(var(--brass-rgb),0.14);color:var(--brass);display:flex;align-items:center;justify-content:center;}
+.source-card-body{flex:1;min-width:0;}
+.source-card-name{color:var(--paper);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.source-card-meta{color:var(--muted);font-family:var(--font-mono);font-size:10px;}
+.source-card-remove{background:none;border:none;color:var(--muted);cursor:pointer;padding:3px;flex-shrink:0;font-size:14px;line-height:1;}
+.source-card-remove:hover{color:var(--rust-text);}
+.source-add-btn{
+  display:flex;align-items:center;justify-content:center;gap:6px;width:100%;
+  padding:7px;border-radius:var(--radius-s);border:1px dashed var(--line);background:none;
+  color:var(--muted);font-size:11.5px;cursor:pointer;transition:color .15s,border-color .15s;
+}
+.source-add-btn:hover{color:var(--brass);border-color:var(--brass-dim);}
 .rail-head{
   display:flex;align-items:center;justify-content:space-between;
   padding:14px 14px 10px;
@@ -887,6 +905,11 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
   border:1px solid rgba(var(--rust-rgb),0.35);color:var(--rust-text);font-size:12px;
 }
 .inspector-hint{font-size:11px;color:var(--muted);line-height:1.5;}
+.inspector-impact{display:flex;flex-direction:column;gap:6px;padding-top:4px;}
+.impact-row{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--paper-dim);}
+.impact-row strong{font-family:var(--font-mono);color:var(--paper);font-weight:500;}
+.impact-pos{color:var(--verdigris-text);font-family:var(--font-mono);}
+.impact-neg{color:var(--rust-text);font-family:var(--font-mono);}
 .identity-warning{
   display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:var(--radius-s);
   background:rgba(var(--plum-rgb),0.1);border:1px solid rgba(var(--plum-rgb),0.3);
@@ -1058,6 +1081,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
           <svg viewBox="0 0 24 24" fill="none"><path d="M12 15V3M12 3l-4.5 4.5M12 3l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 16v3.5C5 20.9 6.1 22 7.5 22h9c1.4 0 2.5-1.1 2.5-2.5V16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
         <input type="file" id="recipeFileInput" accept=".json,.duckbench.json" hidden>
+        <input type="file" id="secondarySourceInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" hidden>
       </div>
     </div>
   </header>
@@ -1117,6 +1141,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
 
     <div class="workbench-body">
       <aside class="steps-rail">
+        <div id="sourcesPanel" class="sources-panel"></div>
         <div class="rail-head">
           <h2>Applied steps</h2>
           <div class="rail-head-actions">
@@ -1950,6 +1975,32 @@ async function loadFileImpl({ format, fileName, buffer, csvText, firstRowHeader,
   }
 }
 
+async function loadSecondaryTableImpl(tableName, { format, fileName, buffer, csvText, firstRowHeader, skipRows, delim }){
+  if (format === 'parquet'){
+    await state.db.registerFileBuffer(fileName, buffer);
+    try {
+      await state.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_parquet(${esc(fileName)})`);
+    } finally {
+      try { await state.db.dropFile(fileName); } catch(e){}
+    }
+    return;
+  }
+  if (format === 'excel'){
+    await state.db.registerFileText(fileName, csvText);
+    try {
+      await state.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, ignore_errors=true, all_varchar=false)`);
+    } finally {
+      try { await state.db.dropFile(fileName); } catch(e){}
+    }
+    return;
+  }
+  await state.db.registerFileBuffer(fileName, buffer);
+  try {
+    await state.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, ignore_errors=true${delim||''})`);
+  } finally {
+    try { await state.db.dropFile(fileName); } catch(e){}
+  }
+}
 async function fetchSkippedRowsDetail(){
   const res = await state.conn.query(`SELECT line, column_idx, error_type, csv_line, error_message FROM reject_errors ORDER BY line LIMIT 200`);
   const { rows } = extractRows(res);
@@ -2124,6 +2175,20 @@ function createDuckDBEngine(){
       const cols = await getColumns(sqlOf(plan));
       const found = cols.find(c=>c.name===col);
       return fetchColumnStats(sqlOf(plan), col, found?.type || '');
+    },
+    async loadSecondarySource(id, fileSpec){
+      return loadSecondaryTableImpl(`src_${id}`, fileSpec);
+    },
+    async getSecondarySourceColumns(id){
+      return getColumns(`SELECT * FROM ${q('src_'+id)}`);
+    },
+    async secondarySourceRowCount(id){
+      const res = await state.conn.query(`SELECT COUNT(*) AS n FROM ${q('src_'+id)}`);
+      const { rows } = extractRows(res);
+      return typeof rows[0][0]==='bigint' ? Number(rows[0][0]) : rows[0][0];
+    },
+    async dropSecondarySource(id){
+      try { await state.conn.query(`DROP TABLE IF EXISTS ${q('src_'+id)}`); } catch(e){}
     },
     async export(plan, format){
       return exportPlanImpl(plan, format);
@@ -3087,6 +3152,42 @@ Object.assign(TRANSFORMS, {
       return grouped.pivot(d.onColumn, aggSpec);
     },
   },
+  join: {
+    label:'Join with source', category:'shape', code:'JN',
+    ribbon:{ tab:'transform', group:'Combine', icon:'merge', size:'large' },
+    preservesIdentity: false,
+    params:[
+      { key:'rightSource', type:'enum', label:'Join with', default:'', reactive:true,
+        options:()=>state.secondarySources.map(s=>({value:s.id,label:`${s.name}${s.rowCount!=null?` (${s.rowCount.toLocaleString()} rows)`:''}`})) },
+      { key:'leftKey', type:'column', label:'Left key (this table)', default:'' },
+      { key:'rightKey', type:'rightColumn', label:'Right key (joined table)', default:'' },
+      { key:'joinType', type:'enum', label:'Join type', default:'inner',
+        options:[{value:'inner',label:'Inner — matching rows only'},{value:'left',label:'Left — keep all rows from this table'},{value:'right',label:'Right — keep all rows from the joined table'},{value:'full',label:'Full — keep all rows from both'}] },
+    ],
+    validate(d){
+      if (!state.secondarySources.length) return 'Add a source to join with first — use the Sources panel at the top of the rail.';
+      if (!d.rightSource) return 'Pick a source to join with.';
+      if (!d.leftKey) return 'Pick the key column from this table.';
+      if (!d.rightKey) return 'Pick the key column from the joined table.';
+      return null;
+    },
+    toSQL(d, from){
+      const jt = { inner:'INNER', left:'LEFT', right:'RIGHT', full:'FULL' }[d.joinType] || 'INNER';
+      const rt = `src_${d.rightSource}`;
+      return `SELECT l.*, r.* EXCLUDE (${q(d.rightKey)}) FROM (${from}) AS l ${jt} JOIN ${q(rt)} AS r ON l.${q(d.leftKey)} = r.${q(d.rightKey)}`;
+    },
+    summary(d){
+      const src = state.secondarySources.find(s=>s.id===d.rightSource);
+      return src ? `with ${src.name} on ${d.leftKey||'?'} = ${d.rightKey||'?'} (${d.joinType})` : 'not configured';
+    },
+    engines: ['duckdb','arquero'],
+    toAq(d, table, ctx){
+      const right = state.secondaryAqTables[d.rightSource];
+      if (!right) throw new Error('Joined source not loaded.');
+      const opts = { left: d.joinType==='left'||d.joinType==='full', right: d.joinType==='right'||d.joinType==='full', suffix:['','_right'] };
+      return table.join(right, [d.leftKey, d.rightKey], undefined, opts);
+    },
+  },
   unpivot: {
     label:'Unpivot columns', category:'shape', code:'UPV',
     ribbon:{ tab:'transform', group:'Reshape', icon:'unpivot', size:'large' },
@@ -3289,6 +3390,27 @@ function createArqueroEngine(){
       const table = tableOf(plan);
       return table ? table.numRows() : 0;
     },
+    async loadSecondarySource(id, fileSpec){
+      const aq = await loadAq();
+      const { format, csvText, buffer, fileName='', firstRowHeader=true, skipRows=0 } = fileSpec;
+      if (format === 'parquet') throw new Error('Parquet secondary sources need Full mode (DuckDB).');
+      let text = csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer);
+      if (skipRows > 0) text = text.split(/\r?\n/).slice(skipRows).join('\n');
+      const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+      const table = aq.fromCSV(text, { parse:'auto', delimiter, header: firstRowHeader !== false });
+      state.secondaryAqTables[id] = table;
+    },
+    async getSecondarySourceColumns(id){
+      const table = state.secondaryAqTables[id];
+      return table ? columnsMetaOf(table) : [];
+    },
+    async secondarySourceRowCount(id){
+      const table = state.secondaryAqTables[id];
+      return table ? table.numRows() : 0;
+    },
+    async dropSecondarySource(id){
+      delete state.secondaryAqTables[id];
+    },
     async distinct(plan, col, opts={}){
       const { search='', cap=1000 } = opts;
       const table = tableOf(plan);
@@ -3428,6 +3550,7 @@ const state = {
   duckdbVersion: null, duckdbBundleName: null,
   sourceFileName: null, sourceFormat: null, hasSource: false,
 sourceFile: null, sourceImportOptions: null, pendingRecipe: null,
+secondarySources: [], secondaryAqTables: {},
   steps: [],                 
   selectedStepIndex: null,   
   inspector: null,           
@@ -3742,6 +3865,7 @@ return null;
 function currentSelectionForSeed(){ return { column: state.focusedColumn || null }; }
 function renderAll(){
 renderRailSource();
+renderSourcesPanel();
 renderStepsList();
 renderRibbon();
 updateUndoRedoButtons();
@@ -4837,6 +4961,12 @@ debouncedInspectorPreview();
 if (field) body.appendChild(field);
 });
 if (insp.type === 'change_type' || insp.type === 'replace_values') body.appendChild(failBox);
+if (!insp.isNew && insp.checkpoint){
+const impactBox = el('div',{id:'inspectorImpact', class:'inspector-impact'},
+el('button',{class:'btn-ghost btn-small', style:'width:100%;justify-content:center;', onclick:()=>computeStepImpact(insp)}, 'Preview impact on final result'),
+);
+body.appendChild(impactBox);
+}
 }
 panel.appendChild(body);
 const engineIncompatible = state.engine.id === 'arquero' && !t.engines?.includes('arquero');
@@ -4862,6 +4992,53 @@ if (!next) return;
 next.focus();
 if (selStart != null && typeof next.setSelectionRange === 'function'){
 try { next.setSelectionRange(selStart, selEnd ?? selStart); } catch {}
+}
+}
+async function computeStepImpact(insp){
+const box = $('#inspectorImpact');
+if (!box) return;
+box.innerHTML = '';
+box.appendChild(el('div',{class:'inspector-hint'}, 'Computing…'));
+const idx = insp.forIndex;
+const lastIdx = state.steps.length - 1;
+const newSteps = state.steps.map((s,i) => i===idx ? { ...s, data: JSON.parse(JSON.stringify(insp.data)) } : s);
+try {
+const [oldPlan, newPlan] = await Promise.all([
+state.engine.compile(state.steps, lastIdx),
+state.engine.compile(newSteps, lastIdx),
+]);
+if (state.inspector !== insp) return;
+if (newPlan.error){
+box.innerHTML = '';
+box.appendChild(el('div',{class:'inspector-hint'}, `This change breaks a later step: ${newPlan.error}`));
+return;
+}
+const [oldPrev, newPrev, oldCount, newCount] = await Promise.all([
+state.engine.preview(oldPlan, 1),
+state.engine.preview(newPlan, 1),
+state.engine.count(oldPlan),
+state.engine.count(newPlan),
+]);
+if (state.inspector !== insp) return;
+const oldCols = new Set(oldPrev.columns.map(c=>c.name));
+const newCols = new Set(newPrev.columns.map(c=>c.name));
+const added = [...newCols].filter(c=>!oldCols.has(c));
+const removed = [...oldCols].filter(c=>!newCols.has(c));
+box.innerHTML = '';
+const rowDelta = newCount - oldCount;
+box.appendChild(el('div',{class:'impact-row'},
+el('span',{},'Output rows'),
+el('strong',{}, `${oldCount.toLocaleString()} → ${newCount.toLocaleString()}`),
+rowDelta!==0 ? el('span',{class:rowDelta<0?'impact-neg':'impact-pos'}, ` ${rowDelta>0?'+':''}${rowDelta.toLocaleString()}`) : null,
+));
+box.appendChild(el('div',{class:'impact-row'},
+el('span',{},'Columns'),
+el('span',{}, (added.length||removed.length) ? [added.length?`+${added.length} added`:null, removed.length?`−${removed.length} removed`:null].filter(Boolean).join(', ') : 'unchanged'),
+));
+} catch(e){
+if (state.inspector !== insp) return;
+box.innerHTML = '';
+box.appendChild(el('div',{class:'inspector-hint'}, `Couldn’t compute impact: ${e.message}`));
 }
 }
 async function commitInspector(){
@@ -4966,6 +5143,15 @@ if (p.type === 'column'){
 if (resolving) return wrap(el('div',{class:'field-skeleton', 'data-field-key':p.key}));
 const sel = el('select',{ 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.target.value; fire(); } },
 ...cols.map(c=>el('option',{value:c.name, selected: data[p.key]===c.name?true:null}, c.name)));
+return wrap(sel);
+}
+if (p.type === 'rightColumn'){
+const src = state.secondarySources.find(s=>s.id===data.rightSource);
+const rightCols = src ? src.columns : [];
+if (!src) return wrap(el('div',{class:'inspector-hint'}, 'Pick a source first.'));
+const sel = el('select',{ 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.target.value; fire(); } },
+el('option',{value:''}, 'Choose…'),
+...rightCols.map(c=>el('option',{value:c.name, selected: data[p.key]===c.name?true:null}, c.name)));
 return wrap(sel);
 }
 if (p.type === 'columns'){
@@ -5091,6 +5277,75 @@ link.addEventListener('click', (e) => { e.preventDefault(); viewSkippedRows(); }
 note.appendChild(link);
 box.appendChild(note);
 }
+}
+function renderSourcesPanel(){
+const box = $('#sourcesPanel');
+if (!box) return;
+box.innerHTML = '';
+if (!state.hasSource) return;
+state.secondarySources.forEach(s => {
+box.appendChild(el('div',{class:'source-card'},
+el('div',{class:'source-card-icon'}, htmlIcon('table',12)),
+el('div',{class:'source-card-body'},
+el('div',{class:'source-card-name', title:s.name}, s.name),
+el('div',{class:'source-card-meta'}, s.rowCount!=null ? `${s.rowCount.toLocaleString()} rows` : 'loading…'),
+),
+el('button',{class:'source-card-remove', 'aria-label':`Remove ${s.name}`, title:'Remove source', onclick:()=>removeSecondarySource(s.id)}, '×'),
+));
+});
+box.appendChild(el('button',{class:'source-add-btn', type:'button', onclick:()=>$('#secondarySourceInput').click()}, '+ Add source'));
+}
+async function handleSecondarySourceFile(file){
+const ext = (file.name.split('.').pop()||'').toLowerCase();
+const format = ext==='parquet' ? 'parquet' : (ext==='xlsx'||ext==='xls') ? 'excel' : 'csv';
+if ((format === 'excel' || format === 'parquet') && state.engine.id === 'arquero'){
+toast(`${format==='excel'?'Excel':'Parquet'} secondary sources need Full mode — switch engines first.`);
+return;
+}
+const id = `s${Date.now().toString(36)}${Math.floor(Math.random()*1000)}`;
+const entry = { id, name: file.name, format, file, rowCount:null, columns:[] };
+state.secondarySources.push(entry);
+renderSourcesPanel();
+toast(`Loading ${file.name}…`);
+try {
+let fileSpec;
+if (format === 'excel'){
+await ensureSheetJS();
+const wb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
+const ws = wb.Sheets[wb.SheetNames[0]];
+const csvText = XLSX.utils.sheet_to_csv(ws);
+fileSpec = { format, fileName:`${file.name}.csv`, csvText, firstRowHeader:true };
+} else if (format === 'parquet'){
+const buffer = new Uint8Array(await file.arrayBuffer());
+fileSpec = { format, fileName:file.name, buffer };
+} else {
+const buffer = new Uint8Array(await file.arrayBuffer());
+const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
+fileSpec = { format, fileName:file.name, buffer, firstRowHeader:true, skipRows:0, delim };
+}
+await state.engine.loadSecondarySource(id, fileSpec);
+entry.columns = await state.engine.getSecondarySourceColumns(id);
+entry.rowCount = await state.engine.secondarySourceRowCount(id);
+renderSourcesPanel();
+toast(`${file.name} ready to join.`);
+} catch(e){
+state.secondarySources = state.secondarySources.filter(s=>s.id!==id);
+renderSourcesPanel();
+toast(`Couldn’t load ${file.name}: ${e.message}`);
+}
+}
+async function removeSecondarySource(id){
+const entry = state.secondarySources.find(s=>s.id===id);
+if (!entry) return;
+const usedBy = state.steps.filter(s=>s.type==='join' && s.data.rightSource===id);
+if (usedBy.length){
+const ok = await confirmDialog(`${usedBy.length} join step${usedBy.length===1?' uses':'s use'} this source. Remove it anyway? That step will show an error.`);
+if (!ok) return;
+}
+try { await state.engine.dropSecondarySource(id); } catch(e){}
+state.secondarySources = state.secondarySources.filter(s=>s.id!==id);
+renderSourcesPanel();
+refreshPreview();
 }
 function renderStepsList(){
 const list = $('#stepsList');
@@ -5536,6 +5791,7 @@ $('#recipeFileInput').addEventListener('change', e => { const f = e.target.files
 $('#gridScroll').addEventListener('keydown', handleGridKeydown);
 $('#sampleDataBtn').addEventListener('click', loadSampleData);
 $('#tourStartBtn').addEventListener('click', () => showTourStep(0));
+$('#secondarySourceInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleSecondarySourceFile(f); e.target.value=''; });
 $('#checkLatestBtn').addEventListener('click', handleCheckLatest);
 $('#versionManualApply').addEventListener('click', handleManualVersionApply);
 $('#versionManualInput').addEventListener('keydown', e => { if (e.key==='Enter') handleManualVersionApply(); });
