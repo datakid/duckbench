@@ -4075,18 +4075,6 @@ toast('CSV file downloaded.');
 toast(`Export failed: ${e.message}`);
 }
 }
-async function runCustomCsvExport(cols, limit, nullStr){
-const plan = await dataState.engine.compile(dataState.steps, dataState.steps.length-1);
-if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
-try {
-const blob = await dataState.engine.exportCustomCsv(plan, cols, limit, nullStr);
-const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
-downloadBlob(blob, `${baseName}.csv`);
-toast('CSV file downloaded.');
-} catch(e){
-toast(`Export failed: ${e.message}`);
-}
-}
 async function openPipelinesDialog(){
 if (!dataState.hasSource){ toast('Import data first.'); return; }
 const overlay = el('div',{class:'confirm-overlay'});
