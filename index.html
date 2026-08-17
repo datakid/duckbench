@@ -2004,6 +2004,60 @@ async function loadSecondaryTableImpl(tableName, { format, fileName, buffer, csv
     try { await dataState.db.dropFile(fileName); } catch(e){}
   }
 }
+async function buildBatchFileSpec(file){
+  const ext = (file.name.split('.').pop()||'').toLowerCase();
+  const format = ext==='parquet' ? 'parquet' : (ext==='xlsx'||ext==='xls') ? 'excel' : 'csv';
+  if (format === 'excel'){
+    await ensureSheetJS();
+    const wb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const csvText = XLSX.utils.sheet_to_csv(ws);
+    return { format, fileName:`${file.name}.csv`, csvText, firstRowHeader:true };
+  }
+  if (format === 'parquet'){
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    return { format, fileName:file.name, buffer };
+  }
+  const buffer = new Uint8Array(await file.arrayBuffer());
+  const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
+  return { format, fileName:file.name, buffer, firstRowHeader:true, skipRows:0, delim };
+}
+async function runBatchFileDuckDB(file, steps){
+  const fileSpec = await buildBatchFileSpec(file);
+  if ((fileSpec.format==='excel'||fileSpec.format==='parquet') && dataState.engine.id!=='duckdb'){
+    return { ok:false, error:'Needs Full (DuckDB) mode.' };
+  }
+  const tempTable = `batch_${Date.now().toString(36)}${Math.floor(Math.random()*10000)}`;
+  await loadSecondaryTableImpl(tempTable, fileSpec);
+  try {
+    const baseFrom = `SELECT * FROM ${q(tempTable)}`;
+    const compiled = await compilePipeline(steps, steps.length-1, baseFrom, false, null);
+    if (compiled.error) return { ok:false, error: `Step ${compiled.errorIndex+1}: ${compiled.error}` };
+    const plan = makeDuckDBPlan(compiled);
+    const blob = await dataState.engine.export(plan, 'csv');
+    const n = await dataState.engine.count(plan);
+    return { ok:true, blob, rowCount:n };
+  } finally {
+    try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q(tempTable)}`); } catch(e){}
+  }
+}
+async function runBatchFileArquero(file, steps){
+  const ext = (file.name.split('.').pop()||'').toLowerCase();
+  if (ext==='parquet'||ext==='xlsx'||ext==='xls') return { ok:false, error:'Excel/Parquet batch files need Full mode.' };
+  const aq = await loadAq();
+  const text = await file.text();
+  const delimiter = file.name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+  const table = aq.fromCSV(text, { parse:'auto', delimiter });
+  const compiled = await compileAq(steps, steps.length-1, table);
+  if (compiled.error) return { ok:false, error: `Step ${compiled.errorIndex+1}: ${compiled.error}` };
+  const plan = makeArqueroPlan(compiled);
+  const blob = await dataState.engine.export(plan, 'csv');
+  const n = await dataState.engine.count(plan);
+  return { ok:true, blob, rowCount:n };
+}
+async function runBatchFile(file, steps){
+  return dataState.engine.id === 'duckdb' ? runBatchFileDuckDB(file, steps) : runBatchFileArquero(file, steps);
+}
 async function fetchSkippedRowsDetail(){
   const res = await dataState.conn.query(`SELECT line, column_idx, error_type, csv_line, error_message FROM reject_errors ORDER BY line LIMIT 200`);
   const { rows } = extractRows(res);
@@ -4021,6 +4075,128 @@ toast('CSV file downloaded.');
 toast(`Export failed: ${e.message}`);
 }
 }
+async function runCustomCsvExport(cols, limit, nullStr){
+const plan = await dataState.engine.compile(dataState.steps, dataState.steps.length-1);
+if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
+try {
+const blob = await dataState.engine.exportCustomCsv(plan, cols, limit, nullStr);
+const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
+downloadBlob(blob, `${baseName}.csv`);
+toast('CSV file downloaded.');
+} catch(e){
+toast(`Export failed: ${e.message}`);
+}
+}
+async function openPipelinesDialog(){
+if (!dataState.hasSource){ toast('Import data first.'); return; }
+const overlay = el('div',{class:'confirm-overlay'});
+const box = el('div',{class:'confirm-box', role:'dialog', 'aria-modal':'true', style:'max-width:480px;width:92vw;text-align:left;max-height:80vh;overflow-y:auto;'});
+box.appendChild(el('h3',{style:'margin-top:0;'}, 'Saved pipelines'));
+const nameInput = el('input',{type:'text', placeholder:'Name this pipeline…', style:'flex:1;background:var(--ink-1);border:1px solid var(--line-soft);color:var(--paper);border-radius:var(--radius-s);padding:6px 9px;font-size:12.5px;'});
+const saveBtn = el('button',{class:'btn-solid btn-small'}, 'Save current');
+box.appendChild(el('div',{style:'display:flex;gap:6px;margin-bottom:14px;'}, nameInput, saveBtn));
+const listBox = el('div',{style:'display:flex;flex-direction:column;gap:6px;margin-bottom:18px;'});
+box.appendChild(listBox);
+box.appendChild(el('div',{class:'inspector-hint', style:'margin-bottom:8px;'}, 'Batch apply — run a saved pipeline against up to 10 files'));
+const batchSelect = el('select',{style:'width:100%;margin-bottom:8px;background:var(--ink-1);border:1px solid var(--line-soft);color:var(--paper);border-radius:var(--radius-s);padding:6px 9px;font-size:12.5px;'});
+box.appendChild(batchSelect);
+const batchRunBtn = el('button',{class:'btn-solid btn-small', style:'width:100%;justify-content:center;'}, 'Choose files & run batch (max 10)');
+box.appendChild(batchRunBtn);
+const batchResults = el('div',{style:'display:flex;flex-direction:column;gap:4px;margin-top:8px;max-height:180px;overflow-y:auto;'});
+box.appendChild(batchResults);
+const closeBtn = el('button',{class:'btn-ghost', style:'margin-top:16px;'}, 'Close');
+box.appendChild(closeBtn);
+overlay.appendChild(box);
+document.body.appendChild(overlay);
+const entry = ModalStack.push(overlay, { onClose: () => overlay.remove() });
+overlay.addEventListener('mousedown', e => { if (e.target === overlay) ModalStack.pop(entry); });
+closeBtn.addEventListener('click', () => ModalStack.pop(entry));
+async function refreshPipelinesList(){
+const pipelines = await listNamedPipelines();
+listBox.innerHTML = '';
+batchSelect.innerHTML = '';
+batchSelect.appendChild(el('option',{value:''}, pipelines.length ? 'Choose a saved pipeline…' : 'No saved pipelines yet'));
+if (!pipelines.length) listBox.appendChild(el('div',{class:'inspector-hint'}, 'No saved pipelines yet — save your current one above.'));
+pipelines.forEach(p => {
+listBox.appendChild(el('div',{class:'source-card'},
+el('div',{class:'source-card-icon'}, htmlIcon('layers',12)),
+el('div',{class:'source-card-body'},
+el('div',{class:'source-card-name', title:p.name}, p.name),
+el('div',{class:'source-card-meta'}, `${p.steps.length} step${p.steps.length===1?'':'s'}`),
+),
+el('button',{class:'btn-ghost btn-small', onclick: async ()=>{
+if (dataState.steps.length){
+const ok = await confirmDialog(`Replace the current ${dataState.steps.length} step${dataState.steps.length===1?'':'s'} with “${p.name}”?`);
+if (!ok) return;
+}
+ModalStack.pop(entry);
+closeInspector();
+dataState.steps = JSON.parse(JSON.stringify(p.steps));
+uiState.selectedStepIndex = null;
+resetHistory();
+renderAll();
+await refreshPreview();
+saveSessionSnapshot();
+toast(`Applied “${p.name}”.`);
+}}, 'Apply'),
+el('button',{class:'source-card-remove', title:'Delete', 'aria-label':`Delete ${p.name}`, onclick: async ()=>{
+const ok = await confirmDialog(`Delete saved pipeline “${p.name}”? This can’t be undone.`);
+if (!ok) return;
+await deleteNamedPipeline(p.id);
+await refreshPipelinesList();
+}}, '×'),
+));
+batchSelect.appendChild(el('option',{value:p.id}, p.name));
+});
+}
+saveBtn.addEventListener('click', async () => {
+const name = nameInput.value.trim();
+if (!name){ toast('Give it a name first.'); return; }
+if (!dataState.steps.length){ toast('No steps to save yet.'); return; }
+try { await saveNamedPipeline(name); nameInput.value=''; toast(`Saved “${name}”.`); await refreshPipelinesList(); }
+catch(e){ toast(e.message); }
+});
+batchRunBtn.addEventListener('click', () => {
+if (!batchSelect.value){ toast('Pick a pipeline first.'); return; }
+const input = $('#batchFilesInput');
+input.dataset.pipelineId = batchSelect.value;
+input.dataset.resultsTarget = 'dialog';
+window.__batchResultsBox = batchResults;
+input.click();
+});
+await refreshPipelinesList();
+}
+async function runBatchFromInput(files, pipelineId){
+const pipelines = await listNamedPipelines();
+const pipeline = pipelines.find(p=>p.id===pipelineId);
+const resultsBox = window.__batchResultsBox;
+if (!pipeline || !resultsBox) return;
+resultsBox.innerHTML = '';
+const statusEls = files.map(file => {
+const status = el('span',{}, 'queued');
+resultsBox.appendChild(el('div',{class:'impact-row'}, el('span',{style:'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'}, file.name), status));
+return status;
+});
+for (let i=0;i<files.length;i++){
+statusEls[i].textContent = 'running…';
+try {
+const res = await runBatchFile(files[i], pipeline.steps);
+if (res.ok){
+downloadBlob(res.blob, `${files[i].name.replace(/\.[^.]+$/,'')}_transformed.csv`);
+statusEls[i].textContent = `done — ${res.rowCount.toLocaleString()} rows`;
+statusEls[i].className = 'impact-pos';
+} else {
+statusEls[i].textContent = res.error;
+statusEls[i].className = 'impact-neg';
+}
+} catch(e){
+statusEls[i].textContent = e.message;
+statusEls[i].className = 'impact-neg';
+}
+await new Promise(r=>setTimeout(r, 250));
+}
+toast('Batch complete.');
+}
 const typeBadgeClass = (t) => {
 if (isBoolType(t)) return 't-bool';
 if (isDateType(t)) return 't-date';
@@ -4730,6 +4906,7 @@ $('#engineStatus').title = 'Click to swap engines';
 renderAll();
 await refreshPreview();
 $('#saveRecipeBtn').hidden = false;
+$('#pipelinesBtn').hidden = false;
 $('#resumeCard').hidden = true;
 advanceTourPastImport();
 if (dataState.pendingRecipe){
@@ -5839,6 +6016,13 @@ $('#gridScroll').addEventListener('keydown', handleGridKeydown);
 $('#sampleDataBtn').addEventListener('click', loadSampleData);
 $('#tourStartBtn').addEventListener('click', () => showTourStep(0));
 $('#secondarySourceInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleSecondarySourceFile(f); e.target.value=''; });
+$('#pipelinesBtn').addEventListener('click', openPipelinesDialog);
+$('#batchFilesInput').addEventListener('change', e => {
+const files = Array.from(e.target.files).slice(0,10);
+const pipelineId = e.target.dataset.pipelineId;
+e.target.value = '';
+if (files.length && pipelineId) runBatchFromInput(files, pipelineId);
+});
 $('#checkLatestBtn').addEventListener('click', handleCheckLatest);
 $('#versionManualApply').addEventListener('click', handleManualVersionApply);
 $('#versionManualInput').addEventListener('keydown', e => { if (e.key==='Enter') handleManualVersionApply(); });
