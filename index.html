@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Duckbench</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNjQgNjQiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CiAgPHN0eWxlPgogICAgLmRie2ZpbGw6I0ZGNjI2Njt9CiAgICAuZGJpbGx7ZmlsbDojRkY2MjY2O30KICAgIEBtZWRpYSAocHJlZmVycy1jb2xvci1zY2hlbWU6IGRhcmspewogICAgICAuZGJ7ZmlsbDojRkZGNkU5O30KICAgICAgLmRiaWxse2ZpbGw6I0ZGNjI2Njt9CiAgICB9CiAgPC9zdHlsZT4KICA8cGF0aCBjbGFzcz0iZGIiIGQ9Ik03LDQyCiAgICAgICAgICAgQzYsMzEgMTAsMjQgMTksMjIKICAgICAgICAgICBDMjEsMTIgMjksNSA0MCw1CiAgICAgICAgICAgQzQ5LDUgNTUsMTAgNTYsMTcKICAgICAgICAgICBMNTMsMjcKICAgICAgICAgICBDNTEsMzUgNDQsNDAgMzYsNDEKICAgICAgICAgICBDMzUsNDMgMzIsNDQgMjksNDQKICAgICAgICAgICBMMTMsNDQKICAgICAgICAgICBDOCw0NCA3LDQ0IDcsNDIgWiIvPgogIDxwYXRoIGNsYXNzPSJkYmlsbCIgZD0iTTU2LDE3IEw2NCwyMSBMNTMsMjcgWiIvPgogIDxjaXJjbGUgY3g9IjQ5IiBjeT0iMTUiIHI9IjMuNCIgZmlsbD0iIzFhMWExYyIvPgo8L3N2Zz4K">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImR1Y2tiZW5jaCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTUiIGZpbGw9IiNGRTYxNjQiLz4KICA8ZyBmaWxsPSIjRjJGMkYzIj4KICAgIDxyZWN0IHg9IjgiIHk9IjQyIiB3aWR0aD0iOSIgaGVpZ2h0PSIxMiIgcng9IjQuNSIvPgogICAgPHJlY3QgeD0iMjEiIHk9IjM0IiB3aWR0aD0iOSIgaGVpZ2h0PSIyMCIgcng9IjQuNSIvPgogICAgPHBhdGggZD0iTTM0IDQ5LjUKICAgICAgICAgICAgIFYzMC41CiAgICAgICAgICAgICBBMTAuNSAxMC41IDAgMSAxIDQ4LjQgMTcuNAogICAgICAgICAgICAgTDU2IDE4LjYKICAgICAgICAgICAgIFE1OC42IDIxIDU1LjcgMjMuNgogICAgICAgICAgICAgTDQ3LjYgMjYuMwogICAgICAgICAgICAgQTEwLjUgMTAuNSAwIDAgMSA0MyAzMC41CiAgICAgICAgICAgICBWNDkuNQogICAgICAgICAgICAgQTQuNSA0LjUgMCAwIDEgMzQgNDkuNQogICAgICAgICAgICAgWiIvPgogIDwvZz4KICA8Y2lyY2xlIGN4PSI0MyIgY3k9IjE3IiByPSIzIiBmaWxsPSIjRkU2MTY0Ii8+Cjwvc3ZnPgo=">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:SOFT,WONK,ital,opsz,wght@0..100,0..1,0,9..144,400;0..100,0..1,0,9..144,500;0..100,0..1,0,9..144,600;0..100,0..1,1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -129,11 +129,6 @@ input,select,textarea{font-family:inherit;}
 }
 .mark:hover{transform:scale(1.05);}
 .mark svg{display:block;}
-.mark .duck-body{fill:var(--brass);}
-.mark .duck-bill{fill:var(--brass);}
-.mark .duck-eye{fill:#1a1a1c;}
-.mark .duck-water{stroke:var(--brass);}
-:root[data-theme="light"] .mark .duck-body{fill:#FFF6E9;}
 .masthead-text h1{
   font-family:var(--font-display);font-weight:500;font-size:20px;letter-spacing:0.01em;
   margin:0;color:var(--paper);
@@ -1036,18 +1031,22 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
     <div class="masthead-left">
       <span class="mark" aria-hidden="true">
         <svg width="34" height="34" viewBox="0 0 64 64">
-          <path class="duck-water" d="M3 50 L 61 50" fill="none" stroke-width="2.4" stroke-linecap="round" opacity="0.3"/>
-          <path class="duck-body" d="M7,42
-                   C6,31 10,24 19,22
-                   C21,12 29,5 40,5
-                   C49,5 55,10 56,17
-                   L53,27
-                   C51,35 44,40 36,41
-                   C35,43 32,44 29,44
-                   L13,44
-                   C8,44 7,44 7,42 Z"/>
-          <path class="duck-bill" d="M56,17 L64,21 L53,27 Z"/>
-          <circle class="duck-eye" cx="49" cy="15" r="3"/>
+          <rect width="64" height="64" rx="15" fill="#FE6164"/>
+          <g fill="#F2F2F3">
+            <rect x="8" y="42" width="9" height="12" rx="4.5"/>
+            <rect x="21" y="34" width="9" height="20" rx="4.5"/>
+            <path d="M34 49.5
+                     V30.5
+                     A10.5 10.5 0 1 1 48.4 17.4
+                     L56 18.6
+                     Q58.6 21 55.7 23.6
+                     L47.6 26.3
+                     A10.5 10.5 0 0 1 43 30.5
+                     V49.5
+                     A4.5 4.5 0 0 1 34 49.5
+                     Z"/>
+          </g>
+          <circle cx="43" cy="17" r="3" fill="#FE6164"/>
         </svg>
       </span>
       <div class="masthead-text">
@@ -1080,8 +1079,12 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
         <button id="loadRecipeBtn" class="icon-btn" aria-label="Load recipe" title="Load recipe (.duckbench.json)">
           <svg viewBox="0 0 24 24" fill="none"><path d="M12 15V3M12 3l-4.5 4.5M12 3l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 16v3.5C5 20.9 6.1 22 7.5 22h9c1.4 0 2.5-1.1 2.5-2.5V16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
+        <button id="pipelinesBtn" class="icon-btn" aria-label="Saved pipelines" title="Saved pipelines &amp; batch apply" hidden>
+          <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="10" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="16" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.6"/></svg>
+        </button>
         <input type="file" id="recipeFileInput" accept=".json,.duckbench.json" hidden>
         <input type="file" id="secondarySourceInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" hidden>
+        <input type="file" id="batchFilesInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" multiple hidden>
       </div>
     </div>
   </header>
@@ -3310,13 +3313,14 @@ function tableOf(plan){
   return arqueroPlanTable.get(plan);
 }
 
-async function compileAq(steps, uptoIndex){
+async function compileAq(steps, uptoIndex, baseTable){
   const aq = await loadAq();
-  if (!dataState.aqSourceTable){
+  const sourceTable = baseTable || dataState.aqSourceTable;
+  if (!sourceTable){
     return { table: null, hasRid: true, columns: [], error: null, errorIndex: -1 };
   }
-  let table = dataState.aqSourceTable;
-  let hasRid = true;
+  let table = sourceTable;
+  let hasRid = !baseTable;
   let columns = columnsMetaOf(table).filter(c=>c.name!==RID);
   const end = uptoIndex ?? steps.length - 1;
   for (let i=0; i<=end; i++){
@@ -3587,14 +3591,49 @@ function resetHistory(){ dataState.historyPast = []; dataState.historyFuture = [
 const SESSION_DB_NAME = 'duckbench';
 const SESSION_STORE = 'sessions';
 const SESSION_KEY = 'last';
+const PIPELINES_STORE = 'pipelines';
 function openSessionDB(){
 return new Promise((resolve, reject) => {
 if (!window.indexedDB){ reject(new Error('IndexedDB unavailable')); return; }
-const req = indexedDB.open(SESSION_DB_NAME, 1);
-req.onupgradeneeded = () => { req.result.createObjectStore(SESSION_STORE); };
+const req = indexedDB.open(SESSION_DB_NAME, 2);
+req.onupgradeneeded = (e) => {
+const db = req.result;
+if (!db.objectStoreNames.contains(SESSION_STORE)) db.createObjectStore(SESSION_STORE);
+if (!db.objectStoreNames.contains(PIPELINES_STORE)) db.createObjectStore(PIPELINES_STORE, { keyPath:'id' });
+};
 req.onsuccess = () => resolve(req.result);
 req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
 });
+}
+async function saveNamedPipeline(name){
+const entry = { id: `p${Date.now().toString(36)}${Math.floor(Math.random()*1000)}`, name, steps: JSON.parse(JSON.stringify(dataState.steps)), engineId: dataState.engine.id, savedAt: Date.now() };
+try {
+const db = await openSessionDB();
+const tx = db.transaction(PIPELINES_STORE, 'readwrite');
+tx.objectStore(PIPELINES_STORE).put(entry);
+await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+db.close();
+return entry;
+} catch(e){ throw new Error(`Couldn’t save pipeline: ${e.message}`); }
+}
+async function listNamedPipelines(){
+try {
+const db = await openSessionDB();
+const tx = db.transaction(PIPELINES_STORE, 'readonly');
+const req = tx.objectStore(PIPELINES_STORE).getAll();
+const result = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+db.close();
+return (result||[]).sort((a,b)=>b.savedAt-a.savedAt);
+} catch(e){ return []; }
+}
+async function deleteNamedPipeline(id){
+try {
+const db = await openSessionDB();
+const tx = db.transaction(PIPELINES_STORE, 'readwrite');
+tx.objectStore(PIPELINES_STORE).delete(id);
+await new Promise((res) => { tx.oncomplete = res; tx.onerror = res; });
+db.close();
+} catch(e){}
 }
 let sessionSaveTimer = null;
 function queueSessionSnapshot(){
