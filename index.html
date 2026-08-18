@@ -346,20 +346,6 @@ input,select,textarea{font-family:inherit;}
   color:var(--muted);font-size:11.5px;cursor:pointer;transition:color .15s,border-color .15s;
 }
 .source-add-btn:hover{color:var(--brass);border-color:var(--brass-dim);}
-.pipeline-box{width:440px;}
-.pipeline-save-row{display:flex;gap:8px;margin-bottom:14px;}
-.pipeline-save-row .rep-field{flex:1;min-width:0;}
-.pipeline-cap-note{font-size:11px;color:var(--rust-text);line-height:1.5;margin-bottom:12px;}
-.pipeline-list{display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;}
-.pipeline-empty{font-size:12px;color:var(--muted);padding:6px 2px 2px;}
-.pipeline-card{
-  display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:var(--radius-s);
-  background:var(--ink-2);border:1px solid var(--line-soft);
-}
-.pipeline-card-body{flex:1;min-width:0;}
-.pipeline-card-name{font-size:12.5px;color:var(--paper);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.pipeline-card-meta{font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:1px;}
-.pipeline-card-actions{display:flex;gap:6px;flex-shrink:0;}
 .rail-head{
   display:flex;align-items:center;justify-content:space-between;
   padding:14px 14px 10px;
@@ -1093,11 +1079,12 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
         <button id="loadRecipeBtn" class="icon-btn" aria-label="Load recipe" title="Load recipe (.duckbench.json)">
           <svg viewBox="0 0 24 24" fill="none"><path d="M12 15V3M12 3l-4.5 4.5M12 3l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 16v3.5C5 20.9 6.1 22 7.5 22h9c1.4 0 2.5-1.1 2.5-2.5V16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
-        <button id="pipelinesBtn" class="icon-btn" aria-label="Saved pipelines" title="Saved pipelines (up to 10)" hidden>
+        <button id="pipelinesBtn" class="icon-btn" aria-label="Saved pipelines" title="Saved pipelines &amp; batch apply" hidden>
           <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="10" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="16" width="18" height="4" rx="1" stroke="currentColor" stroke-width="1.6"/></svg>
         </button>
         <input type="file" id="recipeFileInput" accept=".json,.duckbench.json" hidden>
         <input type="file" id="secondarySourceInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" hidden>
+        <input type="file" id="batchFilesInput" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" multiple hidden>
       </div>
     </div>
   </header>
@@ -2016,6 +2003,60 @@ async function loadSecondaryTableImpl(tableName, { format, fileName, buffer, csv
   } finally {
     try { await dataState.db.dropFile(fileName); } catch(e){}
   }
+}
+async function buildBatchFileSpec(file){
+  const ext = (file.name.split('.').pop()||'').toLowerCase();
+  const format = ext==='parquet' ? 'parquet' : (ext==='xlsx'||ext==='xls') ? 'excel' : 'csv';
+  if (format === 'excel'){
+    await ensureSheetJS();
+    const wb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const csvText = XLSX.utils.sheet_to_csv(ws);
+    return { format, fileName:`${file.name}.csv`, csvText, firstRowHeader:true };
+  }
+  if (format === 'parquet'){
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    return { format, fileName:file.name, buffer };
+  }
+  const buffer = new Uint8Array(await file.arrayBuffer());
+  const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
+  return { format, fileName:file.name, buffer, firstRowHeader:true, skipRows:0, delim };
+}
+async function runBatchFileDuckDB(file, steps){
+  const fileSpec = await buildBatchFileSpec(file);
+  if ((fileSpec.format==='excel'||fileSpec.format==='parquet') && dataState.engine.id!=='duckdb'){
+    return { ok:false, error:'Needs Full (DuckDB) mode.' };
+  }
+  const tempTable = `batch_${Date.now().toString(36)}${Math.floor(Math.random()*10000)}`;
+  await loadSecondaryTableImpl(tempTable, fileSpec);
+  try {
+    const baseFrom = `SELECT * FROM ${q(tempTable)}`;
+    const compiled = await compilePipeline(steps, steps.length-1, baseFrom, false, null);
+    if (compiled.error) return { ok:false, error: `Step ${compiled.errorIndex+1}: ${compiled.error}` };
+    const plan = makeDuckDBPlan(compiled);
+    const blob = await dataState.engine.export(plan, 'csv');
+    const n = await dataState.engine.count(plan);
+    return { ok:true, blob, rowCount:n };
+  } finally {
+    try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q(tempTable)}`); } catch(e){}
+  }
+}
+async function runBatchFileArquero(file, steps){
+  const ext = (file.name.split('.').pop()||'').toLowerCase();
+  if (ext==='parquet'||ext==='xlsx'||ext==='xls') return { ok:false, error:'Excel/Parquet batch files need Full mode.' };
+  const aq = await loadAq();
+  const text = await file.text();
+  const delimiter = file.name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+  const table = aq.fromCSV(text, { parse:'auto', delimiter });
+  const compiled = await compileAq(steps, steps.length-1, table);
+  if (compiled.error) return { ok:false, error: `Step ${compiled.errorIndex+1}: ${compiled.error}` };
+  const plan = makeArqueroPlan(compiled);
+  const blob = await dataState.engine.export(plan, 'csv');
+  const n = await dataState.engine.count(plan);
+  return { ok:true, blob, rowCount:n };
+}
+async function runBatchFile(file, steps){
+  return dataState.engine.id === 'duckdb' ? runBatchFileDuckDB(file, steps) : runBatchFileArquero(file, steps);
 }
 async function fetchSkippedRowsDetail(){
   const res = await dataState.conn.query(`SELECT line, column_idx, error_type, csv_line, error_message FROM reject_errors ORDER BY line LIMIT 200`);
@@ -3605,7 +3646,6 @@ const SESSION_DB_NAME = 'duckbench';
 const SESSION_STORE = 'sessions';
 const SESSION_KEY = 'last';
 const PIPELINES_STORE = 'pipelines';
-const MAX_SAVED_PIPELINES = 10;
 function openSessionDB(){
 return new Promise((resolve, reject) => {
 if (!window.indexedDB){ reject(new Error('IndexedDB unavailable')); return; }
@@ -3619,6 +3659,8 @@ req.onsuccess = () => resolve(req.result);
 req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
 });
 }
+const MAX_SAVED_PIPELINES = 10;
+let activeBatchResultsBox = null;
 async function saveNamedPipeline(name){
 const entry = { id: `p${Date.now().toString(36)}${Math.floor(Math.random()*1000)}`, name, steps: JSON.parse(JSON.stringify(dataState.steps)), engineId: dataState.engine.id, savedAt: Date.now() };
 try {
@@ -3777,99 +3819,6 @@ toast('Recipe loaded — now drop or choose the data file to apply it to.');
 } catch(e){
 toast(`Couldn’t read that recipe: ${e.message}`);
 }
-}
-function openPipelinesDialog(){
-const overlay = el('div',{class:'confirm-overlay'});
-const box = el('div',{class:'confirm-box pipeline-box', role:'dialog', 'aria-modal':'true'});
-box.appendChild(el('h3',{style:'margin-top:0;'}, 'Saved pipelines'));
-box.appendChild(el('p',{class:'inspector-hint', style:'margin-bottom:14px;'}, `Steps only — no data leaves this tab. Up to ${MAX_SAVED_PIPELINES} at a time.`));
-const nameInput = el('input',{class:'rep-field', type:'text', placeholder:'Name this pipeline…', maxlength:'80'});
-const saveBtn = el('button',{class:'btn-solid btn-small', disabled:true}, 'Save current');
-const saveRow = el('div',{class:'pipeline-save-row'}, nameInput, saveBtn);
-const capNote = el('div',{class:'pipeline-cap-note'}, `${MAX_SAVED_PIPELINES} saved — delete one below to save another.`);
-capNote.hidden = true;
-const noStepsNote = el('div',{class:'inspector-hint', style:'margin-bottom:12px;'}, 'Add at least one step to the current pipeline before saving.');
-noStepsNote.hidden = true;
-const list = el('div',{class:'pipeline-list'});
-const closeBtn = el('button',{class:'btn-ghost', style:'margin-top:16px;width:100%;'}, 'Close');
-box.appendChild(saveRow);
-box.appendChild(capNote);
-box.appendChild(noStepsNote);
-box.appendChild(list);
-box.appendChild(closeBtn);
-overlay.appendChild(box);
-document.body.appendChild(overlay);
-const entry = ModalStack.push(overlay, { onClose: () => overlay.remove() });
-overlay.addEventListener('mousedown', e => { if (e.target === overlay) ModalStack.pop(entry); });
-closeBtn.addEventListener('click', () => ModalStack.pop(entry));
-let count = 0;
-function updateSaveState(){
-const atCap = count >= MAX_SAVED_PIPELINES;
-const noSteps = !dataState.steps.length;
-capNote.hidden = !atCap;
-noStepsNote.hidden = atCap || !noSteps;
-nameInput.disabled = atCap;
-saveBtn.disabled = atCap || noSteps || !nameInput.value.trim();
-}
-nameInput.addEventListener('input', updateSaveState);
-async function refreshList(){
-const pipelines = await listNamedPipelines();
-count = pipelines.length;
-list.innerHTML = '';
-if (!pipelines.length){
-list.appendChild(el('div',{class:'pipeline-empty'}, 'No saved pipelines yet.'));
-} else {
-pipelines.forEach(p => list.appendChild(el('div',{class:'pipeline-card'},
-el('div',{class:'pipeline-card-body'},
-el('div',{class:'pipeline-card-name', title:p.name}, p.name),
-el('div',{class:'pipeline-card-meta'}, `${p.steps.length} step${p.steps.length===1?'':'s'} · ${p.engineId==='duckdb'?'Full':'Express'} · ${relativeTimeFromNow(p.savedAt)}`),
-),
-el('div',{class:'pipeline-card-actions'},
-el('button',{class:'btn-ghost btn-small', onclick:()=>loadNamedPipeline(p, entry)}, 'Load'),
-el('button',{class:'btn-ghost btn-small', onclick:()=>removeNamedPipeline(p, refreshList)}, 'Delete'),
-),
-)));
-}
-updateSaveState();
-}
-saveBtn.addEventListener('click', async () => {
-const name = nameInput.value.trim();
-if (!name || !dataState.steps.length || count >= MAX_SAVED_PIPELINES) return;
-saveBtn.disabled = true;
-try {
-await saveNamedPipeline(name);
-nameInput.value = '';
-toast('Pipeline saved.');
-await refreshList();
-} catch(e){
-toast(e.message);
-updateSaveState();
-}
-});
-nameInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !saveBtn.disabled) saveBtn.click(); });
-refreshList();
-}
-async function loadNamedPipeline(pipeline, dialogEntry){
-if (dataState.steps.length){
-const ok = await confirmDialog(`Replace the current ${dataState.steps.length} step${dataState.steps.length===1?'':'s'} with “${pipeline.name}” (${pipeline.steps.length} step${pipeline.steps.length===1?'':'s'})?`);
-if (!ok) return;
-}
-ModalStack.pop(dialogEntry);
-closeInspector();
-dataState.steps = JSON.parse(JSON.stringify(pipeline.steps));
-uiState.selectedStepIndex = null;
-resetHistory();
-renderAll();
-await refreshPreview();
-saveSessionSnapshot();
-toast(`“${pipeline.name}” applied — ${pipeline.steps.length} step${pipeline.steps.length===1?'':'s'}.`);
-}
-async function removeNamedPipeline(pipeline, onDone){
-const ok = await confirmDialog(`Delete “${pipeline.name}”? This can’t be undone.`);
-if (!ok) return;
-await deleteNamedPipeline(pipeline.id);
-toast('Pipeline deleted.');
-onDone();
 }
 function applyStepsChange(newSteps){
   dataState.historyPast.push(JSON.stringify({ steps: dataState.steps, selectedStepIndex: uiState.selectedStepIndex }));
@@ -4127,6 +4076,135 @@ toast('CSV file downloaded.');
 } catch(e){
 toast(`Export failed: ${e.message}`);
 }
+}
+async function openPipelinesDialog(){
+if (!dataState.hasSource){ toast('Import data first.'); return; }
+const overlay = el('div',{class:'confirm-overlay'});
+const box = el('div',{class:'confirm-box', role:'dialog', 'aria-modal':'true', style:'max-width:480px;width:92vw;text-align:left;max-height:80vh;overflow-y:auto;'});
+box.appendChild(el('h3',{style:'margin-top:0;'}, 'Saved pipelines'));
+const nameInput = el('input',{class:'rep-field', type:'text', placeholder:'Name this pipeline…', maxlength:'80'});
+const saveBtn = el('button',{class:'btn-solid btn-small', disabled:true}, 'Save current');
+box.appendChild(el('div',{style:'display:flex;gap:6px;margin-bottom:8px;'}, nameInput, saveBtn));
+const capNote = el('div',{class:'inspector-hint', style:'margin-bottom:14px;'}, `${MAX_SAVED_PIPELINES} saved — delete one below to save another.`);
+capNote.hidden = true;
+box.appendChild(capNote);
+const noStepsNote = el('div',{class:'inspector-hint', style:'margin-bottom:14px;'}, 'Add at least one step to the current pipeline before saving.');
+noStepsNote.hidden = true;
+box.appendChild(noStepsNote);
+const listBox = el('div',{style:'display:flex;flex-direction:column;gap:6px;margin-bottom:18px;'});
+box.appendChild(listBox);
+box.appendChild(el('div',{class:'inspector-hint', style:'margin-bottom:8px;'}, 'Batch apply — run a saved pipeline against up to 10 files'));
+const batchSelect = el('select',{class:'rep-field', style:'width:100%;margin-bottom:8px;'});
+box.appendChild(batchSelect);
+const batchRunBtn = el('button',{class:'btn-solid btn-small', style:'width:100%;justify-content:center;'}, 'Choose files & run batch (max 10)');
+box.appendChild(batchRunBtn);
+const batchResults = el('div',{style:'display:flex;flex-direction:column;gap:4px;margin-top:8px;max-height:180px;overflow-y:auto;'});
+box.appendChild(batchResults);
+const closeBtn = el('button',{class:'btn-ghost', style:'margin-top:16px;'}, 'Close');
+box.appendChild(closeBtn);
+overlay.appendChild(box);
+document.body.appendChild(overlay);
+const entry = ModalStack.push(overlay, { onClose: () => overlay.remove() });
+overlay.addEventListener('mousedown', e => { if (e.target === overlay) ModalStack.pop(entry); });
+closeBtn.addEventListener('click', () => ModalStack.pop(entry));
+let count = 0;
+function updateSaveState(){
+const atCap = count >= MAX_SAVED_PIPELINES;
+const noSteps = !dataState.steps.length;
+capNote.hidden = !atCap;
+noStepsNote.hidden = atCap || !noSteps;
+nameInput.disabled = atCap;
+saveBtn.disabled = atCap || noSteps || !nameInput.value.trim();
+}
+nameInput.addEventListener('input', updateSaveState);
+async function refreshPipelinesList(){
+const pipelines = await listNamedPipelines();
+count = pipelines.length;
+listBox.innerHTML = '';
+batchSelect.innerHTML = '';
+batchSelect.appendChild(el('option',{value:''}, pipelines.length ? 'Choose a saved pipeline…' : 'No saved pipelines yet'));
+if (!pipelines.length) listBox.appendChild(el('div',{class:'inspector-hint'}, 'No saved pipelines yet — save your current one above.'));
+pipelines.forEach(p => {
+listBox.appendChild(el('div',{class:'source-card'},
+el('div',{class:'source-card-icon'}, htmlIcon('layers',12)),
+el('div',{class:'source-card-body'},
+el('div',{class:'source-card-name', title:p.name}, p.name),
+el('div',{class:'source-card-meta'}, `${p.steps.length} step${p.steps.length===1?'':'s'} · ${p.engineId==='duckdb'?'Full':'Express'} · ${relativeTimeFromNow(p.savedAt)}`),
+),
+el('button',{class:'btn-ghost btn-small', onclick: async ()=>{
+if (dataState.steps.length){
+const ok = await confirmDialog(`Replace the current ${dataState.steps.length} step${dataState.steps.length===1?'':'s'} with “${p.name}”?`);
+if (!ok) return;
+}
+ModalStack.pop(entry);
+closeInspector();
+dataState.steps = JSON.parse(JSON.stringify(p.steps));
+uiState.selectedStepIndex = null;
+resetHistory();
+renderAll();
+await refreshPreview();
+saveSessionSnapshot();
+toast(`Applied “${p.name}”.`);
+}}, 'Apply'),
+el('button',{class:'source-card-remove', title:'Delete', 'aria-label':`Delete ${p.name}`, onclick: async ()=>{
+const ok = await confirmDialog(`Delete saved pipeline “${p.name}”? This can’t be undone.`);
+if (!ok) return;
+await deleteNamedPipeline(p.id);
+await refreshPipelinesList();
+}}, '×'),
+));
+batchSelect.appendChild(el('option',{value:p.id}, p.name));
+});
+updateSaveState();
+}
+saveBtn.addEventListener('click', async () => {
+const name = nameInput.value.trim();
+if (!name || !dataState.steps.length || count >= MAX_SAVED_PIPELINES) return;
+saveBtn.disabled = true;
+try { await saveNamedPipeline(name); nameInput.value=''; toast(`Saved “${name}”.`); await refreshPipelinesList(); }
+catch(e){ toast(e.message); updateSaveState(); }
+});
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !saveBtn.disabled) saveBtn.click(); });
+batchRunBtn.addEventListener('click', () => {
+if (!batchSelect.value){ toast('Pick a pipeline first.'); return; }
+const input = $('#batchFilesInput');
+input.dataset.pipelineId = batchSelect.value;
+input.dataset.resultsTarget = 'dialog';
+activeBatchResultsBox = batchResults;
+input.click();
+});
+await refreshPipelinesList();
+}
+async function runBatchFromInput(files, pipelineId){
+const pipelines = await listNamedPipelines();
+const pipeline = pipelines.find(p=>p.id===pipelineId);
+const resultsBox = activeBatchResultsBox;
+if (!pipeline || !resultsBox) return;
+resultsBox.innerHTML = '';
+const statusEls = files.map(file => {
+const status = el('span',{}, 'queued');
+resultsBox.appendChild(el('div',{class:'impact-row'}, el('span',{style:'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'}, file.name), status));
+return status;
+});
+for (let i=0;i<files.length;i++){
+statusEls[i].textContent = 'running…';
+try {
+const res = await runBatchFile(files[i], pipeline.steps);
+if (res.ok){
+downloadBlob(res.blob, `${files[i].name.replace(/\.[^.]+$/,'')}_transformed.csv`);
+statusEls[i].textContent = `done — ${res.rowCount.toLocaleString()} rows`;
+statusEls[i].className = 'impact-pos';
+} else {
+statusEls[i].textContent = res.error;
+statusEls[i].className = 'impact-neg';
+}
+} catch(e){
+statusEls[i].textContent = e.message;
+statusEls[i].className = 'impact-neg';
+}
+await new Promise(r=>setTimeout(r, 250));
+}
+toast('Batch complete.');
 }
 const typeBadgeClass = (t) => {
 if (isBoolType(t)) return 't-bool';
@@ -5942,12 +6020,18 @@ $('#engineStatus').addEventListener('click', toggleEngineMidSession);
 $('#engineVersionBtn').addEventListener('click', openVersionPanel);
 $('#saveRecipeBtn').addEventListener('click', saveRecipe);
 $('#loadRecipeBtn').addEventListener('click', () => $('#recipeFileInput').click());
-$('#pipelinesBtn').addEventListener('click', openPipelinesDialog);
 $('#recipeFileInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleRecipeFileSelected(f); e.target.value=''; });
 $('#gridScroll').addEventListener('keydown', handleGridKeydown);
 $('#sampleDataBtn').addEventListener('click', loadSampleData);
 $('#tourStartBtn').addEventListener('click', () => showTourStep(0));
 $('#secondarySourceInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleSecondarySourceFile(f); e.target.value=''; });
+$('#pipelinesBtn').addEventListener('click', openPipelinesDialog);
+$('#batchFilesInput').addEventListener('change', e => {
+const files = Array.from(e.target.files).slice(0,10);
+const pipelineId = e.target.dataset.pipelineId;
+e.target.value = '';
+if (files.length && pipelineId) runBatchFromInput(files, pipelineId);
+});
 $('#checkLatestBtn').addEventListener('click', handleCheckLatest);
 $('#versionManualApply').addEventListener('click', handleManualVersionApply);
 $('#versionManualInput').addEventListener('keydown', e => { if (e.key==='Enter') handleManualVersionApply(); });
