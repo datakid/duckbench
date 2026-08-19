@@ -1604,6 +1604,7 @@ const SAMPLE_SALES_CSV = `order_id,order_date,customer,product,category,region,q
 
 const q = (name) => `"${String(name).replace(/"/g, '""')}"`; 
 const esc = (v) => `'${String(v).replace(/'/g, "''")}'`;      
+const likeEscape = (v) => String(v).replace(/[\\%_]/g, c => '\\' + c);
 const NUMERIC_TYPE_RE = /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|FLOAT|DOUBLE|REAL|DECIMAL)/i;
 const DECIMAL_TYPE_RE = /^DECIMAL/i;
 const DATE_TYPE_RE = /^(DATE|TIMESTAMP|TIME)/i;
@@ -2140,7 +2141,9 @@ function currentPlanSql(){
 
 async function exportPlanImpl(plan, format){
   const sql = sqlOf(plan);
-  const exportSql = plan.hasRid ? `SELECT * EXCLUDE (${q(RID)}) FROM (${sql})` : sql;
+  const physicalCols = await getColumns(sql);
+  const hasPhysicalRid = physicalCols.some(c => c.name === RID);
+  const exportSql = hasPhysicalRid ? `SELECT * EXCLUDE (${q(RID)}) FROM (${sql})` : sql;
   if (format === 'parquet'){
     const target = `${uid('exp_')}.parquet`;
     await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT PARQUET)`);
@@ -2352,10 +2355,10 @@ const TRANSFORMS = {
           '=': `${col} = ${lit}`, '!=': `${col} != ${lit}`,
           '>': `${col} > ${lit}`, '<': `${col} < ${lit}`,
           '>=': `${col} >= ${lit}`, '<=': `${col} <= ${lit}`,
-          'contains': `${strCol} ILIKE ${esc('%'+d.value+'%')}`,
-          'not_contains': `${strCol} NOT ILIKE ${esc('%'+d.value+'%')}`,
-          'starts_with': `${strCol} ILIKE ${esc(d.value+'%')}`,
-          'ends_with': `${strCol} ILIKE ${esc('%'+d.value)}`,
+          'contains': `${strCol} ILIKE ${esc('%'+likeEscape(d.value)+'%')} ESCAPE '\\'`,
+          'not_contains': `${strCol} NOT ILIKE ${esc('%'+likeEscape(d.value)+'%')} ESCAPE '\\'`,
+          'starts_with': `${strCol} ILIKE ${esc(likeEscape(d.value)+'%')} ESCAPE '\\'`,
+          'ends_with': `${strCol} ILIKE ${esc('%'+likeEscape(d.value))} ESCAPE '\\'`,
           'is_null': `${col} IS NULL`, 'is_not_null': `${col} IS NOT NULL`,
         };
         cond = map[d.operator] || '1=1';
@@ -3193,8 +3196,9 @@ Object.assign(TRANSFORMS, {
       if (!d.valueColumn) return 'Choose which column to fill the pivoted cells with.';
       return null;
     },
-    toSQL(d, from){
-      const g = d.groupColumns?.length ? `GROUP BY ${colList(d.groupColumns)} ` : '';
+    toSQL(d, from, ctx){
+      const groupCols = d.groupColumns?.length ? d.groupColumns : (ctx.columns||[]).filter(c => c !== d.onColumn && c !== d.valueColumn && c !== RID);
+      const g = groupCols.length ? `GROUP BY ${colList(groupCols)} ` : '';
       const fn = d.fn === 'first' ? 'ANY_VALUE' : d.fn.toUpperCase();
       return `SELECT * FROM (PIVOT (${from}) ON ${q(d.onColumn)} USING ${fn}(${q(d.valueColumn)}) ${g}) pivoted`.trim();
     },
@@ -3233,10 +3237,17 @@ Object.assign(TRANSFORMS, {
       if (!d.rightKey) return 'Pick the key column from the joined table.';
       return null;
     },
-    toSQL(d, from){
+    toSQL(d, from, ctx){
       const jt = { inner:'INNER', left:'LEFT', right:'RIGHT', full:'FULL' }[d.joinType] || 'INNER';
       const rt = `src_${d.rightSource}`;
-      return `SELECT l.*, r.* EXCLUDE (${q(d.rightKey)}) FROM (${from}) AS l ${jt} JOIN ${q(rt)} AS r ON l.${q(d.leftKey)} = r.${q(d.rightKey)}`;
+      const rightSrc = dataState.secondarySources.find(s=>s.id===d.rightSource);
+      if (!rightSrc) throw new Error('Joined source is no longer available.');
+      const leftNames = ctx.hasRid ? [RID, ...ctx.columns] : ctx.columns;
+      const rightNames = (rightSrc.columns||[]).map(c=>c.name).filter(n=>n!==d.rightKey);
+      const leftSet = new Set(leftNames);
+      const leftSelect = leftNames.map(n => `l.${q(n)}`);
+      const rightSelect = rightNames.map(n => leftSet.has(n) ? `r.${q(n)} AS ${q(n+'_right')}` : `r.${q(n)}`);
+      return `SELECT ${[...leftSelect, ...rightSelect].join(', ')} FROM (${from}) AS l ${jt} JOIN ${q(rt)} AS r ON l.${q(d.leftKey)} = r.${q(d.rightKey)}`;
     },
     summary(d){
       const src = dataState.secondarySources.find(s=>s.id===d.rightSource);
@@ -4256,6 +4267,22 @@ if (!preview) return null;
 setStatusBar({ rows: preview.hasMore?'200+':preview.rows.length, cols: preview.columns.length, step: stepLabel, duration: `${preview.ms.toFixed(0)} ms` });
 return preview;
 }
+function updateEngineEditor(plan){
+const editor = $('#sqlEditor');
+const status = $('#editorStatus');
+if (!editor || !status) return;
+editor.value = plan && typeof plan.debug === 'function' ? plan.debug() : '';
+status.classList.remove('is-ok','is-error');
+if (plan && plan.error){
+status.textContent = 'Compile error';
+status.classList.add('is-error');
+} else if (plan){
+status.textContent = 'Compiled';
+status.classList.add('is-ok');
+} else {
+status.textContent = '';
+}
+}
 async function refreshPreview(){
 if (!dataState.hasSource) return;
 if (!lastPreview) $('#gridSkeleton').hidden = false;
@@ -4264,6 +4291,7 @@ const myToken = ++dataState.pipelineToken;
 const plan = await dataState.engine.compile(dataState.steps, upto);
 if (dataState.pipelineToken !== myToken) return;
 renderStepErrorFlags(plan);
+updateEngineEditor(plan);
 if (plan.error){
 renderGridError(plan);
 setStatusBar({ step: describeStatusStep(upto), duration: null });
@@ -4884,6 +4912,7 @@ if (format === 'parquet'){
 } else if (format === 'excel'){
   const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
   setImportProgress(null, 'Parsing spreadsheet…');
+  await ensureSheetJS();
   const fullWb = XLSX.read(buffer, { type:'array', cellDates:true });
   const ws = fullWb.Sheets[sheet];
   const csvText = XLSX.utils.sheet_to_csv(ws, { skipHidden:false });
@@ -4963,6 +4992,7 @@ if (format === 'parquet'){
 const buffer = new Uint8Array(await file.arrayBuffer());
 await dataState.engine.loadFile({ format, fileName: file.name, buffer });
 } else if (format === 'excel'){
+await ensureSheetJS();
 const fullWb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
 const ws = fullWb.Sheets[opts.sheet];
 const csvText = XLSX.utils.sheet_to_csv(ws, { skipHidden:false });
@@ -6124,7 +6154,241 @@ function advanceTourPastImport(){
 if (tourDone() || tourStepIndex !== 0) return;
 setTimeout(()=>showTourStep(1), 600);
 }
+const SELFTEST_JOIN_CSV = `region,manager,status
+North,Alice,Active
+South,Bob,Active
+East,Carol,Inactive
+West,Dana,Active
+Central,Eve,Active`;
+
+const SELFTEST_CASES = [
+{ label:'filter — numeric operator', steps:[{ type:'filter', data:{ column:'quantity', mode:'operator', operator:'>', value:'2' } }] },
+{ label:'filter — contains', steps:[{ type:'filter', data:{ column:'status', mode:'operator', operator:'contains', value:'e' } }] },
+{ label:'sort', steps:[{ type:'sort', data:{ column:'unit_price', direction:'desc', nullsLast:true } }] },
+{ label:'remove_duplicates', steps:[{ type:'remove_duplicates', data:{ columns:[] } }] },
+{ label:'remove_blank_rows', steps:[{ type:'remove_blank_rows', data:{} }] },
+{ label:'promote_headers', steps:[{ type:'promote_headers', data:{} }] },
+{ label:'index_column', steps:[{ type:'index_column', data:{ name:'idx', start:1 } }] },
+{ label:'limit', steps:[{ type:'limit', data:{ count:10, offset:5 } }] },
+{ label:'select_columns', steps:[{ type:'select_columns', data:{ columns:['order_id','customer','quantity'] } }] },
+{ label:'remove_columns', steps:[{ type:'remove_columns', data:{ columns:['discount'] } }] },
+{ label:'duplicate_column', steps:[{ type:'duplicate_column', data:{ column:'quantity' } }] },
+{ label:'rename_column', steps:[{ type:'rename_column', data:{ column:'customer', newName:'client' } }] },
+{ label:'change_type', steps:[{ type:'change_type', data:{ column:'quantity', targetType:'DOUBLE' } }] },
+{ label:'split_column — columns', steps:[{ type:'split_column', data:{ column:'order_date', delimiter:'-', mode:'columns', maxParts:3, keepOriginal:false } }] },
+{ label:'split_column — rows with nulls', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', keepOriginal:false } }] },
+{ label:'merge_columns', steps:[{ type:'merge_columns', data:{ columns:['product','category'], separator:' / ', name:'label', keepOriginal:false } }] },
+{ label:'extract_text — regex with group', steps:[{ type:'extract_text', data:{ column:'order_date', mode:'regex', pattern:'^(\\d{4})', name:'yr' } }] },
+{ label:'replace_values', steps:[{ type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'Open' } }] },
+{ label:'change_case', steps:[{ type:'change_case', data:{ columns:['category'], mode:'upper' } }] },
+{ label:'trim_clean', steps:[{ type:'trim_clean', data:{ columns:['customer'] } }] },
+{ label:'fill', steps:[{ type:'fill', data:{ columns:['discount'], direction:'down' } }] },
+{ label:'rank', steps:[{ type:'rank', data:{ column:'unit_price', direction:'desc', mode:'rank', name:'price_rank', partitionBy:[] } }] },
+{ label:'running_total', steps:[{ type:'running_total', data:{ column:'quantity', orderBy:'order_id', name:'running_qty', partitionBy:[] } }] },
+{ label:'group_by', steps:[{ type:'group_by', data:{ groupColumns:['region'], aggregations:[{fn:'sum',column:'quantity',name:'total_qty'},{fn:'count',column:'',name:'n'}] } }] },
+{ label:'pivot — no keep-as-rows', steps:[{ type:'pivot', data:{ onColumn:'region', valueColumn:'quantity', fn:'sum', groupColumns:[] } }] },
+{ label:'unpivot', steps:[{ type:'unpivot', data:{ columns:['quantity','unit_price'], nameColumn:'Attribute', valueColumn:'Value' } }] },
+{ label:'delete_rows', steps:[{ type:'delete_rows', data:{ rids:['1','2'] } }] },
+{ label:'combo — sort then fill', steps:[
+{ type:'sort', data:{ column:'discount', direction:'asc', nullsLast:true } },
+{ type:'fill', data:{ columns:['discount'], direction:'down' } },
+] },
+{ label:'combo — filter then group_by', steps:[
+{ type:'filter', data:{ column:'status', mode:'values', values:{ include:true, list:['Completed','Shipped'] } } },
+{ type:'group_by', data:{ groupColumns:['region'], aggregations:[{fn:'sum',column:'quantity',name:'total_qty'},{fn:'count',column:'',name:'n'}] } },
+] },
+{ label:'combo — split then pivot', steps:[
+{ type:'split_column', data:{ column:'order_date', delimiter:'-', mode:'columns', maxParts:3, keepOriginal:false } },
+{ type:'pivot', data:{ onColumn:'region', valueColumn:'quantity', fn:'sum', groupColumns:['order_date_1'] } },
+] },
+{ label:'combo — join with second source', join:true, steps:[
+{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left' } },
+] },
+{ label:'combo — filter contains literal underscore', steps:[
+{ type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'AB_CD' } },
+{ type:'replace_values', data:{ column:'status', scope:'value', find:'Shipped', replace:'ABXCD' } },
+{ type:'filter', data:{ column:'status', mode:'operator', operator:'contains', value:'AB_CD' } },
+] },
+{ label:'export — pivot has no __rid', kind:'export', steps:[{ type:'pivot', data:{ onColumn:'region', valueColumn:'quantity', fn:'sum', groupColumns:[] } }] },
+{ label:'export — unpivot has no __rid', kind:'export', steps:[{ type:'unpivot', data:{ columns:['quantity','unit_price'], nameColumn:'Attribute', valueColumn:'Value' } }] },
+{ label:'export — split-to-rows has no __rid', kind:'export', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', keepOriginal:false } }] },
+{ label:'export — join has no __rid', kind:'export', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left' } }] },
+];
+
+async function selftestEnsureJoinSource(duckEngine, aqEngine){
+if (dataState.secondarySources.some(s => s.id === 'selftest_region')) return;
+const csvText = SELFTEST_JOIN_CSV;
+const buffer = new TextEncoder().encode(csvText);
+await duckEngine.loadSecondarySource('selftest_region', { format:'csv', fileName:'selftest_region.csv', buffer, csvText, firstRowHeader:true, skipRows:0 });
+await aqEngine.loadSecondarySource('selftest_region', { format:'csv', fileName:'selftest_region.csv', buffer, csvText, firstRowHeader:true, skipRows:0 });
+dataState.secondarySources.push({ id:'selftest_region', name:'selftest_region.csv', format:'csv', rowCount:5, columns:[] });
+}
+
+async function selfTestDuckDBResult(steps){
+try {
+const compiled = await compilePipeline(steps, steps.length - 1);
+if (compiled.error) return { error: `step ${compiled.errorIndex + 1}: ${compiled.error}` };
+const sql = compiled.sql;
+const physicalCols = await getColumns(sql);
+const cols = physicalCols.filter(c => c.name !== RID);
+const selectList = cols.map(c => q(c.name)).join(', ') || 'NULL';
+const res = await dataState.conn.query(`SELECT ${selectList} FROM (${sql})`);
+const { rows } = extractRows(res);
+return { columns: cols, rows };
+} catch(e){
+return { error: e.message || String(e) };
+}
+}
+
+async function selfTestArqueroResult(steps){
+try {
+const compiled = await compileAq(steps, steps.length - 1);
+if (compiled.error) return { error: `step ${compiled.errorIndex + 1}: ${compiled.error}` };
+const table = compiled.table;
+if (!table) return { columns: [], rows: [] };
+const names = table.columnNames().filter(n => n !== RID);
+const arrays = names.map(name => table.array(name));
+const n = table.numRows();
+const rows = new Array(n);
+for (let i=0; i<n; i++){
+rows[i] = arrays.map(arr => { const v = arr[i]; return v === undefined ? null : v; });
+}
+return { columns: names.map(name => ({ name, type: inferType(table, name) })), rows };
+} catch(e){
+return { error: e.message || String(e) };
+}
+}
+
+function selfTestNormalizeCell(v){
+if (v === null || v === undefined) return null;
+if (typeof v === 'bigint') return Number(v);
+if (v instanceof Date) return isNaN(v) ? null : v.toISOString().slice(0,19);
+if (typeof v === 'number') return Number.isFinite(v) ? Math.round(v * 1e4) / 1e4 : null;
+if (typeof v === 'boolean') return v;
+return String(v);
+}
+function selfTestRowsSorted(rows){
+return rows.map(r => JSON.stringify(r.map(selfTestNormalizeCell))).sort();
+}
+
+async function runSelfTestParityCase(def, duckEngine, aqEngine){
+if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
+const duck = await selfTestDuckDBResult(def.steps);
+const aq = await selfTestArqueroResult(def.steps);
+if (duck.error || aq.error){
+return { label: def.label, pass:false, reason: duck.error ? `DuckDB error — ${duck.error}` : `Arquero error — ${aq.error}` };
+}
+const duckNames = duck.columns.map(c => c.name);
+const aqNames = aq.columns.map(c => c.name);
+if (duckNames.length !== aqNames.length || duckNames.some((n,i) => n !== aqNames[i])){
+return { label: def.label, pass:false, reason:'Column name or order mismatch', firstDiffRow: { duckdbColumns: duckNames, arqueroColumns: aqNames } };
+}
+if (duck.rows.length !== aq.rows.length){
+return { label: def.label, pass:false, reason:`Row count mismatch — DuckDB ${duck.rows.length} rows vs Arquero ${aq.rows.length} rows`, firstDiffRow: { duckdbFirstRow: duck.rows[0] ?? null, arqueroFirstRow: aq.rows[0] ?? null } };
+}
+const duckSorted = selfTestRowsSorted(duck.rows);
+const aqSorted = selfTestRowsSorted(aq.rows);
+for (let i=0; i<duckSorted.length; i++){
+if (duckSorted[i] !== aqSorted[i]){
+return { label: def.label, pass:false, reason:'Row values differ between engines', firstDiffRow: { columns: duckNames, duckdb: JSON.parse(duckSorted[i]), arquero: JSON.parse(aqSorted[i]) } };
+}
+}
+return { label: def.label, pass:true };
+}
+
+async function runSelfTestExportCheck(def, duckEngine, aqEngine){
+if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
+try {
+const plan = await duckEngine.compile(def.steps, def.steps.length - 1);
+if (plan.error) return { label: def.label, pass:false, reason: `DuckDB error — ${plan.error}` };
+const blob = await duckEngine.export(plan, 'csv');
+const text = await blob.text();
+const header = text.split(/\r?\n/, 1)[0] || '';
+const cols = header.split(',').map(c => c.replace(/^"|"$/g,''));
+if (cols.includes(RID)){
+return { label: def.label, pass:false, reason:'__rid column present in exported CSV header', firstDiffRow: { header } };
+}
+return { label: def.label, pass:true };
+} catch(e){
+return { label: def.label, pass:false, reason: e.message || String(e) };
+}
+}
+
+function selfTestPanelEl(){
+let panel = document.getElementById('selftestPanel');
+if (!panel){
+panel = el('div', { id:'selftestPanel', style:'position:fixed;inset:0;z-index:9999;background:var(--ink-0);color:var(--paper);overflow-y:auto;padding:32px;font-family:var(--font-mono);' });
+document.body.appendChild(panel);
+}
+return panel;
+}
+function renderSelfTestResults(results, statusLine){
+const panel = selfTestPanelEl();
+panel.textContent = '';
+panel.appendChild(el('h1', { style:'font-family:var(--font-display);font-weight:500;font-size:22px;margin:0 0 4px;' }, 'Duckbench self-test'));
+panel.appendChild(el('div', { style:'color:var(--paper-dim);font-size:12.5px;margin-bottom:20px;' }, statusLine));
+const list = el('div', { style:'display:flex;flex-direction:column;gap:8px;max-width:920px;' });
+results.forEach(r => {
+const badge = r.pending ? { text:'RUNNING', style:'color:var(--paper-dim);background:var(--ink-2);' }
+: r.pass ? { text:'PASS', style:'color:var(--verdigris-text);background:rgba(var(--verdigris-rgb),0.14);' }
+: { text:'FAIL', style:'color:var(--rust-text);background:rgba(var(--rust-rgb),0.14);' };
+const row = el('div', { style:'border:1px solid var(--line-soft);border-radius:var(--radius-m);padding:10px 14px;background:var(--ink-1);' },
+el('div', { style:'display:flex;justify-content:space-between;gap:12px;align-items:center;' },
+el('span', { style:'color:var(--paper);font-size:13px;' }, r.label),
+el('span', { style:`font-size:11px;letter-spacing:0.04em;padding:2px 8px;border-radius:20px;${badge.style}` }, badge.text),
+),
+);
+if (!r.pending && !r.pass){
+row.appendChild(el('div', { style:'margin-top:6px;font-size:12px;color:var(--rust-text);' }, r.reason || ''));
+if (r.firstDiffRow){
+row.appendChild(el('pre', { style:'margin-top:6px;font-size:11px;color:var(--paper-dim);white-space:pre-wrap;word-break:break-word;' }, JSON.stringify(r.firstDiffRow, null, 2)));
+}
+}
+list.appendChild(row);
+});
+panel.appendChild(list);
+}
+
+async function runSelfTest(){
+const results = SELFTEST_CASES.map(c => ({ label: c.label, pending:true }));
+renderSelfTestResults(results, 'Loading DuckDB…');
+const duckEngine = createEngine('duckdb');
+const aqEngine = createEngine('arquero');
+try {
+await duckEngine.init();
+const buffer = new TextEncoder().encode(SAMPLE_SALES_CSV);
+await duckEngine.loadFile({ format:'csv', fileName:'sample.csv', buffer, firstRowHeader:true, skipRows:0 });
+dataState.hasSource = true;
+} catch(e){
+renderSelfTestResults(results, `Could not load DuckDB — ${e.message || e}`);
+return;
+}
+renderSelfTestResults(results, 'Loading Arquero…');
+try {
+await aqEngine.loadFile({ format:'csv', csvText: SAMPLE_SALES_CSV, fileName:'sample.csv', firstRowHeader:true, skipRows:0 });
+} catch(e){
+renderSelfTestResults(results, `Could not load Arquero — ${e.message || e}`);
+return;
+}
+for (let i=0; i<SELFTEST_CASES.length; i++){
+renderSelfTestResults(results, `Running case ${i + 1} of ${SELFTEST_CASES.length}…`);
+try {
+results[i] = SELFTEST_CASES[i].kind === 'export'
+? await runSelfTestExportCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
+: await runSelfTestParityCase(SELFTEST_CASES[i], duckEngine, aqEngine);
+} catch(e){
+results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error — ${e.message || e}` };
+}
+}
+const passed = results.filter(r => r.pass).length;
+renderSelfTestResults(results, `${passed} / ${results.length} passing`);
+}
+
 async function init(){
+if (new URLSearchParams(location.search).has('selftest')){
+await runSelfTest();
+return;
+}
 wireStaticUI();
 renderRibbon();
 updateVersionUI();
