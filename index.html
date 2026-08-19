@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com; connect-src 'self' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com https://registry.npmjs.org; worker-src 'self' blob: https://cdn.jsdelivr.net;">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Duckbench</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImR1Y2tiZW5jaCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTUiIGZpbGw9IiNGRTYxNjQiLz4KICA8ZyBmaWxsPSIjRjJGMkYzIj4KICAgIDxyZWN0IHg9IjgiIHk9IjQyIiB3aWR0aD0iOSIgaGVpZ2h0PSIxMiIgcng9IjQuNSIvPgogICAgPHJlY3QgeD0iMjEiIHk9IjM0IiB3aWR0aD0iOSIgaGVpZ2h0PSIyMCIgcng9IjQuNSIvPgogICAgPHBhdGggZD0iTTM0IDQ5LjUKICAgICAgICAgICAgIFYzMC41CiAgICAgICAgICAgICBBMTAuNSAxMC41IDAgMSAxIDQ4LjQgMTcuNAogICAgICAgICAgICAgTDU2IDE4LjYKICAgICAgICAgICAgIFE1OC42IDIxIDU1LjcgMjMuNgogICAgICAgICAgICAgTDQ3LjYgMjYuMwogICAgICAgICAgICAgQTEwLjUgMTAuNSAwIDAgMSA0MyAzMC41CiAgICAgICAgICAgICBWNDkuNQogICAgICAgICAgICAgQTQuNSA0LjUgMCAwIDEgMzQgNDkuNQogICAgICAgICAgICAgWiIvPgogIDwvZz4KICA8Y2lyY2xlIGN4PSI0MyIgY3k9IjE3IiByPSIzIiBmaWxsPSIjRkU2MTY0Ii8+Cjwvc3ZnPgo=">
@@ -580,6 +581,7 @@ input,select,textarea{font-family:inherit;}
 .btn-ghost:hover{border-color:var(--paper-dim);color:var(--paper);background:rgba(var(--paper-rgb),0.04);}
 .btn-ghost:active{transform:scale(0.96);}
 .btn-ghost:disabled{opacity:0.4;cursor:default;}
+.btn-ghost.is-active{border-color:var(--brass);color:var(--paper);background:rgba(var(--brass-rgb),0.12);}
 .btn-solid{background:var(--brass);border:1px solid var(--brass);color:var(--ink-0);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.15),0 3px 10px -2px rgba(var(--brass-rgb),0.4);}
 .btn-solid:hover{background:var(--brass-bright);border-color:var(--brass-bright);box-shadow:0 2px 4px rgba(0,0,0,0.18),0 5px 16px -2px rgba(var(--brass-rgb),0.5);transform:translateY(-1px);}
 .btn-solid:active{transform:translateY(0) scale(0.97);}
@@ -615,6 +617,8 @@ input,select,textarea{font-family:inherit;}
   position:relative;overflow:hidden;
 }
 .grid-scroll{flex:1;min-height:0;overflow:auto;position:relative;}
+.grid-error-banner{position:absolute;left:0;right:0;top:0;z-index:8;padding:10px 16px;background:rgba(var(--rust-rgb),0.14);border-bottom:1px solid rgba(var(--rust-rgb),0.4);color:var(--rust-text);font-size:12.5px;}
+.grid-error-banner strong{display:block;font-family:var(--font-display);font-weight:500;font-size:13px;margin-bottom:2px;color:var(--rust-text);}
 .preview-table{
   border-collapse:separate;border-spacing:0;width:100%;font-size:12.5px;
   font-variant-numeric:tabular-nums;color:var(--grid-ink);
@@ -1179,7 +1183,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
           </div>
           <div class="toolbar-actions">
             <span id="rowCountLabel" class="row-count-label"></span>
-            <button id="qualityToggleBtn" class="btn-ghost btn-small" title="Show the valid/empty ratio under each column, like Power Query's Column Quality view">Column quality</button>
+            <button id="qualityToggleBtn" class="btn-ghost btn-small" title="Show the valid/empty ratio under each column, sampled from the previewed rows — like Power Query's Column Quality view">Column quality (sampled)</button>
             <div class="dropdown-menu-btn">
               <button id="exportBtn" class="btn-solid btn-small">Export ▾</button>
               <div id="exportMenu" class="export-menu" hidden>
@@ -1210,6 +1214,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
             <div class="grid-skeleton-row"></div>
           </div>
           <div class="grid-shell">
+            <div id="gridErrorBanner" class="grid-error-banner" hidden></div>
             <div class="grid-scroll" id="gridScroll" tabindex="0">
               <table id="previewTable" class="preview-table">
                 <thead><tr></tr></thead>
@@ -1659,17 +1664,24 @@ async function trackBundleDownloadProgress(url, version){
 try {
 const res = await fetch(url);
 const total = Number(res.headers.get('content-length')) || 0;
-if (!total || total < 5_000_000 || !res.body){ return; }
+if (!total || total < 5_000_000 || !res.body){
+const buf = await res.arrayBuffer();
+return URL.createObjectURL(new Blob([buf]));
+}
 const reader = res.body.getReader();
+const chunks = [];
 let received = 0;
 while (true){
 const { done, value } = await reader.read();
 if (done) break;
+chunks.push(value);
 received += value.length;
-if (dataState.duckdbVersion === version) break;
 setEngineStatus('loading', `fetching duckdb-wasm@${version}… ${Math.round(received/total*100)}%`);
 }
-} catch(e){}
+return URL.createObjectURL(new Blob(chunks));
+} catch(e){
+return url;
+}
 }
 async function loadDuckDB(version){
   const bad = denylistReason(version);
@@ -1678,13 +1690,14 @@ async function loadDuckDB(version){
   const duckdb = await import( `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${version}/+esm`);
   const bundles = duckdb.getJsDelivrBundles();
   const bundle = await duckdb.selectBundle(bundles);
-  trackBundleDownloadProgress(bundle.mainModule, version);
+  const moduleUrl = await trackBundleDownloadProgress(bundle.mainModule, version);
   const workerUrl = URL.createObjectURL(new Blob([`importScripts(${JSON.stringify(bundle.mainWorker)});`], { type:'text/javascript' }));
   const worker = new Worker(workerUrl);
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel ? duckdb.LogLevel.WARNING : undefined);
   const db = new duckdb.AsyncDuckDB(logger, worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  await db.instantiate(moduleUrl, bundle.pthreadWorker);
   URL.revokeObjectURL(workerUrl);
+  if (moduleUrl !== bundle.mainModule) URL.revokeObjectURL(moduleUrl);
   await db.open({ query: { castTimestampToDate: true } });
   const conn = await db.connect();
   if (dataState.conn) { try { await dataState.conn.close(); } catch {} }
@@ -1771,7 +1784,7 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
     let data = step.data;
     const columnNames = richColumns.map(c=>c.name);
     try {
-      if (t.resolve && !data.__resolved){
+      if (t.resolve){
         data = await t.resolve(data, from, { queryOne: queryOneRaw, columns: columnNames, hasRid });
       }
       const ctx = { columns: columnNames, columnsMeta: richColumns, hasRid, q, esc, lit: sqlLiteral };
@@ -2443,21 +2456,22 @@ const TRANSFORMS = {
     preservesIdentity: false,
     params:[
       { key:'columns', type:'columns', label:'Match on (leave empty for whole row)', default:()=>[] },
+      { key:'orderBy', type:'columnOptional', label:'Keep the row with the lowest', default:'' },
     ],
     toSQL(d, from, ctx){
       const keyCols = d.columns?.length ? d.columns : ctx.columns.filter(c=>c!==RID);
       const keyList = colList(keyCols);
-      if (ctx.hasRid){
-        return `SELECT * EXCLUDE (${q(RID)}) FROM (${from}) QUALIFY ROW_NUMBER() OVER (PARTITION BY ${keyList} ORDER BY ${q(RID)}) = 1`;
-      }
-      return `SELECT * FROM (${from}) QUALIFY ROW_NUMBER() OVER (PARTITION BY ${keyList} ORDER BY ${keyList}) = 1`;
+      const orderExpr = d.orderBy ? q(d.orderBy) : (ctx.hasRid ? q(RID) : keyList);
+      const select = ctx.hasRid ? `SELECT * EXCLUDE (${q(RID)})` : `SELECT *`;
+      return `${select} FROM (${from}) QUALIFY ROW_NUMBER() OVER (PARTITION BY ${keyList} ORDER BY ${orderExpr}) = 1`;
     },
     summary(d){ return d.columns?.length ? `match on ${d.columns.join(', ')}` : 'whole row'; },
     engines: ['duckdb','arquero'],
     toAq(d, table, ctx){
       const { aq } = ctx;
       const keyCols = d.columns?.length ? d.columns : ctx.columns.filter(c=>c!==RID);
-      let t = ctx.hasRid ? table.orderby(RID) : table;
+      const orderCol = d.orderBy || (ctx.hasRid ? RID : null);
+      let t = orderCol ? table.orderby(orderCol) : table;
       t = t.dedupe(...keyCols);
       return ctx.hasRid ? t.select(aq.not(RID)) : t;
     },
@@ -2772,7 +2786,7 @@ Object.assign(TRANSFORMS, {
       const delim = esc(d.delimiter);
       if (d.mode==='rows'){
         const base = d.keepOriginal ? `*, ` : `* EXCLUDE (${col}), `;
-        return `SELECT ${base}UNNEST(STRING_SPLIT(${col}, ${delim})) AS ${col} FROM (${from})`;
+        return `SELECT ${base}UNNEST(COALESCE(STRING_SPLIT(${col}, ${delim}), [CAST(NULL AS VARCHAR)])) AS ${col} FROM (${from})`;
       }
       const n = clamp(Number(d.maxParts)||4, 1, 20);
       const parts = Array.from({length:n}, (_,i)=>{
@@ -2886,8 +2900,7 @@ Object.assign(TRANSFORMS, {
         if (s == null) return null;
         let re; try { re = new RegExp(pattern); } catch { return null; }
         const m = String(s).match(re);
-        if (!m) return null;
-        return m.length > 1 ? (m[1] ?? null) : m[0];
+        return m ? m[0] : null;
       } : mode === 'before' ? (s) => {
         if (s == null) return null;
         const str = String(s);
@@ -3018,13 +3031,14 @@ Object.assign(TRANSFORMS, {
       { key:'columns', type:'columns', label:'Columns', default:()=>[] },
       { key:'direction', type:'enum', label:'Direction', default:'down',
         options:[{value:'down',label:'Fill down (copy from above)'},{value:'up',label:'Fill up (copy from below)'}] },
+      { key:'orderBy', type:'columnOptional', label:'Order by', default:'' },
     ],
     validate(d){ return d.columns?.length ? null : 'Pick at least one column.'; },
     toSQL(d, from, ctx){
-      const order = ctx.hasRid ? q(RID) : null;
+      const orderExpr = d.orderBy ? q(d.orderBy) : (ctx.hasRid ? q(RID) : null);
       const rep = d.columns.map(c => {
-        const win = order
-          ? `OVER (ORDER BY ${order} ${d.direction==='up'?'DESC':'ASC'} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+        const win = orderExpr
+          ? `OVER (ORDER BY ${orderExpr} ${d.direction==='up'?'DESC':'ASC'} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
           : `OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`;
         return `COALESCE(${q(c)}, LAST_VALUE(${q(c)} IGNORE NULLS) ${win}) AS ${q(c)}`;
       }).join(', ');
@@ -3034,8 +3048,8 @@ Object.assign(TRANSFORMS, {
     engines: ['duckdb','arquero'],
     toAq(d, table, ctx){
       const { aq } = ctx;
-      const hasRid = ctx.hasRid;
-      const base = hasRid ? table.orderby(RID) : table;
+      const orderCol = d.orderBy || (ctx.hasRid ? RID : null);
+      const base = orderCol ? table.orderby(orderCol) : table;
       const derived = {};
       d.columns.forEach(c => {
         let arr = Array.from(base.array(c));
@@ -3991,12 +4005,25 @@ const a = el('a', { href:url, download:filename });
 document.body.appendChild(a); a.click(); a.remove();
 setTimeout(()=>URL.revokeObjectURL(url), 4000);
 }
+function setExportBusy(isBusy){
+const btn = $('#exportBtn');
+if (!btn) return;
+if (isBusy){
+if (!btn.dataset.originalLabel) btn.dataset.originalLabel = btn.textContent;
+btn.disabled = true;
+btn.textContent = 'Exporting…';
+} else {
+btn.disabled = false;
+if (btn.dataset.originalLabel) btn.textContent = btn.dataset.originalLabel;
+}
+}
 async function exportData(format){
 const steps = dataState.steps;
 const plan = await dataState.engine.compile(steps, steps.length-1);
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
 const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
 const ext = format==='parquet'?'parquet':format==='csv'?'csv':format==='json'?'json':format==='jsonl'?'jsonl':'xlsx';
+setExportBusy(true);
 try {
 const blob = await dataState.engine.export(plan, format);
 downloadBlob(blob, `${baseName}.${ext}`);
@@ -4007,6 +4034,8 @@ else if (format === 'jsonl') toast('JSONL file downloaded.');
 else toast(blob.truncated ? "Excel file downloaded — truncated to 1,048,575 rows (Excel's limit). Use CSV or Parquet for the full data." : 'Excel file downloaded.');
 } catch(e){
 toast(`Export failed: ${e.message}`);
+} finally {
+setExportBusy(false);
 }
 }
 async function copyTextToClipboard(text, successMsg){
@@ -4079,6 +4108,7 @@ await runCustomCsvExport(chosenCols, limit, nullInput.value);
 async function runCustomCsvExport(cols, limit, nullStr){
 const plan = await dataState.engine.compile(dataState.steps, dataState.steps.length-1);
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
+setExportBusy(true);
 try {
 const blob = await dataState.engine.exportCustomCsv(plan, cols, limit, nullStr);
 const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
@@ -4086,6 +4116,8 @@ downloadBlob(blob, `${baseName}.csv`);
 toast('CSV file downloaded.');
 } catch(e){
 toast(`Export failed: ${e.message}`);
+} finally {
+setExportBusy(false);
 }
 }
 async function openPipelinesDialog(){
@@ -4327,6 +4359,7 @@ const columnsKey = (columns) => columns.map(c=>c.name+'\u0000'+c.type).join('\u0
 function renderGrid(preview){
 $('#gridSkeleton').hidden = true;
 $('#previewEmpty').hidden = true;
+$('#gridErrorBanner').hidden = true;
 $('.grid-shell')?.removeAttribute('hidden');
 const table = $('#previewTable');
 const filteredCols = activeFilterColumns();
@@ -4475,6 +4508,9 @@ const colIdx = lastPreview ? lastPreview.columns.findIndex(c=>c.name===colName) 
 const raw = (lastPreview && colIdx>=0 && lastPreview.rows[rowIndex]) ? lastPreview.rows[rowIndex][colIdx] : null;
 return { colName, rid, raw };
 }
+function qualityTitle(validPct, totalRows){
+return `${validPct}% valid — sampled from ${totalRows.toLocaleString()} previewed row${totalRows===1?'':'s'}, not the full result`;
+}
 function updateHeaderCellStats(th, isFiltered, nullCount, totalRows){
 if (!th) return;
 const validPct = totalRows ? Math.round(((totalRows-nullCount)/totalRows)*100) : 100;
@@ -4482,10 +4518,12 @@ const dot = th.querySelector('.th-filter-dot');
 const nameWrap = th.querySelector('.th-name-wrap');
 if (isFiltered && !dot) nameWrap.appendChild(el('span',{class:'th-filter-dot', title:'A filter step targets this column'}));
 if (!isFiltered && dot) dot.remove();
+const quality = th.querySelector('.th-quality');
 const valid = th.querySelector('.th-quality-valid');
 const empty = th.querySelector('.th-quality-empty');
 if (valid) valid.style.width = `${validPct}%`;
 if (empty) empty.style.width = `${100-validPct}%`;
+if (quality) quality.setAttribute('title', qualityTitle(validPct, totalRows));
 }
 function buildHeaderCell(col, isFiltered, nullCount, totalRows){
 const validPct = totalRows ? Math.round(((totalRows-nullCount)/totalRows)*100) : 100;
@@ -4501,7 +4539,7 @@ isFiltered ? el('span',{class:'th-filter-dot', title:'A filter step targets this
 ),
 badge,
 ),
-el('div',{class:'th-quality'}, el('div',{class:'th-quality-valid', style:`width:${validPct}%`}), el('div',{class:'th-quality-empty', style:`width:${100-validPct}%`})),
+el('div',{class:'th-quality', title:qualityTitle(validPct, totalRows)}, el('div',{class:'th-quality-valid', style:`width:${validPct}%`}), el('div',{class:'th-quality-empty', style:`width:${100-validPct}%`})),
 );
 th.appendChild(inner);
 inner.addEventListener('click', (e) => {
@@ -4581,12 +4619,19 @@ td.textContent = typeof formatted === 'string' && isNumericType(col.type) ? form
 }
 function renderGridError({ error, errorIndex }){
 $('#gridSkeleton').hidden = true;
+const banner = $('#gridErrorBanner');
+banner.hidden = false;
+banner.innerHTML = '';
+banner.appendChild(el('strong',{}, (errorIndex!=null && errorIndex>=0) ? `Step ${errorIndex+1} has a problem` : 'This step has a problem'));
+banner.appendChild(el('span',{}, error));
+if (!lastPreview){
 $('.grid-shell')?.setAttribute('hidden','');
 const box = $('#previewEmpty');
 box.hidden = false;
 box.innerHTML = '';
 box.appendChild(el('strong',{}, (errorIndex!=null && errorIndex>=0) ? `Step ${errorIndex+1} has a problem` : 'This step has a problem'));
 box.appendChild(el('span',{}, error));
+}
 }
 function renderRowCountLabel(preview){
 const targets = [$('#sbRows'), $('#rowCountLabel')].filter(Boolean);
@@ -5408,6 +5453,13 @@ const sel = el('select',{ 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.ta
 ...cols.map(c=>el('option',{value:c.name, selected: data[p.key]===c.name?true:null}, c.name)));
 return wrap(sel);
 }
+if (p.type === 'columnOptional'){
+if (resolving) return wrap(el('div',{class:'field-skeleton', 'data-field-key':p.key}));
+const sel = el('select',{ 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.target.value; fire(); } },
+el('option',{value:'', selected: !data[p.key]?true:null}, '— original order —'),
+...cols.map(c=>el('option',{value:c.name, selected: data[p.key]===c.name?true:null}, c.name)));
+return wrap(sel);
+}
 if (p.type === 'rightColumn'){
 const src = dataState.secondarySources.find(s=>s.id===data.rightSource);
 const rightCols = src ? src.columns : [];
@@ -6166,6 +6218,7 @@ const SELFTEST_CASES = [
 { label:'filter — contains', steps:[{ type:'filter', data:{ column:'status', mode:'operator', operator:'contains', value:'e' } }] },
 { label:'sort', steps:[{ type:'sort', data:{ column:'unit_price', direction:'desc', nullsLast:true } }] },
 { label:'remove_duplicates', steps:[{ type:'remove_duplicates', data:{ columns:[] } }] },
+{ label:'remove_duplicates — explicit orderBy', steps:[{ type:'remove_duplicates', data:{ columns:['product'], orderBy:'unit_price' } }] },
 { label:'remove_blank_rows', steps:[{ type:'remove_blank_rows', data:{} }] },
 { label:'promote_headers', steps:[{ type:'promote_headers', data:{} }] },
 { label:'index_column', steps:[{ type:'index_column', data:{ name:'idx', start:1 } }] },
@@ -6183,6 +6236,7 @@ const SELFTEST_CASES = [
 { label:'change_case', steps:[{ type:'change_case', data:{ columns:['category'], mode:'upper' } }] },
 { label:'trim_clean', steps:[{ type:'trim_clean', data:{ columns:['customer'] } }] },
 { label:'fill', steps:[{ type:'fill', data:{ columns:['discount'], direction:'down' } }] },
+{ label:'fill — explicit orderBy', steps:[{ type:'fill', data:{ columns:['discount'], direction:'down', orderBy:'unit_price' } }] },
 { label:'rank', steps:[{ type:'rank', data:{ column:'unit_price', direction:'desc', mode:'rank', name:'price_rank', partitionBy:[] } }] },
 { label:'running_total', steps:[{ type:'running_total', data:{ column:'quantity', orderBy:'order_id', name:'running_qty', partitionBy:[] } }] },
 { label:'group_by', steps:[{ type:'group_by', data:{ groupColumns:['region'], aggregations:[{fn:'sum',column:'quantity',name:'total_qty'},{fn:'count',column:'',name:'n'}] } }] },
