@@ -3475,6 +3475,9 @@ function createArqueroEngine(){
       }
       return { columns: cols, rows, hasMore, ridIndex: hasRidCol ? cols.length : -1, ms: performance.now()-t0 };
     },
+    async skippedRows(){
+      return [];
+    },
     async count(plan){
       const table = tableOf(plan);
       return table ? table.numRows() : 0;
