@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com; connect-src 'self' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com https://registry.npmjs.org; worker-src 'self' blob: https://cdn.jsdelivr.net;">
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com; connect-src 'self' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com https://registry.npmjs.org; worker-src 'self' blob: https://cdn.jsdelivr.net;">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Duckbench</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImR1Y2tiZW5jaCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTUiIGZpbGw9IiNGRTYxNjQiLz4KICA8ZyBmaWxsPSIjRjJGMkYzIj4KICAgIDxyZWN0IHg9IjgiIHk9IjQyIiB3aWR0aD0iOSIgaGVpZ2h0PSIxMiIgcng9IjQuNSIvPgogICAgPHJlY3QgeD0iMjEiIHk9IjM0IiB3aWR0aD0iOSIgaGVpZ2h0PSIyMCIgcng9IjQuNSIvPgogICAgPHBhdGggZD0iTTM0IDQ5LjUKICAgICAgICAgICAgIFYzMC41CiAgICAgICAgICAgICBBMTAuNSAxMC41IDAgMSAxIDQ4LjQgMTcuNAogICAgICAgICAgICAgTDU2IDE4LjYKICAgICAgICAgICAgIFE1OC42IDIxIDU1LjcgMjMuNgogICAgICAgICAgICAgTDQ3LjYgMjYuMwogICAgICAgICAgICAgQTEwLjUgMTAuNSAwIDAgMSA0MyAzMC41CiAgICAgICAgICAgICBWNDkuNQogICAgICAgICAgICAgQTQuNSA0LjUgMCAwIDEgMzQgNDkuNQogICAgICAgICAgICAgWiIvPgogIDwvZz4KICA8Y2lyY2xlIGN4PSI0MyIgY3k9IjE3IiByPSIzIiBmaWxsPSIjRkU2MTY0Ii8+Cjwvc3ZnPgo=">
@@ -674,7 +674,6 @@ tr.is-row-selected .row-gutter{background:rgba(var(--brass-rgb),0.06);box-shadow
 .th-type-badge.t-bool{color:var(--plum-text);background:rgba(var(--plum-rgb),0.1);}
 :root[data-theme="light"] .th-type-badge{filter:none;}
 .th-filter-dot{width:5px;height:5px;border-radius:50%;background:var(--brass-bright);flex-shrink:0;}
-.th-key-badge{display:flex;align-items:center;color:var(--brass);flex-shrink:0;}
 .th-quality{
   height:3px;border-radius:2px;overflow:hidden;display:flex;background:rgba(var(--grid-ink-rgb),0.08);
 }
@@ -981,7 +980,6 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
 }
 .confirm-box p{margin:0;font-size:13.5px;color:var(--paper-dim);line-height:1.6;}
 .confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
-.version-box{width:420px;}
 .drawer-error{
   padding:12px 14px;border-radius:var(--radius-s);background:rgba(var(--rust-rgb),0.12);
   border:1px solid rgba(var(--rust-rgb),0.35);color:var(--rust-text);font-size:12.5px;line-height:1.55;
@@ -1353,9 +1351,6 @@ const el = (tag, attrs={}, ...kids) => {
 const uid = (() => { let n = 0; return (p='id') => `${p}${(++n).toString(36)}${Math.random().toString(36).slice(2,6)}`; })();
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 const clamp = (v,a,b) => Math.max(a, Math.min(b,v));
-const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-const CHECK = { chk:`<svg viewBox="0 0 24 24" fill="none" width="12" height="12"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` };
 
 const ModalStack = {
   stack: [],
@@ -1707,7 +1702,7 @@ const res = await fetch(url);
 const total = Number(res.headers.get('content-length')) || 0;
 if (!total || total < 5_000_000 || !res.body){
 const buf = await res.arrayBuffer();
-return URL.createObjectURL(new Blob([buf]));
+return URL.createObjectURL(new Blob([buf], { type: 'application/wasm' }));
 }
 const reader = res.body.getReader();
 const chunks = [];
@@ -1719,7 +1714,7 @@ chunks.push(value);
 received += value.length;
 setEngineStatus('loading', `fetching duckdb-wasm@${version}… ${Math.round(received/total*100)}%`);
 }
-return URL.createObjectURL(new Blob(chunks));
+return URL.createObjectURL(new Blob(chunks, { type: 'application/wasm' }));
 } catch(e){
 return url;
 }
@@ -1743,6 +1738,9 @@ async function loadDuckDB(version){
   if (moduleUrl !== bundle.mainModule) URL.revokeObjectURL(moduleUrl);
   await db.open({ query: { castTimestampToDate: true } });
   const conn = await db.connect();
+  const deviceMemGb = typeof navigator !== 'undefined' && navigator.deviceMemory;
+  const memLimit = deviceMemGb ? `${Math.max(1, Math.floor(deviceMemGb * 0.6))}GB` : '2GB';
+  try { await conn.query(`SET memory_limit='${memLimit}'`); } catch {}
   if (dataState.conn) { try { await dataState.conn.close(); } catch {} }
   if (dataState.db && dataState.db !== db) { try { await dataState.db.terminate(); } catch {} }
   dataState.db = db; dataState.conn = conn; dataState.duckdbVersion = version;
@@ -2086,9 +2084,6 @@ async function buildBatchFileSpec(file){
 }
 async function runBatchFileDuckDB(file, steps){
   const fileSpec = await buildBatchFileSpec(file);
-  if ((fileSpec.format==='excel'||fileSpec.format==='parquet') && dataState.engine.id!=='duckdb'){
-    return { ok:false, error:'Needs Full (DuckDB) mode.' };
-  }
   const tempTable = `batch_${Date.now().toString(36)}${Math.floor(Math.random()*10000)}`;
   await loadSecondaryTableImpl(tempTable, fileSpec);
   try {
@@ -2689,7 +2684,11 @@ Object.assign(TRANSFORMS, {
     seed:(sel)=>({ columns: sel?.column ? [sel.column] : [] }),
     instant: d => Array.isArray(d.columns) && d.columns.length > 0,
     params:[ { key:'columns', type:'columns', label:'Columns to remove', default:()=>[] } ],
-    validate(d){ return d.columns?.length ? null : 'Pick at least one column to remove.'; },
+    validate(d, ctx){
+      if (!d.columns?.length) return 'Pick at least one column to remove.';
+      if (ctx?.columns?.length && d.columns.length >= ctx.columns.length) return 'Can’t remove every column — keep at least one.';
+      return null;
+    },
     toSQL(d, from){
       return `SELECT * EXCLUDE (${colList(d.columns)}) FROM (${from})`;
     },
@@ -3037,13 +3036,18 @@ Object.assign(TRANSFORMS, {
     ribbon:{ tab:'transform', group:'Text', icon:'case', size:'small' },
     context:{ header:true, order:60 },
     preservesIdentity: true,
+    columnsUnchanged: true,
     seed:(sel)=>({ columns: sel?.column ? [sel.column] : [] }),
     params:[
       { key:'columns', type:'columns', label:'Columns', default:()=>[] },
       { key:'mode', type:'enum', label:'Case', default:'upper',
         options:[{value:'upper',label:'UPPERCASE'},{value:'lower',label:'lowercase'},{value:'title',label:'Title Case'}] },
     ],
-    validate(d){ return d.columns?.length ? null : 'Pick at least one column.'; },
+    validate(d){
+      if (!d.columns?.length) return 'Pick at least one column.';
+      const bad = d.columns.find(c => { const meta = dataState.currentColumns.find(cc=>cc.name===c); return meta && (isNumericType(meta.type) || isBoolType(meta.type) || isDateType(meta.type)); });
+      return bad ? `“${bad}” isn’t a text column — change case only applies to text.` : null;
+    },
     toSQL(d, from){
       const exprFor = (c) => {
         if (d.mode==='upper') return `upper(${q(c)})`;
@@ -3070,6 +3074,7 @@ Object.assign(TRANSFORMS, {
     ribbon:{ tab:'transform', group:'Text', icon:'trim', size:'small' },
     context:{ header:true, order:70 },
     preservesIdentity: true,
+    columnsUnchanged: true,
     seed:(sel)=>({ columns: sel?.column ? [sel.column] : [] }),
     instant: d => Array.isArray(d.columns) && d.columns.length > 0,
     params:[ { key:'columns', type:'columns', label:'Columns', default:()=>[] } ],
@@ -3101,6 +3106,7 @@ Object.assign(TRANSFORMS, {
     label:'Fill down / up', category:'column', code:'FIL',
     ribbon:{ tab:'transform', group:'Values', icon:'arrow-down-up', size:'large' },
     preservesIdentity: true,
+    columnsUnchanged: true,
     params:[
       { key:'columns', type:'columns', label:'Columns', default:()=>[] },
       { key:'direction', type:'enum', label:'Direction', default:'down',
@@ -3240,6 +3246,12 @@ Object.assign(TRANSFORMS, {
       if (!d.groupColumns?.length) return 'Pick at least one column to group by.';
       if (!d.aggregations?.length) return 'Add at least one calculation.';
       for (const a of d.aggregations) if (a.fn !== 'count' && !a.column) return 'Every calculation except “Count rows” needs a column.';
+      const names = [...d.groupColumns];
+      for (const a of d.aggregations){
+        const name = a.name?.trim() || (a.fn==='count' ? 'Count' : `${a.fn}_${a.column}`);
+        if (names.includes(name)) return `“${name}” is used more than once — give each result a unique name.`;
+        names.push(name);
+      }
       return null;
     },
     toSQL(d, from){
@@ -3724,7 +3736,6 @@ const uiState = {
   ribbonTab: 'home',
   showQuality: false,
   theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
-  keyColumn: null,
   activeCell: null,
   focusedColumn: null,
 };
@@ -4642,7 +4653,6 @@ const badge = el('span',{class:`th-type-badge ${typeBadgeClass(col.type)}`, titl
 const inner = el('div',{class:'th-inner'},
 el('div',{class:'th-toprow'},
 el('div',{class:'th-name-wrap'},
-col.name === uiState.keyColumn ? el('span',{class:'th-key-badge', title:'Key column'}, htmlIcon('key',11)) : null,
 nameSpan,
 isFiltered ? el('span',{class:'th-filter-dot', title:'A filter step targets this column'}) : null,
 ),
@@ -4931,15 +4941,8 @@ renderColumnProfileActions(colName);
 }
 function renderColumnProfileActions(colName){
 const box = $('#columnProfile');
-const isKey = uiState.keyColumn === colName;
 box.appendChild(el('div',{class:'cp-actions'},
 el('button',{class:'btn-ghost btn-small', onclick:()=>commitInstantStep('filter', { column:colName, mode:'operator', operator:'is_not_null', value:'' })}, 'Filter empties'),
-el('button',{class:'btn-ghost btn-small', onclick:()=>{
-uiState.keyColumn = isKey ? null : colName;
-toast(isKey ? 'Removed key column.' : `Set “${colName}” as key column.`);
-refreshPreview();
-openColumnProfile(colName);
-}}, isKey ? 'Unset as key' : 'Set as key'),
 el('button',{class:'btn-ghost btn-small', onclick:()=>openInspectorForAdd('change_type', buildDefaultDraft('change_type', { column: colName }))}, 'Change type'),
 ));
 }
@@ -6328,7 +6331,6 @@ openExportOptionsDialog();
 wirePalette();
 const dropZone = $('#dropZone');
 const fileInput = $('#fileInput');
-dropZone.addEventListener('click', (e) => {});
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFileSelected(fileInput.files[0]); });
 ['dragenter','dragover'].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('is-dragover'); }));
 ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove('is-dragover'); }));
@@ -6452,6 +6454,22 @@ const SELFTEST_CASES = [
 { label:'export — split-to-rows has no __rid', kind:'export', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', keepOriginal:false } }] },
 { label:'export — join has no __rid', kind:'export', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left' } }] },
 { label:'export — CSV formula injection guarded', kind:'csv-guard', steps:[{ type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'=1+1' } }] },
+{ label:'export — both engines export CSV without throwing', kind:'export-both', steps:[{ type:'filter', data:{ column:'quantity', mode:'operator', operator:'>', value:'0' } }] },
+{ label:'export — CSV guard preserves numbers but still guards formulas', kind:'csv-guard-preserve', steps:[
+{ type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'-5' } },
+{ type:'replace_values', data:{ column:'status', scope:'value', find:'Shipped', replace:'=1+1' } },
+{ type:'replace_values', data:{ column:'status', scope:'value', find:'Completed', replace:'+1-555-0100' } },
+] },
+{ label:'format — Date values render without raw JS Date string', kind:'format-check' },
+{ label:'combo — fill up after identity loss, no order column', steps:[
+{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', keepOriginal:false } },
+{ type:'fill', data:{ columns:['discount'], direction:'up' } },
+] },
+{ label:'combo — promote_headers after identity loss (remove_duplicates)', steps:[
+{ type:'remove_duplicates', data:{ columns:['region'] } },
+{ type:'promote_headers', data:{} },
+] },
+{ label:'split_column — rows with keepOriginal', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', keepOriginal:true } }] },
 ];
 
 async function selftestEnsureJoinSource(duckEngine, aqEngine){
@@ -6568,6 +6586,56 @@ return { label: def.label, pass:true };
 return { label: def.label, pass:false, reason: e.message || String(e) };
 }
 }
+async function runSelfTestExportBothCheck(def, duckEngine, aqEngine){
+if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
+try {
+const duckPlan = await duckEngine.compile(def.steps, def.steps.length - 1);
+if (duckPlan.error) return { label: def.label, pass:false, reason:`DuckDB error — ${duckPlan.error}` };
+const duckText = await (await duckEngine.export(duckPlan, 'csv')).text();
+const aqPlan = await aqEngine.compile(def.steps, def.steps.length - 1);
+if (aqPlan.error) return { label: def.label, pass:false, reason:`Arquero error — ${aqPlan.error}` };
+const aqText = await (await aqEngine.export(aqPlan, 'csv')).text();
+if (!duckText.trim()) return { label: def.label, pass:false, reason:'DuckDB CSV export was empty' };
+if (!aqText.trim()) return { label: def.label, pass:false, reason:'Arquero CSV export was empty' };
+return { label: def.label, pass:true };
+} catch(e){
+return { label: def.label, pass:false, reason: e.message || String(e) };
+}
+}
+async function runSelfTestCsvGuardPreserveCheck(def, duckEngine, aqEngine){
+try {
+const duckPlan = await duckEngine.compile(def.steps, def.steps.length - 1);
+if (duckPlan.error) return { label: def.label, pass:false, reason:`DuckDB error — ${duckPlan.error}` };
+const duckText = await (await duckEngine.export(duckPlan, 'csv')).text();
+const aqPlan = await aqEngine.compile(def.steps, def.steps.length - 1);
+if (aqPlan.error) return { label: def.label, pass:false, reason:`Arquero error — ${aqPlan.error}` };
+const aqText = await (await aqEngine.export(aqPlan, 'csv')).text();
+const mustBeUnguarded = ['-5', '+1-555-0100'];
+for (const needle of mustBeUnguarded){
+if (!duckText.includes(needle)) return { label: def.label, pass:false, reason:`DuckDB export corrupted "${needle}" with an unnecessary guard prefix`, firstDiffRow:{ csvSample: duckText.slice(0,300) } };
+if (!aqText.includes(needle)) return { label: def.label, pass:false, reason:`Arquero export corrupted "${needle}" with an unnecessary guard prefix`, firstDiffRow:{ csvSample: aqText.slice(0,300) } };
+}
+const bareLeft = t => t.split("'=1+1").join('').includes('=1+1');
+if (bareLeft(duckText)) return { label: def.label, pass:false, reason:'DuckDB export left a genuine formula-triggering cell unguarded', firstDiffRow:{ csvSample: duckText.slice(0,300) } };
+if (bareLeft(aqText)) return { label: def.label, pass:false, reason:'Arquero export left a genuine formula-triggering cell unguarded', firstDiffRow:{ csvSample: aqText.slice(0,300) } };
+return { label: def.label, pass:true };
+} catch(e){
+return { label: def.label, pass:false, reason: e.message || String(e) };
+}
+}
+async function runSelfTestFormatCheck(def){
+try {
+const d = new Date(Date.UTC(2026,0,31));
+const dateOut = formatCellValue(d, 'DATE');
+const tsOut = formatCellValue(d, 'TIMESTAMP');
+if (typeof dateOut !== 'string' || dateOut.includes('GMT') || dateOut.includes('UTC') || /[A-Za-z]{3},?\s/.test(dateOut)) return { label: def.label, pass:false, reason:'DATE-typed value rendered with a raw JS Date string', firstDiffRow:{ dateOut } };
+if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOut)) return { label: def.label, pass:false, reason:'DATE-typed value not formatted as YYYY-MM-DD', firstDiffRow:{ dateOut } };
+if (typeof tsOut !== 'string' || tsOut.includes('GMT') || /[A-Za-z]{3},?\s/.test(tsOut)) return { label: def.label, pass:false, reason:'TIMESTAMP-typed value rendered with a raw JS Date string', firstDiffRow:{ tsOut } };
+return { label: def.label, pass:true };
+} catch(e){
+return { label: def.label, pass:false, reason: e.message || String(e) };
+}
+}
 
 function selfTestPanelEl(){
 let panel = document.getElementById('selftestPanel');
@@ -6625,14 +6693,18 @@ await aqEngine.loadFile({ format:'csv', csvText: SAMPLE_SALES_CSV, fileName:'sam
 renderSelfTestResults(results, `Could not load Arquero — ${e.message || e}`);
 return;
 }
+const SELFTEST_RUNNERS = {
+'export': runSelfTestExportCheck,
+'csv-guard': runSelfTestCsvGuardCheck,
+'export-both': runSelfTestExportBothCheck,
+'csv-guard-preserve': runSelfTestCsvGuardPreserveCheck,
+'format-check': runSelfTestFormatCheck,
+};
 for (let i=0; i<SELFTEST_CASES.length; i++){
 renderSelfTestResults(results, `Running case ${i + 1} of ${SELFTEST_CASES.length}…`);
 try {
-results[i] = SELFTEST_CASES[i].kind === 'export'
-? await runSelfTestExportCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
-: SELFTEST_CASES[i].kind === 'csv-guard'
-? await runSelfTestCsvGuardCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
-: await runSelfTestParityCase(SELFTEST_CASES[i], duckEngine, aqEngine);
+const runner = SELFTEST_RUNNERS[SELFTEST_CASES[i].kind] || runSelfTestParityCase;
+results[i] = await runner(SELFTEST_CASES[i], duckEngine, aqEngine);
 } catch(e){
 results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error — ${e.message || e}` };
 }
