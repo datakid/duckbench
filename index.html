@@ -1412,10 +1412,10 @@ function confirmDialog(message){
     const overlay = $('#confirmOverlay');
     $('#confirmMsg').textContent = message;
     let result = false;
-    const entry = ModalStack.push(overlay, { onClose: () => resolve(result) });
-    const onOk = () => { result = true; cleanup(); ModalStack.pop(entry); };
-    const onCancel = () => { cleanup(); ModalStack.pop(entry); };
     function cleanup(){ $('#confirmOk').removeEventListener('click', onOk); $('#confirmCancel').removeEventListener('click', onCancel); }
+    const entry = ModalStack.push(overlay, { onClose: () => { cleanup(); resolve(result); } });
+    const onOk = () => { result = true; ModalStack.pop(entry); };
+    const onCancel = () => { ModalStack.pop(entry); };
     $('#confirmOk').addEventListener('click', onOk);
     $('#confirmCancel').addEventListener('click', onCancel);
   });
@@ -1536,7 +1536,7 @@ const DEFAULT_DUCKDB_VERSION = '1.32.0';
 const EXPRESS_SIZE_WARNING_BYTES = 75 * 1024 * 1024;
 const NPM_REGISTRY_URL = 'https://registry.npmjs.org/@duckdb/duckdb-wasm';
 
-const RID = '__rid'; 
+const RID = uid('__rid_');
 const SAMPLE_SALES_CSV = `order_id,order_date,customer,product,category,region,quantity,unit_price,discount,status
 1001,2026-01-31,Sam Patel,Wireless Mouse,Electronics,North,2,24.99,0,Refunded
 1002,2026-05-22,Jordan Lee,Mechanical Keyboard,Electronics,South,1,79.99,0,Completed
@@ -1616,12 +1616,18 @@ const q = (name) => `"${String(name).replace(/"/g, '""')}"`;
 const esc = (v) => `'${String(v).replace(/'/g, "''")}'`;      
 const likeEscape = (v) => String(v).replace(/[\\%_]/g, c => '\\' + c);
 function csvFormulaGuardCell(v){
-return (typeof v === 'string' && v.length && /^[=+\-@]/.test(v)) ? `'${v}` : v;
+if (typeof v !== 'string' || !v.length) return v;
+if (!/^[=+\-@]/.test(v)) return v;
+if (v[0] !== '=' && v[0] !== '@' && /^[+\-][\d.,()\s-]*$/.test(v)) return v;
+return `'${v}`;
 }
 function csvGuardedSelectList(cols){
 return cols.map(c => {
 const isText = !NUMERIC_TYPE_RE.test(c.type) && !BOOL_TYPE_RE.test(c.type) && !DATE_TYPE_RE.test(c.type);
-return isText ? `(CASE WHEN ${q(c.name)} IS NOT NULL AND LEFT(${q(c.name)}, 1) IN ('=', '+', '-', '@') THEN '''' || ${q(c.name)} ELSE ${q(c.name)} END) AS ${q(c.name)}` : q(c.name);
+if (!isText) return q(c.name);
+const name = q(c.name);
+const risky = `(LEFT(${name}, 1) IN ('=', '@') OR (LEFT(${name}, 1) IN ('+', '-') AND NOT regexp_matches(${name}, '^[+-][0-9.,()\\s-]*$')))`;
+return `(CASE WHEN ${name} IS NOT NULL AND ${risky} THEN '''' || ${name} ELSE ${name} END) AS ${name}`;
 }).join(', ');
 }
 function splitCsvLines(text){
@@ -1720,6 +1726,7 @@ return url;
 }
 async function loadDuckDB(version){
   if (dataState.conn && dataState.hasSource) { const e = new Error('A dataset is loaded — reload the page to start a new session on a different version.'); e.locked = true; throw e; }
+  if (!/^\d+\.\d+\.\d+$/.test(String(version).trim())) { const e = new Error(`“${version}” isn’t a valid DuckDB-WASM version — expected a plain version like 1.29.0.`); e.denylisted = true; throw e; }
   const bad = denylistReason(version);
   if (bad) { const e = new Error(bad); e.denylisted = true; throw e; }
   setEngineStatus('loading', `fetching duckdb-wasm@${version}…`);
@@ -1850,16 +1857,13 @@ async function ensureCheckpoint(steps, uptoIndex){
     const table = uid('ckpt_');
     await dataState.conn.query(`CREATE OR REPLACE TEMP TABLE ${q(table)} AS ${cached.sql}`);
     const entry = { materialized:true, table, hasRid: cached.hasRid, columns: cached.columns };
-    dataState.checkpointCache.clear();
+    await dropAllCheckpoints();
     dataState.checkpointCache.set(sig, entry);
     return entry;
   }
   const compiled = await compilePipeline(steps, uptoIndex - 1);
   if (compiled.error) throw Object.assign(new Error(compiled.error), { stepIndex: compiled.errorIndex });
-  for (const oldEntry of dataState.checkpointCache.values()){
-    if (oldEntry.materialized){ try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q(oldEntry.table)}`); } catch {} }
-  }
-  dataState.checkpointCache.clear();
+  await dropAllCheckpoints();
   const entry = { materialized:false, sql: compiled.sql, hasRid: compiled.hasRid, columns: compiled.columns };
   dataState.checkpointCache.set(sig, entry);
   return entry;
@@ -2561,7 +2565,9 @@ const TRANSFORMS = {
     preservesIdentity: true,
     params:[],
     async resolve(d, from, api){
-      const row = await api.queryOne(`SELECT * FROM (${from}) ORDER BY ${api.hasRid ? q(RID) : '1'} LIMIT 1`);
+      const row = await api.queryOne(api.hasRid
+        ? `SELECT * FROM (${from}) ORDER BY ${q(RID)} LIMIT 1`
+        : `SELECT * FROM (${from}) LIMIT 1`);
       if (!row) return { ...d, mapping: [] };
       const cols = api.columns.filter(c=>c!==RID);
       const used = new Set();
@@ -2845,8 +2851,11 @@ Object.assign(TRANSFORMS, {
       const col = q(d.column);
       const delim = esc(d.delimiter);
       if (d.mode==='rows'){
-        const base = d.keepOriginal ? `*, ` : `* EXCLUDE (${col}), `;
-        return `SELECT ${base}UNNEST(COALESCE(STRING_SPLIT(${col}, ${delim}), [CAST(NULL AS VARCHAR)])) AS ${col} FROM (${from})`;
+        if (d.keepOriginal){
+          const partName = q(dedupeName(`${d.column}_part`, ctx.columns));
+          return `SELECT *, UNNEST(COALESCE(STRING_SPLIT(${col}, ${delim}), [CAST(NULL AS VARCHAR)])) AS ${partName} FROM (${from})`;
+        }
+        return `SELECT * EXCLUDE (${col}), UNNEST(COALESCE(STRING_SPLIT(${col}, ${delim}), [CAST(NULL AS VARCHAR)])) AS ${col} FROM (${from})`;
       }
       const n = clamp(Number(d.maxParts)||4, 1, 20);
       const parts = Array.from({length:n}, (_,i)=>{
@@ -2863,8 +2872,9 @@ Object.assign(TRANSFORMS, {
       const col = d.column;
       const delim = d.delimiter;
       if (d.mode === 'rows'){
-        let t = table.derive({ [col]: aq.escape(row => row[col]==null ? [null] : String(row[col]).split(delim)) });
-        t = t.unroll(col);
+        const partCol = d.keepOriginal ? dedupeName(`${d.column}_part`, ctx.columns) : col;
+        let t = table.derive({ [partCol]: aq.escape(row => row[col]==null ? [null] : String(row[col]).split(delim)) });
+        t = t.unroll(partCol);
         return t;
       }
       const n = clamp(Number(d.maxParts)||4, 1, 20);
@@ -2887,7 +2897,7 @@ Object.assign(TRANSFORMS, {
     ribbon:{ tab:'transform', group:'Text', icon:'merge', size:'large' },
     preservesIdentity: true,
     params:[
-      { key:'columns', type:'columns', label:'Columns to merge (in order)', default:()=>[] },
+      { key:'columns', type:'columns', label:'Columns to merge (table order)', default:()=>[] },
       { key:'separator', type:'text', label:'Separator', default:' ' },
       { key:'name', type:'text', label:'New column name', default:'Merged' },
       { key:'keepOriginal', type:'toggle', label:'Keep original columns', default:false },
@@ -3063,7 +3073,11 @@ Object.assign(TRANSFORMS, {
     seed:(sel)=>({ columns: sel?.column ? [sel.column] : [] }),
     instant: d => Array.isArray(d.columns) && d.columns.length > 0,
     params:[ { key:'columns', type:'columns', label:'Columns', default:()=>[] } ],
-    validate(d){ return d.columns?.length ? null : 'Pick at least one column.'; },
+    validate(d){
+      if (!d.columns?.length) return 'Pick at least one column.';
+      const bad = d.columns.find(c => { const meta = dataState.currentColumns.find(cc=>cc.name===c); return meta && (isNumericType(meta.type) || isBoolType(meta.type) || isDateType(meta.type)); });
+      return bad ? `“${bad}” isn’t a text column — trim & clean only applies to text.` : null;
+    },
     toSQL(d, from){
       const rep = d.columns.map(c=>`nullif(trim(regexp_replace(${q(c)}, '\\s+', ' ', 'g')), '') AS ${q(c)}`).join(', ');
       return `SELECT * REPLACE (${rep}) FROM (${from})`;
@@ -3095,14 +3109,17 @@ Object.assign(TRANSFORMS, {
     ],
     validate(d){ return d.columns?.length ? null : 'Pick at least one column.'; },
     toSQL(d, from, ctx){
-      const orderExpr = d.orderBy ? q(d.orderBy) : (ctx.hasRid ? q(RID) : null);
+      const dir = d.direction==='up' ? 'DESC' : 'ASC';
+      const orderExpr = d.orderBy ? q(d.orderBy) : (ctx.hasRid ? q(RID) : q('__fill_rn'));
       const rep = d.columns.map(c => {
-        const win = orderExpr
-          ? `OVER (ORDER BY ${orderExpr} ${d.direction==='up'?'DESC':'ASC'} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
-          : `OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`;
+        const win = `OVER (ORDER BY ${orderExpr} ${dir} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`;
         return `COALESCE(${q(c)}, LAST_VALUE(${q(c)} IGNORE NULLS) ${win}) AS ${q(c)}`;
       }).join(', ');
-      return `SELECT * REPLACE (${rep}) FROM (${from})`;
+      if (d.orderBy || ctx.hasRid){
+        return `SELECT * REPLACE (${rep}) FROM (${from}) ORDER BY ${orderExpr} ASC`;
+      }
+      const rnCol = q('__fill_rn');
+      return `SELECT * EXCLUDE (${rnCol}) FROM (SELECT * REPLACE (${rep}) FROM (SELECT *, ROW_NUMBER() OVER () AS ${rnCol} FROM (${from})) ORDER BY ${rnCol} ASC)`;
     },
     summary(d){ return `${(d.columns||[]).join(', ')} (${d.direction})`; },
     engines: ['duckdb','arquero'],
@@ -3634,6 +3651,7 @@ function createArqueroEngine(){
       return out;
     },
     async export(plan, format){
+      const aq = await loadAq();
       const table = tableOf(plan);
       if (!table) throw new Error('Nothing to export.');
       const exportTable = table.columnNames().includes(RID) ? table.select(...table.columnNames().filter(c=>c!==RID)) : table;
@@ -3900,9 +3918,11 @@ try {
 const text = await file.text();
 const recipe = JSON.parse(text);
 if (!recipe || !Array.isArray(recipe.steps)) throw new Error('Not a valid recipe file');
-const sqlSteps = recipe.steps.filter(s=>s.type==='raw_sql').length;
-if (sqlSteps){
-const ok = await confirmDialog(`This recipe includes ${sqlSteps} Custom SQL step${sqlSteps===1?'':'s'} that will run automatically as soon as it’s applied. Only continue if you trust where this recipe file came from — open it in a text editor first if you’re unsure what the SQL does.`);
+const sqlCapableTypes = new Set(Object.entries(TRANSFORMS).filter(([,t])=>(t.params||[]).some(p=>p.type==='sql')).map(([k])=>k));
+const sqlSteps = recipe.steps.filter(s=>sqlCapableTypes.has(s.type));
+if (sqlSteps.length){
+const labels = Array.from(new Set(sqlSteps.map(s=>TRANSFORMS[s.type]?.label || s.type)));
+const ok = await confirmDialog(`This recipe includes ${sqlSteps.length} step${sqlSteps.length===1?'':'s'} that run raw SQL you supply (${labels.join(', ')}) and will execute automatically as soon as it’s applied. Only continue if you trust where this recipe file came from — open it in a text editor first if you’re unsure what the SQL does.`);
 if (!ok) return;
 }
 if (dataState.hasSource){
@@ -4349,6 +4369,12 @@ if (Number.isFinite(v) && !Number.isInteger(v)) return v.toLocaleString('en-US',
 return v.toLocaleString('en-US');
 }
 if (typeof v === 'boolean') return v ? 'true' : 'false';
+if (v instanceof Date) {
+const t = String(type||'').toUpperCase();
+if (t.startsWith('DATE') && !t.startsWith('DATETIME')) return v.toISOString().slice(0,10);
+if (t.startsWith('TIME') && !t.startsWith('TIMESTAMP')) return v.toISOString().slice(11,19);
+return v.toISOString().slice(0,19).replace('T',' ');
+}
 return String(v);
 }
 let _debouncedRefreshPreview = null;
@@ -4380,7 +4406,7 @@ return preview;
 async function computeAndRenderPreview(source, plan, token, stepLabel){
 const preview = await renderDataView({ source, plan, token });
 if (!preview) return null;
-setStatusBar({ rows: preview.hasMore?'200+':preview.rows.length, cols: preview.columns.length, step: stepLabel, duration: `${preview.ms.toFixed(0)} ms` });
+setStatusBar({ cols: preview.columns.length, step: stepLabel, duration: `${preview.ms.toFixed(0)} ms` });
 return preview;
 }
 function updateEngineEditor(plan){
@@ -4421,8 +4447,7 @@ const step = dataState.steps[upto];
 const t = TRANSFORMS[step.type];
 return `after step ${upto+1} · ${t?.label||step.type}`;
 }
-function setStatusBar({ rows, cols, step, duration } = {}){
-if (rows !== undefined) $('#sbRows').innerHTML = `<strong>${rows}</strong> rows`;
+function setStatusBar({ cols, step, duration } = {}){
 if (cols !== undefined) $('#sbCols').innerHTML = `<strong>${cols}</strong> cols`;
 if (step !== undefined) $('#sbStep').textContent = step;
 $('#sbDuration').textContent = duration || '';
@@ -4632,10 +4657,10 @@ uiState.focusedColumn = col.name; renderRibbon();
 openFilterPopover(col.name, inner);
 });
 nameSpan.addEventListener('click', (e) => { e.stopPropagation(); uiState.focusedColumn = col.name; renderRibbon(); openFilterPopover(col.name, inner); });
-nameSpan.addEventListener('dblclick', (e) => { e.stopPropagation(); startInlineRename(col.name, nameSpan); });
+nameSpan.addEventListener('dblclick', (e) => { e.stopPropagation(); ModalStack.closeLight(); startInlineRename(col.name, nameSpan); });
 badge.addEventListener('click', (e) => { e.stopPropagation(); openTypePopover(col.name, badge); });
 th.addEventListener('contextmenu', (e) => { e.preventDefault(); uiState.focusedColumn = col.name; renderRibbon(); openHeaderContextMenu(col.name, e.clientX, e.clientY); });
-th.addEventListener('dblclick', (e) => { e.stopPropagation(); uiState.focusedColumn = col.name; renderRibbon(); openColumnProfile(col.name); });
+th.addEventListener('dblclick', (e) => { e.stopPropagation(); uiState.focusedColumn = col.name; renderRibbon(); ModalStack.closeLight(); startInlineRename(col.name, nameSpan); });
 th.tabIndex = 0; th.setAttribute('role','button'); th.setAttribute('aria-label', `Column ${col.name}, ${col.type}`);
 th.addEventListener('keydown', (e) => { if (e.key==='Enter' || e.key===' '){ e.preventDefault(); inner.click(); } });
 return th;
@@ -4820,10 +4845,11 @@ if (uiState.rowSelection.size === 0){ bar?.remove(); return; }
 if (!bar){
 bar = el('div',{id:'selectionBar', style:'display:flex;align-items:center;gap:10px;padding:8px 16px;background:rgba(var(--brass-rgb),0.1);border-bottom:1px solid rgba(var(--brass-rgb),0.3);font-size:12.5px;color:var(--brass-bright);flex-shrink:0;'});
 $('#previewPane').insertBefore(bar, $('#previewPane').firstChild);
-bar.appendChild(el('span',{}, `${uiState.rowSelection.size} row${uiState.rowSelection.size===1?'':'s'} selected`));
+bar.appendChild(el('span',{class:'selection-bar-count'}));
 bar.appendChild(el('button',{class:'btn-solid btn-small', onclick:deleteSelectedRows}, 'Delete selected'));
 bar.appendChild(el('button',{class:'btn-ghost btn-small', onclick:()=>{ uiState.rowSelection.clear(); syncRowSelectionDom(); refreshPreview(); }}, 'Clear selection'));
 }
+bar.querySelector('.selection-bar-count').textContent = `${uiState.rowSelection.size} row${uiState.rowSelection.size===1?'':'s'} selected`;
 }
 function deleteSelectedRows(){
 const rids = Array.from(uiState.rowSelection);
@@ -4933,6 +4959,7 @@ pendingImport.sheet = wb.SheetNames[0];
 } catch(e){
 showImportError(`Couldn’t read that Excel file: ${e.message}`);
 pendingImport = null;
+$('#fileInput').value = '';
 return;
 }
 }
@@ -5097,6 +5124,7 @@ saveSessionSnapshot();
 } catch(e){
 showImportError(e.message || String(e));
 restoreImportActionRow();
+$('#fileInput').value = '';
 if (!dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('error', `Couldn’t start DuckDB: ${e.message}`);
 } finally {
 if (dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${dataState.duckdbVersion}`);
@@ -5119,8 +5147,12 @@ if (!ok) return;
 }
 const savedSteps = dataState.steps;
 const savedSelected = uiState.selectedStepIndex;
+const savedSecondarySources = dataState.secondarySources;
+const previousEngine = dataState.engine;
+const previousEngineId = dataState.selectedEngineId;
 setEngineStatus('loading', 'switching engines…');
 try {
+await dropAllCheckpoints();
 dataState.engine = createEngine(targetId);
 dataState.selectedEngineId = targetId;
 if (!dataState.conn && targetId === 'duckdb') await dataState.engine.init();
@@ -5146,7 +5178,9 @@ await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowH
 }
 dataState.steps = savedSteps;
 uiState.selectedStepIndex = savedSelected;
+dataState.secondarySources = [];
 await refreshSourceSchema();
+await restoreSecondarySources(savedSecondarySources);
 closeInspector();
 resetHistory();
 renderAll();
@@ -5154,6 +5188,9 @@ await refreshPreview();
 toast(`Switched to ${targetLabel}.`);
 saveSessionSnapshot();
 } catch(e){
+dataState.engine = previousEngine;
+dataState.selectedEngineId = previousEngineId;
+dataState.secondarySources = savedSecondarySources;
 toast(`Couldn’t switch engines: ${e.message}`);
 } finally {
 if (dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${dataState.duckdbVersion}`);
@@ -6307,10 +6344,11 @@ b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
 });
 document.addEventListener('keydown', (e) => {
 const mod = e.metaKey || e.ctrlKey;
+const editing = ['INPUT','TEXTAREA'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
 if (mod && e.key.toLowerCase()==='k'){ e.preventDefault(); if (dataState.hasSource) openPalette(); return; }
-if (mod && e.key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); undo(); return; }
-if (mod && (e.key.toLowerCase()==='y' || (e.key.toLowerCase()==='z' && e.shiftKey))){ e.preventDefault(); redo(); return; }
-if (e.key === '?' && !ModalStack.top() && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA'){
+if (mod && e.key.toLowerCase()==='z' && !e.shiftKey){ if (editing) return; e.preventDefault(); undo(); return; }
+if (mod && (e.key.toLowerCase()==='y' || (e.key.toLowerCase()==='z' && e.shiftKey))){ if (editing) return; e.preventDefault(); redo(); return; }
+if (e.key === '?' && !ModalStack.top() && !editing){
 ModalStack.push($('#helpOverlay'));
 }
 });
