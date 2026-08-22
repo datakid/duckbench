@@ -3766,6 +3766,7 @@ function resetHistory(){ dataState.historyPast = []; dataState.historyFuture = [
 const SESSION_DB_NAME = 'duckbench';
 const SESSION_STORE = 'sessions';
 const SESSION_KEY = 'last';
+const SESSION_FILE_KEY = 'last-files';
 const PIPELINES_STORE = 'pipelines';
 function openSessionDB(){
 return new Promise((resolve, reject) => {
@@ -3816,21 +3817,16 @@ let sessionSaveTimer = null;
 let sessionSaveFailed = false;
 function queueSessionSnapshot(){
 clearTimeout(sessionSaveTimer);
-sessionSaveTimer = setTimeout(saveSessionSnapshot, 500);
+sessionSaveTimer = setTimeout(saveSessionMeta, 500);
 }
-async function saveSessionSnapshot(){
+async function saveSessionMeta(){
 if (!dataState.hasSource || !dataState.sourceFile) return;
 try {
 const db = await openSessionDB();
 const tx = db.transaction(SESSION_STORE, 'readwrite');
 tx.objectStore(SESSION_STORE).put({
-file: dataState.sourceFile,
-fileName: dataState.sourceFileName,
-format: dataState.sourceFormat,
-importOptions: dataState.sourceImportOptions,
 engineId: dataState.engine.id,
 steps: dataState.steps,
-secondarySources: dataState.secondarySources.map(s => ({ id:s.id, name:s.name, format:s.format, file:s.file })),
 savedAt: Date.now(),
 }, SESSION_KEY);
 await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
@@ -3843,14 +3839,46 @@ toast('Couldn’t save this session for resume — local storage may be full or 
 }
 }
 }
+async function saveSessionFiles(){
+if (!dataState.hasSource || !dataState.sourceFile) return;
+try {
+const db = await openSessionDB();
+const tx = db.transaction(SESSION_STORE, 'readwrite');
+tx.objectStore(SESSION_STORE).put({
+file: dataState.sourceFile,
+fileName: dataState.sourceFileName,
+format: dataState.sourceFormat,
+importOptions: dataState.sourceImportOptions,
+secondarySources: dataState.secondarySources.map(s => ({ id:s.id, name:s.name, format:s.format, file:s.file })),
+savedAt: Date.now(),
+}, SESSION_FILE_KEY);
+await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+db.close();
+sessionSaveFailed = false;
+} catch(e){
+if (!sessionSaveFailed){
+sessionSaveFailed = true;
+toast('Couldn’t save this session for resume — local storage may be full or blocked (e.g. private browsing). Your work is fine in this tab, but a reload will lose it.');
+}
+}
+}
+async function saveSessionSnapshot(){
+await saveSessionFiles();
+await saveSessionMeta();
+}
 async function loadSessionSnapshot(){
 try {
 const db = await openSessionDB();
 const tx = db.transaction(SESSION_STORE, 'readonly');
-const req = tx.objectStore(SESSION_STORE).get(SESSION_KEY);
-const result = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+const heavyReq = tx.objectStore(SESSION_STORE).get(SESSION_FILE_KEY);
+const lightReq = tx.objectStore(SESSION_STORE).get(SESSION_KEY);
+const [heavy, light] = await Promise.all([
+new Promise((res, rej) => { heavyReq.onsuccess = () => res(heavyReq.result); heavyReq.onerror = () => rej(heavyReq.error); }),
+new Promise((res, rej) => { lightReq.onsuccess = () => res(lightReq.result); lightReq.onerror = () => rej(lightReq.error); }),
+]);
 db.close();
-return result || null;
+if (!heavy && !light) return null;
+return { ...(heavy||{}), ...(light||{}) };
 } catch(e){ return null; }
 }
 async function clearSessionSnapshot(){
@@ -3858,6 +3886,7 @@ try {
 const db = await openSessionDB();
 const tx = db.transaction(SESSION_STORE, 'readwrite');
 tx.objectStore(SESSION_STORE).delete(SESSION_KEY);
+tx.objectStore(SESSION_STORE).delete(SESSION_FILE_KEY);
 await new Promise(res => { tx.oncomplete = res; tx.onerror = res; });
 db.close();
 } catch(e){}
@@ -5791,7 +5820,7 @@ entry.columns = await dataState.engine.getSecondarySourceColumns(id);
 entry.rowCount = await dataState.engine.secondarySourceRowCount(id);
 renderSourcesPanel();
 toast(`${file.name} ready to join.`);
-queueSessionSnapshot();
+saveSessionFiles();
 } catch(e){
 dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
 renderSourcesPanel();
@@ -5826,7 +5855,7 @@ try { await dataState.engine.dropSecondarySource(id); } catch(e){}
 dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
 renderSourcesPanel();
 refreshPreview();
-queueSessionSnapshot();
+saveSessionFiles();
 }
 function renderStepsList(){
 const list = $('#stepsList');
