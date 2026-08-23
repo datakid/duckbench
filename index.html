@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com; connect-src 'self' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com https://registry.npmjs.org; worker-src 'self' blob: https://cdn.jsdelivr.net;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com; connect-src 'self' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com https://registry.npmjs.org; worker-src 'self' blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Duckbench</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImR1Y2tiZW5jaCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTUiIGZpbGw9IiNGRTYxNjQiLz4KICA8ZyBmaWxsPSIjRjJGMkYzIj4KICAgIDxyZWN0IHg9IjgiIHk9IjQyIiB3aWR0aD0iOSIgaGVpZ2h0PSIxMiIgcng9IjQuNSIvPgogICAgPHJlY3QgeD0iMjEiIHk9IjM0IiB3aWR0aD0iOSIgaGVpZ2h0PSIyMCIgcng9IjQuNSIvPgogICAgPHBhdGggZD0iTTM0IDQ5LjUKICAgICAgICAgICAgIFYzMC41CiAgICAgICAgICAgICBBMTAuNSAxMC41IDAgMSAxIDQ4LjQgMTcuNAogICAgICAgICAgICAgTDU2IDE4LjYKICAgICAgICAgICAgIFE1OC42IDIxIDU1LjcgMjMuNgogICAgICAgICAgICAgTDQ3LjYgMjYuMwogICAgICAgICAgICAgQTEwLjUgMTAuNSAwIDAgMSA0MyAzMC41CiAgICAgICAgICAgICBWNDkuNQogICAgICAgICAgICAgQTQuNSA0LjUgMCAwIDEgMzQgNDkuNQogICAgICAgICAgICAgWiIvPgogIDwvZz4KICA8Y2lyY2xlIGN4PSI0MyIgY3k9IjE3IiByPSIzIiBmaWxsPSIjRkU2MTY0Ii8+Cjwvc3ZnPgo=">
@@ -1102,7 +1102,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
     <div class="import-card">
       <div class="folio-number">Import</div>
       <h2>Bring in your data</h2>
-      <p class="import-copy">A CSV, Excel, or Parquet file. Your data is processed in this browser tab and isn’t uploaded — but the app does fetch its libraries and fonts from the internet on first load, and a Custom SQL step can query remote URLs if you write one.</p>
+      <p class="import-copy">A CSV, Excel, or Parquet file. Your data is processed in this browser tab and isn’t uploaded — but the app does fetch its libraries and fonts from the internet on first load. A Custom SQL step can only read from your imported files, not arbitrary remote URLs.</p>
       <div class="import-formats">
         <span class="import-format-chip">.csv</span>
         <span class="import-format-chip">.tsv</span>
@@ -5971,6 +5971,27 @@ pop.style.left = `${Math.max(8,left)}px`;
 pop.style.top = `${Math.max(8,top)}px`;
 });
 }
+function installPopoverScrollGuard(pop, anchorEl, entry){
+const reposition = () => {
+if (!document.body.contains(anchorEl)){ ModalStack.pop(entry); return; }
+const r = anchorEl.getBoundingClientRect();
+if (r.bottom <= 0 || r.top >= window.innerHeight || r.right <= 0 || r.left >= window.innerWidth){ ModalStack.pop(entry); return; }
+positionPopoverWithinViewport(pop, r);
+};
+window.addEventListener('scroll', reposition, true);
+window.addEventListener('resize', reposition);
+const detach = () => { window.removeEventListener('scroll', reposition, true); window.removeEventListener('resize', reposition); };
+const orig = entry.onClose;
+entry.onClose = () => { detach(); if (orig) orig(); };
+}
+function installPopoverCloseOnScroll(entry){
+const close = () => ModalStack.pop(entry);
+window.addEventListener('scroll', close, true);
+window.addEventListener('resize', close);
+const detach = () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
+const orig = entry.onClose;
+entry.onClose = () => { detach(); if (orig) orig(); };
+}
 function findExistingFilterStepIndex(colName){
 const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length-1;
 for (let i=upto; i>=0; i--){
@@ -6010,6 +6031,7 @@ el('button',{class:'btn-solid btn-small', onclick:apply}, existing?'Update filte
 ));
 document.body.appendChild(pop);
 const entry = ModalStack.push(pop, { light:true, trigger:anchorEl, onClose:()=>pop.remove() });
+installPopoverScrollGuard(pop, anchorEl, entry);
 positionPopoverWithinViewport(pop, rect);
 const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length-1;
 const baseUpto = existingIdx>=0 ? existingIdx-1 : upto;
@@ -6067,6 +6089,7 @@ if (!err) checkTryCastFailures(colName, opt.value);
 });
 document.body.appendChild(enhanceMenuA11y(pop));
 const entry = ModalStack.push(pop, { light:true, trigger:anchorEl, onClose:()=>pop.remove() });
+installPopoverScrollGuard(pop, anchorEl, entry);
 positionPopoverWithinViewport(pop, rect);
 }
 async function checkTryCastFailures(colName, targetType){
@@ -6137,6 +6160,7 @@ pop.appendChild(el('div',{class:'ctx-menu-divider'}));
 pop.appendChild(el('button',{class:'ctx-menu-item is-danger', onclick:()=>{ ModalStack.pop(entry); deleteStep(index); }}, htmlIcon('trash'),'Delete'));
 document.body.appendChild(enhanceMenuA11y(pop));
 const entry = ModalStack.push(pop, { light:true, onClose:()=>pop.remove() });
+installPopoverCloseOnScroll(entry);
 positionPopoverWithinViewport(pop, { left:x, bottom:y, top:y });
 }
 function openHeaderContextMenu(colName, x, y){
@@ -6171,6 +6195,7 @@ pop.appendChild(el('div',{class:'ctx-menu-divider'}));
 pop.appendChild(el('button',{class:'ctx-menu-item is-danger', onclick:()=>run('remove_columns',{columns:[colName]})}, htmlIcon('trash'),'Remove column'));
 document.body.appendChild(enhanceMenuA11y(pop));
 const entry = ModalStack.push(pop, { light:true, onClose:()=>pop.remove() });
+installPopoverCloseOnScroll(entry);
 positionPopoverWithinViewport(pop, { left:x, bottom:y, top:y });
 }
 function openCellContextMenu(colName, rid, value, x, y, hasRid){
@@ -6191,6 +6216,7 @@ onclick:()=>{ ModalStack.pop(entry); const err=commitNewStep('delete_rows',{rids
 }, htmlIcon('trash'),'Delete this row'));
 document.body.appendChild(enhanceMenuA11y(pop));
 const entry = ModalStack.push(pop, { light:true, onClose:()=>pop.remove() });
+installPopoverCloseOnScroll(entry);
 positionPopoverWithinViewport(pop, { left:x, bottom:y, top:y });
 }
 function runRibbonCommand(type){
