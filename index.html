@@ -1197,6 +1197,11 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
                 <button data-action="copy-markdown"><span>Copy as Markdown table<small>First 200 rows, to clipboard</small></span></button>
                 <div class="export-menu-divider"></div>
                 <button data-action="export-options"><span>Export options…<small>Pick columns, row range, NULL text</small></span></button>
+                <div class="export-menu-divider"></div>
+                <label class="import-check-row" style="padding:8px 14px;">
+                  <input type="checkbox" id="guardFormulasToggle" checked>
+                  Escape spreadsheet formulas<small style="display:block;color:var(--muted);font-size:11px;">Recommended — prevents CSV/Excel formula injection</small>
+                </label>
               </div>
             </div>
           </div>
@@ -1616,8 +1621,9 @@ if (!/^[=+\-@]/.test(v)) return v;
 if (v[0] !== '=' && v[0] !== '@' && /^[+\-][\d.,()\s-]*$/.test(v)) return v;
 return `'${v}`;
 }
-function csvGuardedSelectList(cols){
+function csvGuardedSelectList(cols, enabled=true){
 return cols.map(c => {
+if (!enabled) return q(c.name);
 const isText = !NUMERIC_TYPE_RE.test(c.type) && !BOOL_TYPE_RE.test(c.type) && !DATE_TYPE_RE.test(c.type);
 if (!isText) return q(c.name);
 const name = q(c.name);
@@ -2201,7 +2207,7 @@ function currentPlanSql(){
   return dataState.currentPlan ? duckDbPlanSql.get(dataState.currentPlan) : null;
 }
 
-async function exportPlanImpl(plan, format){
+async function exportPlanImpl(plan, format, guardFormulas=true){
   const sql = sqlOf(plan);
   const physicalCols = await getColumns(sql);
   const hasPhysicalRid = physicalCols.some(c => c.name === RID);
@@ -2217,7 +2223,7 @@ async function exportPlanImpl(plan, format){
   }
   if (format === 'csv'){
     const exportCols = physicalCols.filter(c=>c.name!==RID);
-    const guardedSql = `SELECT ${csvGuardedSelectList(exportCols)} FROM (${exportSql})`;
+    const guardedSql = `SELECT ${csvGuardedSelectList(exportCols, guardFormulas)} FROM (${exportSql})`;
     const target = `${uid('exp_')}.csv`;
     await dataState.conn.query(`COPY (${guardedSql}) TO ${esc(target)} (FORMAT CSV, HEADER TRUE)`);
     const buf = await dataState.db.copyFileToBuffer(target);
@@ -2242,7 +2248,7 @@ async function exportPlanImpl(plan, format){
     const res = await dataState.conn.query(`${safeSql} LIMIT ${XLSX_ROW_CEILING + 1}`);
     const { rows } = extractRows(res);
     const truncated = rows.length > XLSX_ROW_CEILING;
-    const aoa = [columns.map(c=>c.name), ...(truncated ? rows.slice(0, XLSX_ROW_CEILING) : rows).map(row => row.map(csvFormulaGuardCell))];
+    const aoa = [columns.map(c=>c.name), ...(truncated ? rows.slice(0, XLSX_ROW_CEILING) : rows).map(row => row.map(v => guardFormulas ? csvFormulaGuardCell(v) : v))];
     const ws = window.XLSX.utils.aoa_to_sheet(aoa);
     const wb = window.XLSX.utils.book_new();
     window.XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
@@ -2253,11 +2259,11 @@ async function exportPlanImpl(plan, format){
   }
   throw new Error(`Unsupported export format: ${format}`);
 }
-async function exportCustomCsvImpl(plan, cols, limit, nullStr){
+async function exportCustomCsvImpl(plan, cols, limit, nullStr, guardFormulas=true){
   const sql = sqlOf(plan);
   const allCols = await getColumns(sql);
   const selectCols = cols.map(name => allCols.find(c=>c.name===name) || { name, type:'VARCHAR' });
-  const selectList = csvGuardedSelectList(selectCols);
+  const selectList = csvGuardedSelectList(selectCols, guardFormulas);
   const exportSql = `SELECT ${selectList} FROM (${sql})${limit ? ` LIMIT ${limit}` : ''}`;
   const target = `${uid('exp_')}.csv`;
   await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT CSV, HEADER TRUE, NULLSTR ${esc(nullStr||'')})`);
@@ -2316,11 +2322,11 @@ function createDuckDBEngine(){
     async dropSecondarySource(id){
       try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q('src_'+id)}`); } catch(e){}
     },
-    async export(plan, format){
-      return exportPlanImpl(plan, format);
+    async export(plan, format, opts={}){
+      return exportPlanImpl(plan, format, opts.guardFormulas !== false);
     },
-    async exportCustomCsv(plan, cols, limit, nullStr){
-      return exportCustomCsvImpl(plan, cols, limit, nullStr);
+    async exportCustomCsv(plan, cols, limit, nullStr, guardFormulas=true){
+      return exportCustomCsvImpl(plan, cols, limit, nullStr, guardFormulas);
     },
     async compile(steps, uptoIndex, checkpoint){
       const compiled = checkpoint
@@ -2896,7 +2902,7 @@ Object.assign(TRANSFORMS, {
     ribbon:{ tab:'transform', group:'Text', icon:'merge', size:'large' },
     preservesIdentity: true,
     params:[
-      { key:'columns', type:'columns', label:'Columns to merge (table order)', default:()=>[] },
+      { key:'columns', type:'columns', label:'Columns to merge (in order)', default:()=>[], ordered:true },
       { key:'separator', type:'text', label:'Separator', default:' ' },
       { key:'name', type:'text', label:'New column name', default:'Merged' },
       { key:'keepOriginal', type:'toggle', label:'Keep original columns', default:false },
@@ -3662,14 +3668,15 @@ function createArqueroEngine(){
       }
       return out;
     },
-    async export(plan, format){
+    async export(plan, format, opts={}){
+      const guardFormulas = opts.guardFormulas !== false;
       const aq = await loadAq();
       const table = tableOf(plan);
       if (!table) throw new Error('Nothing to export.');
       const exportTable = table.columnNames().includes(RID) ? table.select(...table.columnNames().filter(c=>c!==RID)) : table;
       if (format === 'csv'){
         const guardSpec = {};
-        exportTable.columnNames().forEach(c => { guardSpec[c] = aq.escape(row => csvFormulaGuardCell(row[c])); });
+        exportTable.columnNames().forEach(c => { guardSpec[c] = aq.escape(row => guardFormulas ? csvFormulaGuardCell(row[c]) : row[c]); });
         const csv = exportTable.derive(guardSpec).toCSV();
         const blob = new Blob([csv], {type:'text/csv'});
         blob.truncated = false;
@@ -3690,7 +3697,7 @@ function createArqueroEngine(){
         const XLSX_ROW_CEILING = 1048575;
         const rows = exportTable.objects();
         const truncated = rows.length > XLSX_ROW_CEILING;
-        const aoa = [exportTable.columnNames(), ...(truncated ? rows.slice(0,XLSX_ROW_CEILING) : rows).map(r => exportTable.columnNames().map(c=>csvFormulaGuardCell(r[c])))];
+        const aoa = [exportTable.columnNames(), ...(truncated ? rows.slice(0,XLSX_ROW_CEILING) : rows).map(r => exportTable.columnNames().map(c=>guardFormulas ? csvFormulaGuardCell(r[c]) : r[c]))];
         const ws = window.XLSX.utils.aoa_to_sheet(aoa);
         const wb = window.XLSX.utils.book_new();
         window.XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
@@ -3701,11 +3708,11 @@ function createArqueroEngine(){
       }
       throw new Error(`Unsupported export format: ${format}`);
     },
-    async exportCustomCsv(plan, cols, limit, nullStr){
+    async exportCustomCsv(plan, cols, limit, nullStr, guardFormulas=true){
       const table = tableOf(plan);
       if (!table) throw new Error('Nothing to export.');
       const rows = table.objects({ limit: limit || Infinity });
-      const csvEsc = s => { s = csvFormulaGuardCell(s); return s == null ? nullStr||'' : /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g,'""')}"` : String(s); };
+      const csvEsc = s => { s = guardFormulas ? csvFormulaGuardCell(s) : s; return s == null ? nullStr||'' : /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g,'""')}"` : String(s); };
       const lines = [cols.map(csvEsc).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
       const blob = new Blob([lines.join('\n')], {type:'text/csv'});
       return blob;
@@ -4169,7 +4176,7 @@ const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
 const ext = format==='parquet'?'parquet':format==='csv'?'csv':format==='json'?'json':format==='jsonl'?'jsonl':'xlsx';
 setExportBusy(true);
 try {
-const blob = await dataState.engine.export(plan, format);
+const blob = await dataState.engine.export(plan, format, { guardFormulas: $('#guardFormulasToggle')?.checked !== false });
 downloadBlob(blob, `${baseName}.${ext}`);
 if (format === 'parquet') toast('Parquet file downloaded.');
 else if (format === 'csv') toast('CSV file downloaded.');
@@ -4254,7 +4261,7 @@ const plan = await dataState.engine.compile(dataState.steps, dataState.steps.len
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
 setExportBusy(true);
 try {
-const blob = await dataState.engine.exportCustomCsv(plan, cols, limit, nullStr);
+const blob = await dataState.engine.exportCustomCsv(plan, cols, limit, nullStr, $('#guardFormulasToggle')?.checked !== false);
 const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
 downloadBlob(blob, `${baseName}.csv`);
 toast('CSV file downloaded.');
@@ -5643,14 +5650,34 @@ if (resolving) return wrap(el('div',{class:'field-skeleton', style:'height:76px;
 const box = el('div',{class:'checkbox-list', role:'group', 'aria-labelledby':`${fieldId}-label`});
 const search = el('input',{class:'rep-field checkbox-list-search', 'data-field-key':`${p.key}.search`, placeholder:'Search columns…', 'aria-label':`Search columns for ${label}`, style:'margin-bottom:4px;'});
 const listBox = el('div',{});
+const orderBox = p.ordered ? el('div',{style:'display:flex;flex-direction:column;gap:4px;margin-top:6px;'}) : null;
+function drawOrder(){
+if (!orderBox) return;
+orderBox.innerHTML = '';
+const sel = data[p.key]||[];
+sel.forEach((name, i) => {
+orderBox.appendChild(el('div',{style:'display:flex;align-items:center;gap:6px;font-size:12px;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:6px;padding:3px 6px;'},
+el('span',{style:'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'}, name),
+el('button',{type:'button', class:'icon-btn', disabled: i===0?true:null, 'aria-label':`Move ${name} up`, onclick:()=>{ const arr=data[p.key].slice(); [arr[i-1],arr[i]]=[arr[i],arr[i-1]]; data[p.key]=arr; drawOrder(); fire(); }}, '↑'),
+el('button',{type:'button', class:'icon-btn', disabled: i===sel.length-1?true:null, 'aria-label':`Move ${name} down`, onclick:()=>{ const arr=data[p.key].slice(); [arr[i+1],arr[i]]=[arr[i],arr[i+1]]; data[p.key]=arr; drawOrder(); fire(); }}, '↓'),
+));
+});
+}
 function draw(filterText=''){
 listBox.innerHTML = '';
 cols.filter(c=>c.name.toLowerCase().includes(filterText.toLowerCase())).forEach(c => {
 const cb = el('input',{type:'checkbox', checked:(data[p.key]||[]).includes(c.name)?true:null});
 cb.addEventListener('change', () => {
+if (p.ordered){
+const arr = (data[p.key]||[]).slice();
+if (cb.checked) arr.push(c.name); else { const i=arr.indexOf(c.name); if (i>=0) arr.splice(i,1); }
+data[p.key] = arr;
+} else {
 const set = new Set(data[p.key]||[]);
 if (cb.checked) set.add(c.name); else set.delete(c.name);
 data[p.key] = cols.map(cc=>cc.name).filter(cc=>set.has(cc));
+}
+drawOrder();
 fire();
 });
 listBox.appendChild(el('label',{class:'checkbox-row'}, cb, c.name));
@@ -5659,7 +5686,9 @@ if (!cols.length) listBox.appendChild(el('div',{style:'padding:8px;color:var(--m
 }
 search.addEventListener('input', () => draw(search.value));
 draw();
+drawOrder();
 box.appendChild(search); box.appendChild(listBox);
+if (orderBox) box.appendChild(orderBox);
 const field = wrap(box);
 field.querySelector('label').id = `${fieldId}-label`;
 return field;
