@@ -1750,6 +1750,7 @@ async function loadDuckDB(version){
   if (dataState.conn) { try { await dataState.conn.close(); } catch {} }
   if (dataState.db && dataState.db !== db) { try { await dataState.db.terminate(); } catch {} }
   dataState.db = db; dataState.conn = conn; dataState.duckdbVersion = version;
+  dataState.duckdbModule = duckdb;
   dataState.duckdbBundleName = bundle.mainModule.includes('eh') ? 'eh' : (bundle.mainModule.includes('coi') ? 'coi' : 'mvp');
   try {
     const res = await conn.query(`SELECT version() AS v`);
@@ -2001,7 +2002,7 @@ async function refreshSourceSchema(){
   clearColumnsCache();
 }
 
-async function loadFileImpl({ format, fileName, buffer, csvText, firstRowHeader, skipRows, delim }){
+async function loadFileImpl({ format, fileName, buffer, file, csvText, firstRowHeader, skipRows, delim }){
   if (format === 'parquet'){
     await dataState.db.registerFileBuffer(fileName, buffer);
     try {
@@ -2019,7 +2020,22 @@ async function loadFileImpl({ format, fileName, buffer, csvText, firstRowHeader,
     primary = `read_csv(${esc(fileName)}, header=${firstRowHeader}, store_rejects=true, all_varchar=false)`;
     fallback = `read_csv(${esc(fileName)}, header=${firstRowHeader}, ignore_errors=true, all_varchar=false)`;
   } else {
-    await dataState.db.registerFileBuffer(fileName, buffer);
+    let registered = false;
+    const protocol = dataState.duckdbModule?.DuckDBDataProtocol?.BROWSER_FILEREADER;
+    if (file && protocol !== undefined && typeof dataState.db.registerFileHandle === 'function'){
+      try {
+        await dataState.db.registerFileHandle(fileName, file, protocol, false);
+        await dataState.conn.query(`SELECT 1 FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}${delim||''}) LIMIT 1`);
+        registered = true;
+      } catch(e){
+        registered = false;
+        try { await dataState.db.dropFile(fileName); } catch {}
+      }
+    }
+    if (!registered){
+      const buf = buffer || (file ? await readFileWithProgress(file, p => setEngineStatus('loading', `reading file… ${Math.round(p*100)}%`)) : buffer);
+      await dataState.db.registerFileBuffer(fileName, buf);
+    }
     primary = `read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, store_rejects=true${delim||''})`;
     fallback = `read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, ignore_errors=true${delim||''})`;
   }
@@ -5120,10 +5136,15 @@ if (format === 'parquet'){
   setImportProgress(null, `Loading into ${engineLabel()}…`);
   await dataState.engine.loadFile({ format, fileName: `${file.name}.csv`, csvText: trimmed, firstRowHeader });
 } else {
-  const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
   const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
-  setImportProgress(null, `Loading into ${engineLabel()}…`);
-  await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader, skipRows, delim });
+  if (dataState.engine.id === 'duckdb'){
+    setImportProgress(null, `Loading into ${engineLabel()}…`);
+    await dataState.engine.loadFile({ format, fileName: file.name, file, firstRowHeader, skipRows, delim });
+  } else {
+    const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
+    setImportProgress(null, `Loading into ${engineLabel()}…`);
+    await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader, skipRows, delim });
+  }
 }
 
 dataState.hasSource = true;
