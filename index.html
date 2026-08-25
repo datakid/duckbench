@@ -1028,8 +1028,8 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
 <script>
   (function(){
     var saved = localStorage.getItem('duckbench-theme');
-    var theme = saved || 'default';
-    if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    var isLight = saved ? saved === 'light' : window.matchMedia('(prefers-color-scheme: light)').matches;
+    if (isLight) document.documentElement.setAttribute('data-theme', 'light');
   })();
 </script>
 
@@ -1507,6 +1507,12 @@ function toggleTheme(){
   else document.documentElement.removeAttribute('data-theme');
   localStorage.setItem('duckbench-theme', uiState.theme);
 }
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+  if (localStorage.getItem('duckbench-theme')) return;
+  uiState.theme = e.matches ? 'light' : 'dark';
+  if (uiState.theme === 'light') document.documentElement.setAttribute('data-theme','light');
+  else document.documentElement.removeAttribute('data-theme');
+});
 
 function switchPane(name){
   $$('.tab-btn').forEach(b => b.classList.toggle('is-active', b.dataset.tab===name));
