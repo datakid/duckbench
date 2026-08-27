@@ -1540,6 +1540,7 @@ const DUCKDB_DENYLIST = {
   '1.29.2': 'Published 2025-09-08 and briefly contained malware (CVE-2025-59037) before npm pulled it. Never load this version.',
 };
 const DEFAULT_DUCKDB_VERSION = '1.32.0';
+const INSTANTIATE_IDLE_TIMEOUT_MS = 30_000;
 const EXPRESS_SIZE_WARNING_BYTES = 75 * 1024 * 1024;
 const NPM_REGISTRY_URL = 'https://registry.npmjs.org/@duckdb/duckdb-wasm';
 
@@ -1702,29 +1703,6 @@ function sqlLiteralForColumn(value, colName, columns){
 }
 function denylistReason(version){ return DUCKDB_DENYLIST[String(version).trim()] || null; }
 
-async function trackBundleDownloadProgress(url, version){
-try {
-const res = await fetch(url);
-const total = Number(res.headers.get('content-length')) || 0;
-if (!total || total < 5_000_000 || !res.body){
-const buf = await res.arrayBuffer();
-return URL.createObjectURL(new Blob([buf]));
-}
-const reader = res.body.getReader();
-const chunks = [];
-let received = 0;
-while (true){
-const { done, value } = await reader.read();
-if (done) break;
-chunks.push(value);
-received += value.length;
-setEngineStatus('loading', `fetching duckdb-wasm@${version}… ${Math.round(received/total*100)}%`);
-}
-return URL.createObjectURL(new Blob(chunks));
-} catch(e){
-return url;
-}
-}
 async function loadDuckDB(version){
   if (dataState.conn && dataState.hasSource) { const e = new Error('A dataset is loaded — reload the page to start a new session on a different version.'); e.locked = true; throw e; }
   const bad = denylistReason(version);
@@ -1733,14 +1711,34 @@ async function loadDuckDB(version){
   const duckdb = await import( `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${version}/+esm`);
   const bundles = duckdb.getJsDelivrBundles();
   const bundle = await duckdb.selectBundle(bundles);
-  const moduleUrl = await trackBundleDownloadProgress(bundle.mainModule, version);
   const workerUrl = URL.createObjectURL(new Blob([`importScripts(${JSON.stringify(bundle.mainWorker)});`], { type:'text/javascript' }));
   const worker = new Worker(workerUrl);
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel ? duckdb.LogLevel.WARNING : undefined);
   const db = new duckdb.AsyncDuckDB(logger, worker);
-  await db.instantiate(moduleUrl, bundle.pthreadWorker);
+  let idleTimer, rejectOnStall;
+  const armStallTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      try { worker.terminate(); } catch {}
+      rejectOnStall(new Error(`DuckDB ${version} stalled while loading from the CDN — check your connection or try a different version.`));
+    }, INSTANTIATE_IDLE_TIMEOUT_MS);
+  };
+  const stallPromise = new Promise((_, reject) => { rejectOnStall = reject; armStallTimer(); });
+  try {
+    await Promise.race([
+      db.instantiate(bundle.mainModule, bundle.pthreadWorker, p => {
+        armStallTimer();
+        const pct = p.bytesTotal ? Math.round(p.bytesLoaded/p.bytesTotal*100) : null;
+        setEngineStatus('loading', (pct !== null && pct <= 100)
+          ? `fetching duckdb-wasm@${version}… ${pct}%`
+          : `fetching duckdb-wasm@${version}… ${(p.bytesLoaded/1024/1024).toFixed(1)} MB`);
+      }),
+      stallPromise
+    ]);
+  } finally {
+    clearTimeout(idleTimer);
+  }
   URL.revokeObjectURL(workerUrl);
-  if (moduleUrl !== bundle.mainModule) URL.revokeObjectURL(moduleUrl);
   await db.open({ query: { castTimestampToDate: true } });
   const conn = await db.connect();
   if (dataState.conn) { try { await dataState.conn.close(); } catch {} }
