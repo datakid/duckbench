@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com; connect-src 'self' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com https://registry.npmjs.org; worker-src 'self' blob: https://cdn.jsdelivr.net;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://cdn.sheetjs.com https://registry.npmjs.org https://extensions.duckdb.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Duckbench</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImR1Y2tiZW5jaCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTUiIGZpbGw9IiNGRTYxNjQiLz4KICA8ZyBmaWxsPSIjRjJGMkYzIj4KICAgIDxyZWN0IHg9IjgiIHk9IjQyIiB3aWR0aD0iOSIgaGVpZ2h0PSIxMiIgcng9IjQuNSIvPgogICAgPHJlY3QgeD0iMjEiIHk9IjM0IiB3aWR0aD0iOSIgaGVpZ2h0PSIyMCIgcng9IjQuNSIvPgogICAgPHBhdGggZD0iTTM0IDQ5LjUKICAgICAgICAgICAgIFYzMC41CiAgICAgICAgICAgICBBMTAuNSAxMC41IDAgMSAxIDQ4LjQgMTcuNAogICAgICAgICAgICAgTDU2IDE4LjYKICAgICAgICAgICAgIFE1OC42IDIxIDU1LjcgMjMuNgogICAgICAgICAgICAgTDQ3LjYgMjYuMwogICAgICAgICAgICAgQTEwLjUgMTAuNSAwIDAgMSA0MyAzMC41CiAgICAgICAgICAgICBWNDkuNQogICAgICAgICAgICAgQTQuNSA0LjUgMCAwIDEgMzQgNDkuNQogICAgICAgICAgICAgWiIvPgogIDwvZz4KICA8Y2lyY2xlIGN4PSI0MyIgY3k9IjE3IiByPSIzIiBmaWxsPSIjRkU2MTY0Ii8+Cjwvc3ZnPgo=">
@@ -19,12 +19,13 @@
   --line-rgb: 60,54,49;       --line: rgb(var(--line-rgb));
   --line-soft-rgb: 45,40,36;  --line-soft: rgb(var(--line-soft-rgb));
 
-  --brass-rgb: 255,98,102;        --brass: rgb(var(--brass-rgb));
-  --brass-bright-rgb: 255,140,143; --brass-bright: rgb(var(--brass-bright-rgb));
+  --brass-rgb: 200,71,77;        --brass: rgb(var(--brass-rgb));
+  --brass-bright-rgb: 216,88,94; --brass-bright: rgb(var(--brass-bright-rgb));
   --brass-dim-rgb: 198,78,82;      --brass-dim: rgb(var(--brass-dim-rgb));
   --brass-soft-rgb: 74,42,44;   --brass-soft: rgb(var(--brass-soft-rgb));
   --brass-dusty-rgb: 196,146,144;      --brass-dusty: rgb(var(--brass-dusty-rgb));
   --brass-dusty-text-rgb: 224,176,174;   --brass-dusty-text: rgb(var(--brass-dusty-text-rgb));
+  --on-brass: #FFFFFF;
 
   --verdigris-rgb: 110,180,152;     --verdigris: rgb(var(--verdigris-rgb));
   --verdigris-text-rgb: 150,214,188;  --verdigris-text: rgb(var(--verdigris-text-rgb));
@@ -53,12 +54,11 @@
   --font-body: "IBM Plex Sans", -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", "SF Mono", monospace;
 
-  --radius-s: 8px;  --radius-m: 12px;  --radius-l: 16px;  --radius-xl: 24px;
+  --radius-s: 8px;  --radius-m: 12px;  --radius-l: 16px;  --radius-xl: 16px;
   --ease-smooth: cubic-bezier(.22,.85,.32,1);
   --shadow-panel:
-    0 1px 2px rgba(var(--shadow-rgb),calc(var(--shadow-strength) * 1.1)),
-    0 8px 24px -6px rgba(var(--shadow-rgb),calc(var(--shadow-strength) * 1.6)),
-    0 0 0 1px rgba(var(--shadow-rgb),0.035);
+    0 1px 2px rgba(var(--shadow-rgb),calc(var(--shadow-strength) * 0.7)),
+    0 8px 24px -8px rgba(var(--shadow-rgb),calc(var(--shadow-strength) * 1.15));
   --shadow-glass:
     0 1px 0 rgba(255,255,255,0.6) inset,
     0 0 0 1px rgba(var(--shadow-rgb),0.06),
@@ -67,21 +67,21 @@
   --statusbar-h: 26px;
 }
 :root[data-theme="light"]{
-  --ink-0-rgb: 246,244,241;   --ink-1-rgb: 252,250,247;
-  --ink-2-rgb: 243,239,233;   --ink-3-rgb: 239,235,229;
+  --ink-0-rgb: 250,248,245;   --ink-1-rgb: 255,254,252;
+  --ink-2-rgb: 246,243,239;   --ink-3-rgb: 240,236,231;
   --ink-hi-rgb: 255,253,249;
-  --line-rgb: 229,227,224;    --line-soft-rgb: 237,235,232;
-  --brass-rgb: 255,98,102;    --brass-bright-rgb: 255,122,126;  --brass-dim-rgb: 201,74,78;
-  --brass-soft-rgb: 255,228,228;
-  --brass-dusty-rgb: 196,140,138;      --brass-dusty-text-rgb: 156,96,94;
+  --line-rgb: 231,225,218;    --line-soft-rgb: 240,235,229;
+  --brass-rgb: 200,71,77;    --brass-bright-rgb: 216,88,94;  --brass-dim-rgb: 201,74,78;
+  --brass-soft-rgb: 253,243,243;
+  --brass-dusty-rgb: 196,140,138;      --brass-dusty-text-rgb: 192,67,74;
   --verdigris-rgb: 107,142,127;   --verdigris-text-rgb: 74,108,94;
   --rust-rgb: 184,92,74;         --rust-text-rgb: 150,72,56;
   --plum-rgb: 123,109,184;        --plum-text-rgb: 91,74,158;
-  --paper-rgb: 31,27,24;   --paper-dim-rgb: 74,66,60;  --muted-rgb: 133,124,116;
-  --grid-surface-rgb: 253,251,248;      --grid-surface-alt-rgb: 247,244,239;
+  --paper-rgb: 28,24,22;   --paper-dim-rgb: 82,73,67;  --muted-rgb: 138,129,120;
+  --grid-surface-rgb: 255,254,252;      --grid-surface-alt-rgb: 250,247,243;
   --grid-ink-rgb: 31,27,24;       --grid-ink-dim-rgb: 124,116,108;
   --grid-line-rgb: 231,226,219;         --grid-line-soft-rgb: 240,237,231;
-  --grid-header-rgb: 244,241,236;
+  --grid-header-rgb: 247,243,238;
   --shadow-strength: 0.07;
   --texture-strength: 0.0;
   --shadow-rgb: 56,40,30;
@@ -111,7 +111,7 @@ input,select,textarea{font-family:inherit;}
 ::-webkit-scrollbar{width:10px;height:10px;}
 ::-webkit-scrollbar-track{background:transparent;}
 ::-webkit-scrollbar-thumb{background:var(--ink-3);border-radius:8px;border:2px solid var(--ink-0);}
-:focus-visible{outline:1.5px solid var(--brass-bright);outline-offset:2px;}
+:focus-visible{outline:2px solid rgba(var(--brass-rgb),.35);outline-offset:2px;}
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:0.001ms !important;animation-iteration-count:1 !important;transition-duration:0.001ms !important;}
 }
@@ -194,7 +194,7 @@ input,select,textarea{font-family:inherit;}
 }
 .theme-toggle-thumb{
   position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;
-  background:var(--brass);display:flex;align-items:center;justify-content:center;color:var(--ink-0);
+  background:var(--brass);display:flex;align-items:center;justify-content:center;color:var(--on-brass);
   transition:transform .25s cubic-bezier(.2,.8,.3,1);
   transform:translateX(26px);
 }
@@ -452,7 +452,7 @@ input,select,textarea{font-family:inherit;}
 .step-gap-add{
   position:absolute;left:24px;top:50%;width:18px;height:18px;border-radius:50%;
   transform:translate(-50%,-50%) scale(0.4);
-  background:var(--brass);color:var(--ink-0);border:2px solid var(--ink-1);
+  background:var(--brass);color:var(--on-brass);border:2px solid var(--ink-1);
   display:flex;align-items:center;justify-content:center;
   font-size:13px;line-height:1;font-weight:700;cursor:pointer;
   opacity:0;pointer-events:none;
@@ -464,7 +464,7 @@ input,select,textarea{font-family:inherit;}
 .step-gap-add:active{transform:translate(-50%,-50%) scale(0.85);}
 .rail-add{padding:0 14px 12px;}
 .rail-add-btn{width:100%;justify-content:center;padding:9px 14px;font-size:12px;}
-.rail-add-kbd{color:inherit;border-color:transparent;background:rgba(0,0,0,0.15);}
+.rail-add-kbd{color:inherit;background:rgba(255,255,255,0.22);border-color:rgba(255,255,255,0.28);}
 .rail-clear-link{
   background:none;border:none;color:var(--muted);font-size:11px;
   padding:4px 2px;cursor:pointer;text-align:center;width:100%;
@@ -585,7 +585,7 @@ input,select,textarea{font-family:inherit;}
 .btn-ghost:active{transform:scale(0.96);}
 .btn-ghost:disabled{opacity:0.4;cursor:default;}
 .btn-ghost.is-active{border-color:var(--brass);color:var(--paper);background:rgba(var(--brass-rgb),0.12);}
-.btn-solid{background:var(--brass);border:1px solid var(--brass);color:var(--ink-0);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.15),0 3px 10px -2px rgba(var(--brass-rgb),0.4);}
+.btn-solid{background:var(--brass);border:1px solid var(--brass);color:var(--on-brass);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.15),0 3px 10px -2px rgba(var(--brass-rgb),0.4);}
 .btn-solid:hover{background:var(--brass-bright);border-color:var(--brass-bright);box-shadow:0 2px 4px rgba(0,0,0,0.18),0 5px 16px -2px rgba(var(--brass-rgb),0.5);transform:translateY(-1px);}
 .btn-solid:active{transform:translateY(0) scale(0.97);}
 .btn-solid:disabled{opacity:0.4;cursor:default;background:var(--brass-dim);border-color:var(--brass-dim);box-shadow:none;}
@@ -608,6 +608,9 @@ input,select,textarea{font-family:inherit;}
 }
 .export-menu button:hover{background:var(--ink-2);color:var(--paper);}
 .export-menu button small{display:block;color:var(--muted);font-size:10.5px;font-weight:400;}
+.export-menu button.needs-full{opacity:0.6;}
+.export-menu button.needs-full:hover{opacity:0.9;}
+.export-menu button .engine-pill{margin-left:auto;}
 .pane{flex:1;min-height:0;display:none;flex-direction:column;}
 .pane.is-active{display:flex;}
 #previewPane{position:relative;}
@@ -1419,7 +1422,9 @@ function onGlobalModalKeydown(e){
 function onGlobalModalOutsideClick(e){
   const top = ModalStack.top();
   if (!top || !top.light) return;
-  if (!top.el.contains(e.target)) ModalStack.pop();
+  if (top.el.contains(e.target)) return;
+  if (top.trigger && top.trigger.nodeType && top.trigger.contains(e.target)) return;
+  ModalStack.pop();
 }
 function confirmDialog(message){
   return new Promise(resolve => {
@@ -1645,6 +1650,16 @@ const isText = !NUMERIC_TYPE_RE.test(c.type) && !BOOL_TYPE_RE.test(c.type) && !D
 return isText ? `(CASE WHEN ${q(c.name)} IS NOT NULL AND LEFT(${q(c.name)}, 1) IN ('=', '+', '-', '@') THEN '''' || ${q(c.name)} ELSE ${q(c.name)} END) AS ${q(c.name)}` : q(c.name);
 }).join(', ');
 }
+const extReady = new Map();
+function ensureDuckExtension(name){
+  if (!extReady.has(name)){
+    extReady.set(name, dataState.conn.query(`LOAD ${name}`).catch(() => {
+      extReady.delete(name);
+      throw new Error(`DuckDB needs the "${name}" extension, which it downloads from extensions.duckdb.org on first use. That request was blocked — check your network, extensions, or the page's connect-src policy.`);
+    }));
+  }
+  return extReady.get(name);
+}
 function splitCsvLines(text){
 const lines = [];
 let cur = '';
@@ -1779,6 +1794,25 @@ async function fetchLatestStableDuckDBVersion(){
   const latest = versions[versions.length-1];
   const publishedAt = data.time?.[latest] || null;
   return { version: latest, publishedAt };
+}
+
+async function loadDuckDBWithFallback(){
+  const pinned = typeof localStorage!=='undefined' && localStorage.getItem('duckbench-duckdb-version');
+  const candidates = [];
+  if (pinned) candidates.push(pinned);
+  if (!candidates.includes(DEFAULT_DUCKDB_VERSION)) candidates.push(DEFAULT_DUCKDB_VERSION);
+  let lastErr = null;
+  for (const v of candidates){
+    if (denylistReason(v)) continue;
+    try { return await loadDuckDB(v); }
+    catch(e){ lastErr = e; }
+  }
+  try {
+    const { version } = await fetchLatestStableDuckDBVersion();
+    return await loadDuckDB(version);
+  } catch(e){
+    throw lastErr || e;
+  }
 }
 
 function setEngineStatus(kind, label){
@@ -2015,6 +2049,7 @@ async function loadFileImpl({ format, fileName, buffer, csvText, firstRowHeader,
   if (format === 'parquet'){
     await dataState.db.registerFileBuffer(fileName, buffer);
     try {
+      await ensureDuckExtension('parquet');
       await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(SOURCE_TABLE)} AS SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM read_parquet(${esc(fileName)})`);
       dataState.rejectCount = 0;
       dataState.rejectCountUnknown = false;
@@ -2058,6 +2093,7 @@ async function loadSecondaryTableImpl(tableName, { format, fileName, buffer, csv
   if (format === 'parquet'){
     await dataState.db.registerFileBuffer(fileName, buffer);
     try {
+      await ensureDuckExtension('parquet');
       await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_parquet(${esc(fileName)})`);
     } finally {
       try { await dataState.db.dropFile(fileName); } catch(e){}
@@ -2226,6 +2262,7 @@ async function exportPlanImpl(plan, format){
   const hasPhysicalRid = physicalCols.some(c => c.name === RID);
   const exportSql = hasPhysicalRid ? `SELECT * EXCLUDE (${q(RID)}) FROM (${sql})` : sql;
   if (format === 'parquet'){
+    await ensureDuckExtension('parquet');
     const target = `${uid('exp_')}.parquet`;
     await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT PARQUET)`);
     const buf = await dataState.db.copyFileToBuffer(target);
@@ -2246,6 +2283,7 @@ async function exportPlanImpl(plan, format){
     return blob;
   }
   if (format === 'json' || format === 'jsonl'){
+    await ensureDuckExtension('json');
     const target = `${uid('exp_')}.json`;
     await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT JSON, ARRAY ${format==='json'?'TRUE':'FALSE'})`);
     const buf = await dataState.db.copyFileToBuffer(target);
@@ -2291,8 +2329,9 @@ function createDuckDBEngine(){
     label: 'DuckDB (full SQL)',
     capabilities: new Set(['sql','window','joins','regex','pivot','approxCountDistinct']),
     async init(opts={}){
-      const version = opts.version || dataState.duckdbVersion || (typeof localStorage!=='undefined' && localStorage.getItem('duckbench-duckdb-version')) || DEFAULT_DUCKDB_VERSION;
-      await loadDuckDB(version);
+      const explicit = opts.version || dataState.duckdbVersion;
+      if (explicit){ await loadDuckDB(explicit); return; }
+      await loadDuckDBWithFallback();
     },
     async loadFile(fileSpec, opts={}){
       await loadFileImpl({ ...fileSpec, ...opts });
@@ -3127,7 +3166,8 @@ Object.assign(TRANSFORMS, {
     toAq(d, table, ctx){
       const { aq } = ctx;
       const orderCol = d.orderBy || (ctx.hasRid ? RID : null);
-      const base = orderCol ? table.orderby(orderCol) : table;
+      let t = table.derive({ __origIdx: () => aq.op.row_number() });
+      const base = orderCol ? t.orderby(orderCol) : t;
       const derived = {};
       d.columns.forEach(c => {
         let arr = Array.from(base.array(c));
@@ -3136,7 +3176,7 @@ Object.assign(TRANSFORMS, {
         const filled = arr.map(v => { if (v!=null) { last=v; return v; } return last; });
         derived[c] = d.direction === 'up' ? filled.reverse() : filled;
       });
-      return base.assign(aq.table(derived));
+      return base.assign(aq.table(derived)).orderby('__origIdx').select(aq.not('__origIdx'));
     },
   },
   rank: {
@@ -3656,10 +3696,16 @@ function createArqueroEngine(){
       if (!table) throw new Error('Nothing to export.');
       const exportTable = table.columnNames().includes(RID) ? table.select(...table.columnNames().filter(c=>c!==RID)) : table;
       if (format === 'csv'){
-        const guardSpec = {};
-        exportTable.columnNames().forEach(c => { guardSpec[c] = aq.escape(row => csvFormulaGuardCell(row[c])); });
-        const csv = exportTable.derive(guardSpec).toCSV();
-        const blob = new Blob([csv], {type:'text/csv'});
+        const names = exportTable.columnNames();
+        const cell = v => {
+          v = csvFormulaGuardCell(v);
+          if (v == null) return '';
+          const s = String(v);
+          return /[",\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+        };
+        const lines = [names.join(',')];
+        for (const row of exportTable.objects()) lines.push(names.map(n => cell(row[n])).join(','));
+        const blob = new Blob([lines.join('\n')], {type:'text/csv'});
         blob.truncated = false;
         return blob;
       }
@@ -3693,8 +3739,9 @@ function createArqueroEngine(){
       const table = tableOf(plan);
       if (!table) throw new Error('Nothing to export.');
       const rows = table.objects({ limit: limit || Infinity });
-      const csvEsc = s => { s = csvFormulaGuardCell(s); return s == null ? nullStr||'' : /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g,'""')}"` : String(s); };
-      const lines = [cols.map(csvEsc).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
+      const csvStructEsc = s => /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g,'""')}"` : String(s);
+      const csvEsc = s => { s = csvFormulaGuardCell(s); return s == null ? nullStr||'' : csvStructEsc(s); };
+      const lines = [cols.map(csvStructEsc).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
       const blob = new Blob([lines.join('\n')], {type:'text/csv'});
       return blob;
     },
@@ -4121,7 +4168,8 @@ if (btn.dataset.originalLabel) btn.textContent = btn.dataset.originalLabel;
 }
 async function exportData(format){
 const steps = dataState.steps;
-const plan = await dataState.engine.compile(steps, steps.length-1);
+const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : steps.length-1;
+const plan = await dataState.engine.compile(steps, upto);
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
 const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
 const ext = format==='parquet'?'parquet':format==='csv'?'csv':format==='json'?'json':format==='jsonl'?'jsonl':'xlsx';
@@ -4129,11 +4177,13 @@ setExportBusy(true);
 try {
 const blob = await dataState.engine.export(plan, format);
 downloadBlob(blob, `${baseName}.${ext}`);
-if (format === 'parquet') toast('Parquet file downloaded.');
-else if (format === 'csv') toast('CSV file downloaded.');
-else if (format === 'json') toast('JSON file downloaded.');
-else if (format === 'jsonl') toast('JSONL file downloaded.');
-else toast(blob.truncated ? "Excel file downloaded — truncated to 1,048,575 rows (Excel's limit). Use CSV or Parquet for the full data." : 'Excel file downloaded.');
+const partial = upto < steps.length-1;
+const stepNote = partial ? ` (step ${upto+1} of ${steps.length})` : '';
+if (format === 'parquet') toast(`Parquet file downloaded${stepNote}.`);
+else if (format === 'csv') toast(`CSV file downloaded${stepNote}.`);
+else if (format === 'json') toast(`JSON file downloaded${stepNote}.`);
+else if (format === 'jsonl') toast(`JSONL file downloaded${stepNote}.`);
+else toast(blob.truncated ? `Excel file downloaded${stepNote} — truncated to 1,048,575 rows (Excel's limit). Use CSV or Parquet for the full data.` : `Excel file downloaded${stepNote}.`);
 } catch(e){
 toast(`Export failed: ${e.message}`);
 } finally {
@@ -4208,7 +4258,8 @@ await runCustomCsvExport(chosenCols, limit, nullInput.value);
 });
 }
 async function runCustomCsvExport(cols, limit, nullStr){
-const plan = await dataState.engine.compile(dataState.steps, dataState.steps.length-1);
+const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length-1;
+const plan = await dataState.engine.compile(dataState.steps, upto);
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
 setExportBusy(true);
 try {
@@ -5085,6 +5136,8 @@ dataState.sourceFile = file;
 dataState.sourceImportOptions = { sheet, skipRows, firstRowHeader };
 dataState.steps = [];
 uiState.selectedStepIndex = null;
+lastPreview = null;
+lastPreviewColKey = null;
 await refreshSourceSchema();
 resetHistory();
 $('#importOptions').hidden = true;
@@ -5137,6 +5190,7 @@ if (!ok) return;
 }
 const savedSteps = dataState.steps;
 const savedSelected = uiState.selectedStepIndex;
+const savedSecondary = dataState.secondarySources.slice();
 setEngineStatus('loading', 'switching engines…');
 try {
 dataState.engine = createEngine(targetId);
@@ -5162,9 +5216,14 @@ const buffer = new Uint8Array(await file.arrayBuffer());
 const delim = file.name.toLowerCase().endsWith('.tsv') ? `, delim='\t'` : '';
 await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader: opts.firstRowHeader, skipRows: opts.skipRows, delim });
 }
+dataState.secondarySources = [];
+dataState.secondaryAqTables = {};
+await restoreSecondarySources(savedSecondary.map(s => ({ id:s.id, name:s.name, format:s.format, file:s.file })));
 dataState.steps = savedSteps;
 uiState.selectedStepIndex = savedSelected;
 await refreshSourceSchema();
+lastPreview = null;
+lastPreviewColKey = null;
 closeInspector();
 resetHistory();
 renderAll();
@@ -5243,13 +5302,13 @@ uiState.inspector = { forIndex:index, isNew:false, type:step.type, data, checkpo
 renderInspector();
 primeInspectorCheckpoint();
 }
-function closeInspector(){
+async function closeInspector(){
 if (!uiState.inspector) return;
 uiState.inspector = null;
 dataState.inspectorToken++;
 $('#inspector').hidden = true;
 $('#inspector').innerHTML = '';
-dropAllCheckpoints();
+await dropAllCheckpoints();
 refreshPreview();
 }
 async function primeInspectorCheckpoint(){
@@ -6297,12 +6356,30 @@ $('#copySqlBtn').addEventListener('click', async () => {
 try { await navigator.clipboard.writeText($('#sqlEditor').value); toast('Copied.'); }
 catch { toast('Couldn’t copy — your browser blocked clipboard access.'); }
 });
-$('#exportBtn').addEventListener('click', (e) => { e.stopPropagation(); $('#exportMenu').hidden = !$('#exportMenu').hidden; });
-document.addEventListener('click', (e) => { if (!e.target.closest('.dropdown-menu-btn')) $('#exportMenu').hidden = true; });
+let exportMenuEntry = null;
+function updateExportMenuFullPill(){
+const btn = $('#exportMenu button[data-format="parquet"]');
+if (!btn) return;
+const needsFull = dataState.engine.id === 'arquero';
+btn.classList.toggle('needs-full', needsFull);
+const pill = btn.querySelector('.engine-pill');
+if (needsFull && !pill) btn.appendChild(el('span',{class:'engine-pill', title:'Needs Full engine'}, 'Full'));
+else if (!needsFull && pill) pill.remove();
+}
+$('#exportBtn').addEventListener('click', (e) => {
+e.stopPropagation();
+if (exportMenuEntry){ ModalStack.pop(exportMenuEntry); return; }
+updateExportMenuFullPill();
+exportMenuEntry = ModalStack.push($('#exportMenu'), { light:true, trigger:$('#exportBtn'), onClose:()=>{ exportMenuEntry = null; } });
+});
 $$('#exportMenu button').forEach(b => b.addEventListener('click', async () => {
-$('#exportMenu').hidden = true;
+if (exportMenuEntry) ModalStack.pop(exportMenuEntry);
 if (b.dataset.format){
+if (b.dataset.format === 'parquet' && dataState.engine.id === 'arquero'){
+await switchToFullAndRetry(() => exportData('parquet'));
+} else {
 try { await exportData(b.dataset.format); } catch(e){ toast(`Export failed: ${e.message}`); }
+}
 } else if (b.dataset.action === 'copy-insert'){
 copyAsSqlInsert();
 } else if (b.dataset.action === 'copy-markdown'){
@@ -6437,6 +6514,13 @@ const SELFTEST_CASES = [
 { label:'export — split-to-rows has no __rid', kind:'export', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', keepOriginal:false } }] },
 { label:'export — join has no __rid', kind:'export', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left' } }] },
 { label:'export — CSV formula injection guarded', kind:'csv-guard', steps:[{ type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'=1+1' } }] },
+{ label:'export — Arquero CSV export is non-empty', kind:'aq-csv-export', steps:[] },
+{ label:'export — DuckDB Parquet export has bytes', kind:'parquet-export', steps:[] },
+{ label:'export — DuckDB JSONL export parses', kind:'jsonl-export', steps:[] },
+{ label:'export — at selected step returns prefix row count', kind:'export-prefix', exportAtStep:0, steps:[
+{ type:'filter', data:{ column:'status', mode:'values', values:{ include:true, list:['Completed','Shipped'] } } },
+{ type:'group_by', data:{ groupColumns:['region'], aggregations:[{fn:'sum',column:'quantity',name:'total_qty'},{fn:'count',column:'',name:'n'}] } },
+] },
 ];
 
 async function selftestEnsureJoinSource(duckEngine, aqEngine){
@@ -6554,6 +6638,69 @@ return { label: def.label, pass:false, reason: e.message || String(e) };
 }
 }
 
+async function runSelfTestArqueroCsvExportCheck(def, duckEngine, aqEngine){
+if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
+try {
+const plan = await aqEngine.compile(def.steps, def.steps.length - 1);
+if (plan.error) return { label: def.label, pass:false, reason:`Arquero error — ${plan.error}` };
+const blob = await aqEngine.export(plan, 'csv');
+const text = await blob.text();
+if (!text.trim().length) return { label: def.label, pass:false, reason:'Arquero CSV export returned an empty blob' };
+return { label: def.label, pass:true };
+} catch(e){
+return { label: def.label, pass:false, reason: e.message || String(e) };
+}
+}
+async function runSelfTestParquetExportCheck(def, duckEngine, aqEngine){
+if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
+try {
+const plan = await duckEngine.compile(def.steps, def.steps.length - 1);
+if (plan.error) return { label: def.label, pass:false, reason:`DuckDB error — ${plan.error}` };
+const blob = await duckEngine.export(plan, 'parquet');
+if (!blob.size) return { label: def.label, pass:false, reason:'Parquet export returned 0 bytes' };
+return { label: def.label, pass:true };
+} catch(e){
+return { label: def.label, pass:false, reason: e.message || String(e) };
+}
+}
+async function runSelfTestJsonlExportCheck(def, duckEngine, aqEngine){
+if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
+try {
+const plan = await duckEngine.compile(def.steps, def.steps.length - 1);
+if (plan.error) return { label: def.label, pass:false, reason:`DuckDB error — ${plan.error}` };
+const blob = await duckEngine.export(plan, 'jsonl');
+const text = await blob.text();
+const lines = text.split(/\r?\n/).filter(Boolean);
+if (!lines.length) return { label: def.label, pass:false, reason:'JSONL export returned no rows' };
+for (const line of lines){
+try { JSON.parse(line); }
+catch(e){ return { label: def.label, pass:false, reason:`JSONL export has an unparseable line — ${e.message}`, firstDiffRow:{ line } }; }
+}
+return { label: def.label, pass:true };
+} catch(e){
+return { label: def.label, pass:false, reason: e.message || String(e) };
+}
+}
+async function runSelfTestExportAtStepCheck(def, duckEngine, aqEngine){
+if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
+try {
+const fullPlan = await duckEngine.compile(def.steps, def.steps.length - 1);
+if (fullPlan.error) return { label: def.label, pass:false, reason:`DuckDB error — ${fullPlan.error}` };
+const fullCount = await duckEngine.count(fullPlan);
+const prefixPlan = await duckEngine.compile(def.steps, def.exportAtStep);
+if (prefixPlan.error) return { label: def.label, pass:false, reason:`DuckDB error — ${prefixPlan.error}` };
+const prefixCount = await duckEngine.count(prefixPlan);
+const blob = await duckEngine.export(prefixPlan, 'csv');
+const text = await blob.text();
+const rowLines = text.split(/\r?\n/).filter(Boolean).length - 1;
+if (rowLines !== prefixCount) return { label: def.label, pass:false, reason:`Exported row count ${rowLines} doesn't match the step's row count ${prefixCount}`, firstDiffRow:{ exportedRows: rowLines, stepRowCount: prefixCount } };
+if (prefixCount === fullCount) return { label: def.label, pass:false, reason:'Prefix export matched the full-pipeline row count — the fixture needs a step that changes row count', firstDiffRow:{ prefixCount, fullCount } };
+return { label: def.label, pass:true };
+} catch(e){
+return { label: def.label, pass:false, reason: e.message || String(e) };
+}
+}
+
 function selfTestPanelEl(){
 let panel = document.getElementById('selftestPanel');
 if (!panel){
@@ -6617,6 +6764,14 @@ results[i] = SELFTEST_CASES[i].kind === 'export'
 ? await runSelfTestExportCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
 : SELFTEST_CASES[i].kind === 'csv-guard'
 ? await runSelfTestCsvGuardCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
+: SELFTEST_CASES[i].kind === 'aq-csv-export'
+? await runSelfTestArqueroCsvExportCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
+: SELFTEST_CASES[i].kind === 'parquet-export'
+? await runSelfTestParquetExportCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
+: SELFTEST_CASES[i].kind === 'jsonl-export'
+? await runSelfTestJsonlExportCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
+: SELFTEST_CASES[i].kind === 'export-prefix'
+? await runSelfTestExportAtStepCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
 : await runSelfTestParityCase(SELFTEST_CASES[i], duckEngine, aqEngine);
 } catch(e){
 results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error — ${e.message || e}` };
