@@ -2167,8 +2167,23 @@ async function runBatchFileArquero(file, steps){
   const n = await dataState.engine.count(plan);
   return { ok:true, blob, rowCount:n };
 }
+async function runBatchFileFrame(file, steps){
+  const ext = (file.name.split('.').pop()||'').toLowerCase();
+  if (ext==='parquet'||ext==='xlsx'||ext==='xls') return { ok:false, error:'Excel/Parquet batch files need Full mode.' };
+  const text = await file.text();
+  const delimiter = file.name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+  const frame = frameFromCsv(text, { delimiter, withRid: false });
+  const compiled = await compileFrame(steps, steps.length-1, frame, dataState.secondaryFrames);
+  if (compiled.error) return { ok:false, error: `Step ${compiled.errorIndex+1}: ${compiled.error}` };
+  const plan = makeFramePlan(compiled);
+  const blob = await dataState.engine.export(plan, 'csv');
+  const n = await dataState.engine.count(plan);
+  return { ok:true, blob, rowCount:n };
+}
 async function runBatchFile(file, steps){
-  return dataState.engine.id === 'duckdb' ? runBatchFileDuckDB(file, steps) : runBatchFileArquero(file, steps);
+  if (dataState.engine.id === 'duckdb') return runBatchFileDuckDB(file, steps);
+  if (dataState.engine.id === 'frame') return runBatchFileFrame(file, steps);
+  return runBatchFileArquero(file, steps);
 }
 async function fetchSkippedRowsDetail(){
   const res = await dataState.conn.query(`SELECT line, column_idx, error_type, csv_line, error_message FROM reject_errors ORDER BY line LIMIT 200`);
@@ -3453,6 +3468,750 @@ Object.assign(TRANSFORMS, {
   },
 });
 
+function makeFrame(names, cols, index, nrows){
+  const n = nrows != null ? nrows : (index ? index.length : (names.length ? (cols[names[0]] ? cols[names[0]].length : 0) : 0));
+  return { names: names.slice(), cols, index: index || null, nrows: n };
+}
+function materializeFrame(f){
+  if (!f.index) return f;
+  const cols = {};
+  for (const name of f.names){
+    const src = f.cols[name], out = new Array(f.nrows);
+    for (let i = 0; i < f.nrows; i++) out[i] = src[f.index[i]];
+    cols[name] = out;
+  }
+  return makeFrame(f.names, cols, null, f.nrows);
+}
+function frameRowReader(f){
+  const cur = { i: 0 };
+  const row = { $seek(i){ cur.i = f.index ? f.index[i] : i; } };
+  for (const name of f.names){
+    Object.defineProperty(row, name, { get(){ return f.cols[name][cur.i]; }, enumerable: true });
+  }
+  return row;
+}
+function frameToObjects(f, limit){
+  const d = materializeFrame(f);
+  const n = limit != null ? Math.min(limit, d.nrows) : d.nrows;
+  const out = new Array(n);
+  for (let i = 0; i < n; i++){
+    const o = {};
+    for (const name of d.names) o[name] = d.cols[name][i];
+    out[i] = o;
+  }
+  return out;
+}
+function frameCompareScalars(a, b){
+  if (typeof a === 'number' && typeof b === 'number') return a < b ? -1 : a > b ? 1 : 0;
+  if (a instanceof Date || b instanceof Date){
+    const ta = a instanceof Date ? a.getTime() : a;
+    const tb = b instanceof Date ? b.getTime() : b;
+    return ta < tb ? -1 : ta > tb ? 1 : 0;
+  }
+  if (typeof a === 'boolean' || typeof b === 'boolean') return (a?1:0) - (b?1:0);
+  const sa = String(a), sb = String(b);
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+function frameGroupKeyOf(row, names){
+  return names.map(n => {
+    const v = row[n];
+    return v == null ? '\u0000N' : (v instanceof Date ? 'D:' + v.getTime() : (typeof v)[0] + ':' + String(v));
+  }).join('\u0001');
+}
+
+const FR = {};
+FR.filter = function(f, pred){
+  const n = f.nrows;
+  const out = new Uint32Array(n);
+  let k = 0;
+  const row = frameRowReader(f);
+  for (let i = 0; i < n; i++){
+    row.$seek(i);
+    if (pred(row, i)) out[k++] = f.index ? f.index[i] : i;
+  }
+  return makeFrame(f.names, f.cols, out.subarray(0, k), k);
+};
+FR.derive = function(f, spec){
+  const d = materializeFrame(f);
+  const cols = Object.assign({}, d.cols);
+  const names = d.names.slice();
+  const row = frameRowReader(d);
+  for (const name of Object.keys(spec)){
+    const fn = spec[name];
+    const out = new Array(d.nrows);
+    for (let i = 0; i < d.nrows; i++){ row.$seek(i); out[i] = fn(row, i); }
+    cols[name] = out;
+    if (!names.includes(name)) names.push(name);
+  }
+  return makeFrame(names, cols, null, d.nrows);
+};
+FR.select = function(f, names){
+  const cols = {};
+  for (const n of names) cols[n] = f.cols[n];
+  return makeFrame(names, cols, f.index, f.nrows);
+};
+FR.exclude = function(f, dropNames){
+  const dropSet = new Set(dropNames);
+  return FR.select(f, f.names.filter(n => !dropSet.has(n)));
+};
+FR.rename = function(f, mapping){
+  const names = f.names.map(n => (mapping[n] !== undefined ? mapping[n] : n));
+  const cols = {};
+  f.names.forEach((n, i) => { cols[names[i]] = f.cols[n]; });
+  return makeFrame(names, cols, f.index, f.nrows);
+};
+FR.relocate = function(f, name, beforeName){
+  const rest = f.names.filter(n => n !== name);
+  const at = rest.indexOf(beforeName);
+  rest.splice(at < 0 ? rest.length : at, 0, name);
+  return FR.select(f, rest);
+};
+FR.slice = function(f, start, end){
+  const n = f.nrows;
+  start = start < 0 ? Math.max(0, n + start) : Math.min(start, n);
+  end = end == null ? n : (end < 0 ? Math.max(0, n + end) : Math.min(end, n));
+  if (end < start) end = start;
+  const len = end - start;
+  const out = new Uint32Array(len);
+  for (let i = 0; i < len; i++) out[i] = f.index ? f.index[start + i] : (start + i);
+  return makeFrame(f.names, f.cols, out, len);
+};
+FR.sort = function(f, keys){
+  const n = f.nrows;
+  const idx = new Array(n);
+  for (let i = 0; i < n; i++) idx[i] = f.index ? f.index[i] : i;
+  idx.sort((a, b) => {
+    for (const key of keys){
+      const col = f.cols[key.name];
+      const va = col[a], vb = col[b];
+      const an = va == null, bn = vb == null;
+      if (an || bn){
+        if (an && bn) continue;
+        if (an) return key.nullsLast ? 1 : -1;
+        return key.nullsLast ? -1 : 1;
+      }
+      let c = frameCompareScalars(va, vb);
+      if (key.desc) c = -c;
+      if (c !== 0) return c;
+    }
+    return 0;
+  });
+  return makeFrame(f.names, f.cols, Uint32Array.from(idx), n);
+};
+FR.dedupe = function(f, keyNames){
+  const n = f.nrows;
+  const row = frameRowReader(f);
+  const seen = new Set();
+  const out = new Uint32Array(n);
+  let k = 0;
+  for (let i = 0; i < n; i++){
+    row.$seek(i);
+    const key = frameGroupKeyOf(row, keyNames);
+    if (!seen.has(key)){ seen.add(key); out[k++] = f.index ? f.index[i] : i; }
+  }
+  return makeFrame(f.names, f.cols, out.subarray(0, k), k);
+};
+FR.unroll = function(f, name){
+  const d = materializeFrame(f);
+  const outCols = {};
+  d.names.forEach(n => outCols[n] = []);
+  let total = 0;
+  for (let i = 0; i < d.nrows; i++){
+    const arr = d.cols[name][i];
+    const list = Array.isArray(arr) ? (arr.length ? arr : [null]) : [arr];
+    for (const v of list){
+      d.names.forEach(n => outCols[n].push(n === name ? v : d.cols[n][i]));
+      total++;
+    }
+  }
+  return makeFrame(d.names, outCols, null, total);
+};
+FR.fold = function(f, foldNames, nameCol, valueCol){
+  const keepNames = f.names.filter(n => !foldNames.includes(n));
+  const d = materializeFrame(f);
+  const outNames = keepNames.concat([nameCol, valueCol]);
+  const outCols = {};
+  outNames.forEach(n => outCols[n] = []);
+  for (let i = 0; i < d.nrows; i++){
+    for (const fn of foldNames){
+      keepNames.forEach(kn => outCols[kn].push(d.cols[kn][i]));
+      outCols[nameCol].push(fn);
+      outCols[valueCol].push(d.cols[fn][i]);
+    }
+  }
+  return makeFrame(outNames, outCols, null, d.nrows * foldNames.length);
+};
+function frameAggState(){ return { count: 0, n: 0, sum: 0, min: null, max: null, distinct: new Set(), values: [], first: undefined }; }
+function frameAggAdd(st, v){
+  st.count++;
+  if (v == null) return;
+  st.n++;
+  const num = Number(v);
+  st.sum += num;
+  if (st.min === null || frameCompareScalars(v, st.min) < 0) st.min = v;
+  if (st.max === null || frameCompareScalars(v, st.max) > 0) st.max = v;
+  st.distinct.add(v instanceof Date ? v.getTime() : v);
+  st.values.push(num);
+  if (st.first === undefined) st.first = v;
+}
+function frameAggResult(st, fn){
+  switch (fn){
+    case 'count': return st.count;
+    case 'count_distinct': return st.distinct.size;
+    case 'sum': return st.n ? st.sum : null;
+    case 'avg': return st.n ? st.sum / st.n : null;
+    case 'min': return st.min;
+    case 'max': return st.max;
+    case 'first': return st.first === undefined ? null : st.first;
+    case 'median': {
+      if (!st.values.length) return null;
+      const s = st.values.slice().sort((a, b) => a - b);
+      const mid = s.length >> 1;
+      return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+    }
+    default: return null;
+  }
+}
+FR.groupbyRollup = function(f, groupNames, aggSpecs){
+  const n = f.nrows;
+  const row = frameRowReader(f);
+  const groups = new Map();
+  for (let i = 0; i < n; i++){
+    row.$seek(i);
+    const key = frameGroupKeyOf(row, groupNames);
+    let g = groups.get(key);
+    if (!g){
+      g = { keyVals: groupNames.map(gn => row[gn]), aggs: aggSpecs.map(() => frameAggState()) };
+      groups.set(key, g);
+    }
+    aggSpecs.forEach((spec, si) => frameAggAdd(g.aggs[si], spec.fn === 'count' ? undefined : row[spec.col]));
+  }
+  const outNames = groupNames.concat(aggSpecs.map(s => s.name));
+  const outCols = {};
+  outNames.forEach(n2 => outCols[n2] = []);
+  for (const g of groups.values()){
+    groupNames.forEach((gn, gi) => outCols[gn].push(g.keyVals[gi]));
+    aggSpecs.forEach((spec, si) => outCols[spec.name].push(frameAggResult(g.aggs[si], spec.fn)));
+  }
+  return makeFrame(outNames, outCols, null, groups.size);
+};
+FR.pivot = function(f, groupNames, onName, valueName, fn){
+  const n = f.nrows;
+  const row = frameRowReader(f);
+  const distinctVals = new Set();
+  for (let i = 0; i < n; i++){ row.$seek(i); const v = row[onName]; if (v != null) distinctVals.add(v); }
+  const sortedVals = Array.from(distinctVals).sort(frameCompareScalars);
+  const pivotCols = sortedVals.map(v => String(v));
+  const groups = new Map();
+  for (let i = 0; i < n; i++){
+    row.$seek(i);
+    const key = frameGroupKeyOf(row, groupNames);
+    let g = groups.get(key);
+    if (!g){ g = { keyVals: groupNames.map(gn => row[gn]), cells: {} }; groups.set(key, g); }
+    const onV = row[onName];
+    if (onV == null) continue;
+    const pcol = String(onV);
+    let cell = g.cells[pcol];
+    if (!cell){ cell = frameAggState(); g.cells[pcol] = cell; }
+    frameAggAdd(cell, row[valueName]);
+  }
+  const outNames = groupNames.concat(pivotCols);
+  const outCols = {};
+  outNames.forEach(n2 => outCols[n2] = []);
+  for (const g of groups.values()){
+    groupNames.forEach((gn, gi) => outCols[gn].push(g.keyVals[gi]));
+    pivotCols.forEach(pcol => {
+      const cell = g.cells[pcol];
+      outCols[pcol].push(cell ? frameAggResult(cell, fn) : null);
+    });
+  }
+  return makeFrame(outNames, outCols, null, groups.size);
+};
+FR.join = function(left, right, leftKey, rightKey, opts){
+  const ld = materializeFrame(left), rd = materializeFrame(right);
+  const leftNames = ld.names, rightNames = rd.names;
+  const leftSet = new Set(leftNames);
+  const rightOutNames = rightNames.map(n => leftSet.has(n) ? n + '_right' : n);
+  const outNames = leftNames.concat(rightOutNames);
+  const outCols = {};
+  outNames.forEach(n => outCols[n] = []);
+  const rightIndex = new Map();
+  for (let j = 0; j < rd.nrows; j++){
+    const kv = rd.cols[rightKey][j];
+    if (kv == null) continue;
+    const key = kv instanceof Date ? kv.getTime() : kv;
+    if (!rightIndex.has(key)) rightIndex.set(key, []);
+    rightIndex.get(key).push(j);
+  }
+  const matchedRight = new Uint8Array(rd.nrows);
+  let total = 0;
+  const pushRow = (li, ri) => {
+    leftNames.forEach(n => outCols[n].push(li == null ? null : ld.cols[n][li]));
+    rightNames.forEach((n, ni) => outCols[rightOutNames[ni]].push(ri == null ? null : rd.cols[n][ri]));
+    total++;
+  };
+  for (let i = 0; i < ld.nrows; i++){
+    const kv = ld.cols[leftKey][i];
+    const key = kv == null ? null : (kv instanceof Date ? kv.getTime() : kv);
+    const matches = key == null ? [] : (rightIndex.get(key) || []);
+    if (matches.length){
+      for (const j of matches){ pushRow(i, j); matchedRight[j] = 1; }
+    } else if (opts.left){
+      pushRow(i, null);
+    }
+  }
+  if (opts.right){
+    for (let j = 0; j < rd.nrows; j++) if (!matchedRight[j]) pushRow(null, j);
+  }
+  return makeFrame(outNames, outCols, null, total);
+};
+FR.rank = function(f, opts){
+  const { orderCol, desc, nullsLast, partitionCols, mode, outName } = opts;
+  const d = materializeFrame(f);
+  const n = d.nrows;
+  const partitions = new Map();
+  for (let i = 0; i < n; i++){
+    const pk = partitionCols.length ? partitionCols.map(pn => { const v = d.cols[pn][i]; return v == null ? '\u0000N' : (v instanceof Date ? v.getTime() : v); }).join('\u0001') : '';
+    if (!partitions.has(pk)) partitions.set(pk, []);
+    partitions.get(pk).push(i);
+  }
+  const outVals = new Array(n);
+  const ocol = d.cols[orderCol];
+  for (const idxs of partitions.values()){
+    idxs.sort((a, b) => {
+      const va = ocol[a], vb = ocol[b];
+      const an = va == null, bn = vb == null;
+      if (an || bn){
+        if (an && bn) return 0;
+        if (an) return nullsLast ? 1 : -1;
+        return nullsLast ? -1 : 1;
+      }
+      let c = frameCompareScalars(va, vb);
+      return desc ? -c : c;
+    });
+    let rankVal = 1, denseVal = 1, prevVal, prevIsNull, hasPrev = false;
+    idxs.forEach((origI, pos) => {
+      const v = ocol[origI];
+      const isNull = v == null;
+      if (mode === 'row_number'){
+        outVals[origI] = pos + 1;
+      } else {
+        let tie;
+        if (!hasPrev) tie = false;
+        else if (isNull && prevIsNull) tie = true;
+        else if (isNull || prevIsNull) tie = false;
+        else tie = frameCompareScalars(v, prevVal) === 0;
+        if (!tie){ rankVal = pos + 1; denseVal = hasPrev ? denseVal + 1 : 1; }
+        outVals[origI] = mode === 'dense_rank' ? denseVal : rankVal;
+      }
+      prevVal = v; prevIsNull = isNull; hasPrev = true;
+    });
+  }
+  const cols = Object.assign({}, d.cols, { [outName]: outVals });
+  const names = d.names.includes(outName) ? d.names : d.names.concat([outName]);
+  return makeFrame(names, cols, null, n);
+};
+FR.runningTotal = function(f, opts){
+  const { col, orderCol, partitionCols, outName } = opts;
+  const d = materializeFrame(f);
+  const n = d.nrows;
+  const partitions = new Map();
+  for (let i = 0; i < n; i++){
+    const pk = partitionCols.length ? partitionCols.map(pn => { const v = d.cols[pn][i]; return v == null ? '\u0000N' : (v instanceof Date ? v.getTime() : v); }).join('\u0001') : '';
+    if (!partitions.has(pk)) partitions.set(pk, []);
+    partitions.get(pk).push(i);
+  }
+  const outVals = new Array(n);
+  const ocol = d.cols[orderCol], vcol = d.cols[col];
+  for (const idxs of partitions.values()){
+    idxs.sort((a, b) => {
+      const va = ocol[a], vb = ocol[b];
+      const an = va == null, bn = vb == null;
+      if (an || bn){ if (an && bn) return 0; return an ? 1 : -1; }
+      return frameCompareScalars(va, vb);
+    });
+    let running = 0, seenAny = false;
+    for (const origI of idxs){
+      const v = vcol[origI];
+      if (v != null){ running += Number(v); seenAny = true; }
+      outVals[origI] = seenAny ? running : null;
+    }
+  }
+  const cols = Object.assign({}, d.cols, { [outName]: outVals });
+  const names = d.names.includes(outName) ? d.names : d.names.concat([outName]);
+  return makeFrame(names, cols, null, n);
+};
+
+function parseCsvRowFrame(line, delim){
+  const fields = [];
+  let cur = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++){
+    const ch = line[i];
+    if (inQuotes){
+      if (ch === '"'){
+        if (line[i+1] === '"'){ cur += '"'; i++; } else { inQuotes = false; }
+      } else cur += ch;
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === delim){ fields.push(cur); cur=''; }
+      else cur += ch;
+    }
+  }
+  fields.push(cur);
+  return fields;
+}
+function inferFrameColumnKind(values){
+  let sawNumber = true, sawBool = true, any = false;
+  for (const v of values){
+    if (v == null) continue;
+    any = true;
+    if (sawNumber && !/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(v)) sawNumber = false;
+    if (sawBool && !/^(true|false)$/i.test(v)) sawBool = false;
+    if (!sawNumber && !sawBool) break;
+  }
+  if (!any) return 'string';
+  if (sawBool) return 'boolean';
+  if (sawNumber) return 'number';
+  return 'string';
+}
+function frameFromCsv(csvText, opts){
+  const { delimiter = ',', header = true, withRid = true } = opts || {};
+  const rawLines = splitCsvLines(csvText).filter((l, i, arr) => !(i === arr.length - 1 && l === ''));
+  if (!rawLines.length) return withRid ? makeFrame([RID], { [RID]: [] }, null, 0) : makeFrame([], {}, null, 0);
+  const rows = rawLines.map(l => parseCsvRowFrame(l, delimiter));
+  let names, dataRows;
+  if (header !== false){
+    names = rows[0].map((n, i) => n.trim() || `column_${i+1}`);
+    dataRows = rows.slice(1);
+  } else {
+    names = rows[0].map((_, i) => `column_${i+1}`);
+    dataRows = rows;
+  }
+  const rawCols = names.map((_, ci) => dataRows.map(r => { const v = r[ci]; return (v === undefined || v === '') ? null : v; }));
+  const kinds = rawCols.map(inferFrameColumnKind);
+  const cols = {};
+  names.forEach((name, ci) => {
+    const kind = kinds[ci];
+    cols[name] = rawCols[ci].map(v => {
+      if (v == null) return null;
+      if (kind === 'number') return Number(v);
+      if (kind === 'boolean') return /^true$/i.test(v);
+      return v;
+    });
+  });
+  const n = dataRows.length;
+  if (!withRid) return makeFrame(names, cols, null, n);
+  const ridCol = new Array(n);
+  for (let i = 0; i < n; i++) ridCol[i] = i + 1;
+  return makeFrame([RID, ...names], Object.assign({ [RID]: ridCol }, cols), null, n);
+}
+function frameColumnArray(f, name){
+  if (!f.index) return f.cols[name];
+  const src = f.cols[name], out = new Array(f.nrows);
+  for (let i = 0; i < f.nrows; i++) out[i] = src[f.index[i]];
+  return out;
+}
+function frameInferType(f, col){
+  const arr = frameColumnArray(f, col);
+  let sawNumber = false, sawInt = true, sawBool = false, sawDate = false, sawString = false, sampled = 0;
+  for (let i = 0; i < arr.length && sampled < 1000; i++){
+    const v = arr[i];
+    if (v == null) continue;
+    sampled++;
+    if (typeof v === 'number'){ sawNumber = true; if (!Number.isInteger(v)) sawInt = false; }
+    else if (typeof v === 'boolean') sawBool = true;
+    else if (v instanceof Date) sawDate = true;
+    else sawString = true;
+  }
+  if (sawBool && !sawNumber && !sawDate && !sawString) return 'BOOLEAN';
+  if (sawDate && !sawNumber && !sawString) return 'TIMESTAMP';
+  if (sawNumber && !sawString) return sawInt ? 'BIGINT' : 'DOUBLE';
+  return 'VARCHAR';
+}
+function frameColumnsMeta(f){
+  return f.names.filter(n => n !== RID).map(name => ({ name, type: frameInferType(f, name) }));
+}
+
+const FRAME_IMPLS = {
+  filter(d, f, ctx){
+    const col = d.column;
+    const colType = ctx.columnsMeta.find(c => c.name === col)?.type;
+    if (d.mode === 'values'){
+      const hasNull = d.values.list.some(v => v === null);
+      const nonNullSet = new Set(d.values.list.filter(v => v !== null).map(v => aqOrderKey(coerceForColumn(v, colType))));
+      const include = d.values.include;
+      return FR.filter(f, row => {
+        const v = row[col];
+        const matches = (v == null) ? hasNull : nonNullSet.has(aqOrderKey(v));
+        return include ? matches : !matches;
+      });
+    }
+    const operator = d.operator;
+    const lit = aqOrderKey(coerceForColumn(d.value, colType));
+    const strLit = String(d.value ?? '').toLowerCase();
+    return FR.filter(f, row => {
+      const raw = row[col];
+      const v = aqOrderKey(raw);
+      switch (operator){
+        case '=': return v === lit;
+        case '!=': return v !== lit;
+        case '>': return v != null && lit != null && v > lit;
+        case '<': return v != null && lit != null && v < lit;
+        case '>=': return v != null && lit != null && v >= lit;
+        case '<=': return v != null && lit != null && v <= lit;
+        case 'contains': return raw != null && String(raw).toLowerCase().includes(strLit);
+        case 'not_contains': return raw == null || !String(raw).toLowerCase().includes(strLit);
+        case 'starts_with': return raw != null && String(raw).toLowerCase().startsWith(strLit);
+        case 'ends_with': return raw != null && String(raw).toLowerCase().endsWith(strLit);
+        case 'is_null': return raw == null;
+        case 'is_not_null': return raw != null;
+        default: return true;
+      }
+    });
+  },
+  sort(d, f){
+    return FR.sort(f, [{ name: d.column, desc: d.direction === 'desc', nullsLast: !!d.nullsLast }]);
+  },
+  remove_duplicates(d, f, ctx){
+    const keyCols = d.columns?.length ? d.columns : ctx.columns.filter(c => c !== RID);
+    const orderCol = d.orderBy || (ctx.hasRid ? RID : null);
+    let t = orderCol ? FR.sort(f, [{ name: orderCol, desc: false, nullsLast: true }]) : f;
+    t = FR.dedupe(t, keyCols);
+    return ctx.hasRid ? FR.exclude(t, [RID]) : t;
+  },
+  remove_blank_rows(d, f, ctx){
+    const cols = ctx.columns.filter(c => c !== RID);
+    const isBlank = v => v == null || (typeof v === 'string' && v.trim() === '');
+    return FR.filter(f, row => !cols.every(c => isBlank(row[c])));
+  },
+  promote_headers(d, f, ctx){
+    if (f.nrows === 0) return f;
+    const cols = ctx.columns.filter(c => c !== RID);
+    const row = frameRowReader(f);
+    row.$seek(0);
+    const used = new Set();
+    const mapping = {};
+    cols.forEach(oldName => {
+      let n = String(row[oldName] ?? oldName).trim() || oldName;
+      n = n.replace(/\s+/g, ' ');
+      let final = n, i = 2;
+      while (used.has(final)) final = `${n}_${i++}`;
+      used.add(final);
+      if (final !== oldName) mapping[oldName] = final;
+    });
+    let t = FR.slice(f, 1, null);
+    if (Object.keys(mapping).length) t = FR.rename(t, mapping);
+    return t;
+  },
+  index_column(d, f, ctx){
+    const start = Number(d.start) || 0;
+    const name = d.name;
+    let t = FR.derive(f, { [name]: (row, i) => i + start });
+    t = FR.relocate(t, name, ctx.columns[0]);
+    return t;
+  },
+  limit(d, f){
+    const count = Number(d.count) || 1000;
+    const offset = Number(d.offset) || 0;
+    return FR.slice(f, offset, offset + count);
+  },
+  select_columns(d, f, ctx){
+    const keep = d.columns.filter(c => c !== RID);
+    return ctx.hasRid ? FR.select(f, [...keep, RID]) : FR.select(f, keep);
+  },
+  remove_columns(d, f){
+    return FR.exclude(f, d.columns);
+  },
+  duplicate_column(d, f, ctx){
+    const name = dedupeName(`${d.column}_copy`, ctx.columns);
+    const col = d.column;
+    return FR.derive(f, { [name]: row => row[col] });
+  },
+  rename_column(d, f){
+    if (d.column === d.newName) return f;
+    return FR.rename(f, { [d.column]: d.newName });
+  },
+  change_type(d, f){
+    const col = d.column;
+    const targetType = d.targetType;
+    return FR.derive(f, { [col]: row => coerceForColumn(row[col], targetType) });
+  },
+  split_column(d, f, ctx){
+    const col = d.column;
+    const delim = d.delimiter;
+    if (d.mode === 'rows'){
+      let t = FR.derive(f, { [col]: row => row[col] == null ? [null] : String(row[col]).split(delim) });
+      t = FR.unroll(t, col);
+      return t;
+    }
+    const n = clamp(Number(d.maxParts) || 4, 1, 20);
+    const names = Array.from({ length: n }, (_, i) => dedupeName(`${d.column}_${i+1}`, ctx.columns));
+    const spec = {};
+    names.forEach((name, i) => {
+      spec[name] = row => {
+        if (row[col] == null) return null;
+        const parts = String(row[col]).split(delim);
+        return parts[i] ?? null;
+      };
+    });
+    let t = FR.derive(f, spec);
+    if (!d.keepOriginal) t = FR.exclude(t, [col]);
+    return t;
+  },
+  merge_columns(d, f){
+    const cols = d.columns;
+    const sep = d.separator;
+    const name = d.name;
+    let t = FR.derive(f, { [name]: row => cols.map(c => row[c]).filter(v => v != null).join(sep) });
+    if (!d.keepOriginal) t = FR.exclude(t, cols.filter(c => c !== name));
+    return t;
+  },
+  extract_text(d, f){
+    const col = d.column, name = d.name, mode = d.mode, pattern = d.pattern, delimiter = d.delimiter;
+    const start = Number(d.start) || 0, length = Number(d.length) || 1;
+    const fn = mode === 'regex' ? (s) => {
+      if (s == null) return null;
+      let re; try { re = new RegExp(pattern); } catch { return null; }
+      const m = String(s).match(re);
+      return m ? m[0] : null;
+    } : mode === 'before' ? (s) => {
+      if (s == null) return null;
+      const str = String(s); const i = str.indexOf(delimiter);
+      return i === -1 ? str : str.slice(0, i);
+    } : mode === 'after' ? (s) => {
+      if (s == null) return null;
+      const str = String(s); const i = str.indexOf(delimiter);
+      return i === -1 ? '' : str.slice(i + delimiter.length);
+    } : (s) => {
+      if (s == null) return null;
+      return String(s).slice(start, start + length);
+    };
+    return FR.derive(f, { [name]: row => fn(row[col]) });
+  },
+  replace_values(d, f, ctx){
+    const col = d.column;
+    const colType = ctx.columnsMeta.find(c => c.name === col)?.type;
+    const replaceVal = coerceForColumn(d.replace, colType);
+    if (d.scope === 'cell'){
+      const ridTarget = d.rid;
+      return FR.derive(f, { [col]: row => String(row[RID]) === String(ridTarget) ? replaceVal : row[col] });
+    }
+    const findKey = aqOrderKey(coerceForColumn(d.find, colType));
+    return FR.derive(f, { [col]: row => aqOrderKey(row[col]) === findKey ? replaceVal : row[col] });
+  },
+  change_case(d, f){
+    const mode = d.mode;
+    const titleCase = (s) => s.toLowerCase().split(' ').map(w => w.length ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+    const fn = mode === 'upper' ? (s) => s.toUpperCase() : mode === 'lower' ? (s) => s.toLowerCase() : titleCase;
+    const spec = {};
+    d.columns.forEach(c => { spec[c] = row => row[c] == null ? null : fn(String(row[c])); });
+    return FR.derive(f, spec);
+  },
+  trim_clean(d, f){
+    const spec = {};
+    d.columns.forEach(c => {
+      spec[c] = row => {
+        if (row[c] == null) return null;
+        const cleaned = String(row[c]).replace(/\s+/g, ' ').trim();
+        return cleaned === '' ? null : cleaned;
+      };
+    });
+    return FR.derive(f, spec);
+  },
+  fill(d, f, ctx){
+    const orderCol = d.orderBy || (ctx.hasRid ? RID : null);
+    let t = FR.derive(f, { __origIdx: (row, i) => i });
+    const base = orderCol ? FR.sort(t, [{ name: orderCol, desc: d.direction === 'up', nullsLast: true }]) : t;
+    const bd = materializeFrame(base);
+    const outCols = Object.assign({}, bd.cols);
+    d.columns.forEach(c => {
+      let arr = bd.cols[c].slice();
+      if (d.direction === 'up') arr.reverse();
+      let last = null;
+      const filled = arr.map(v => { if (v != null){ last = v; return v; } return last; });
+      outCols[c] = d.direction === 'up' ? filled.reverse() : filled;
+    });
+    let result = makeFrame(bd.names, outCols, null, bd.nrows);
+    result = FR.sort(result, [{ name: '__origIdx', desc: false, nullsLast: true }]);
+    result = FR.exclude(result, ['__origIdx']);
+    return result;
+  },
+  rank(d, f){
+    const desc = d.direction !== 'asc';
+    return FR.rank(f, {
+      orderCol: d.column, desc, nullsLast: true,
+      partitionCols: d.partitionBy?.length ? d.partitionBy : [],
+      mode: d.mode, outName: d.name,
+    });
+  },
+  running_total(d, f, ctx){
+    const orderCol = d.orderBy || (ctx.hasRid ? RID : d.column);
+    return FR.runningTotal(f, {
+      col: d.column, orderCol,
+      partitionCols: d.partitionBy?.length ? d.partitionBy : [],
+      outName: d.name,
+    });
+  },
+  group_by(d, f){
+    const aggSpecs = d.aggregations.map(a => {
+      const name = a.name?.trim() || (a.fn === 'count' ? 'Count' : `${a.fn}_${a.column}`);
+      return { fn: a.fn, col: a.column, name };
+    });
+    return FR.groupbyRollup(f, d.groupColumns, aggSpecs);
+  },
+  pivot(d, f, ctx){
+    const groupCols = d.groupColumns?.length ? d.groupColumns : ctx.columns.filter(c => c !== d.onColumn && c !== d.valueColumn && c !== RID);
+    return FR.pivot(f, groupCols, d.onColumn, d.valueColumn, d.fn === 'first' ? 'first' : d.fn);
+  },
+  join(d, f, ctx){
+    const right = (ctx.secondaryFrames || {})[d.rightSource];
+    if (!right) throw new Error('Joined source not loaded.');
+    const opts = { left: d.joinType === 'left' || d.joinType === 'full', right: d.joinType === 'right' || d.joinType === 'full' };
+    return FR.join(f, right, d.leftKey, d.rightKey, opts);
+  },
+  unpivot(d, f){
+    return FR.fold(f, d.columns, d.nameColumn, d.valueColumn);
+  },
+  delete_rows(d, f){
+    const ridSet = new Set(d.rids.map(String));
+    return FR.filter(f, row => !ridSet.has(String(row[RID])));
+  },
+};
+Object.keys(FRAME_IMPLS).forEach(type => {
+  if (!TRANSFORMS[type]) return;
+  TRANSFORMS[type].toFrame = FRAME_IMPLS[type];
+  if (!TRANSFORMS[type].engines.includes('frame')) TRANSFORMS[type].engines.push('frame');
+});
+
+async function compileFrame(steps, uptoIndex, baseFrame, secondaryFrames){
+  if (!baseFrame) return { frame: null, hasRid: true, columns: [], error: null, errorIndex: -1 };
+  let frame = baseFrame;
+  let hasRid = true;
+  let columns = frameColumnsMeta(frame);
+  const end = uptoIndex ?? steps.length - 1;
+  for (let i = 0; i <= end; i++){
+    const step = steps[i];
+    if (!step || step.disabled) continue;
+    const t = TRANSFORMS[step.type];
+    if (!t) continue;
+    if (!t.engines?.includes('frame') || typeof t.toFrame !== 'function'){
+      return { frame, hasRid, columns, error: `"${t.label||step.type}" isn't available in Express mode — switch to Full (DuckDB) to use this step.`, errorIndex: i };
+    }
+    const columnNames = columns.map(c => c.name);
+    const ctx = { columns: columnNames, columnsMeta: columns, hasRid, secondaryFrames };
+    try {
+      const err = t.validate ? t.validate(step.data, ctx) : null;
+      if (err) return { frame, hasRid, columns, error: err, errorIndex: i };
+      frame = t.toFrame(step.data, frame, ctx);
+    } catch (e){
+      return { frame, hasRid, columns, error: e.message || String(e), errorIndex: i };
+    }
+    hasRid = frame.names.includes(RID) && (typeof t.preservesIdentity === 'function' ? t.preservesIdentity(step.data) : !!t.preservesIdentity);
+    columns = frameColumnsMeta(frame);
+  }
+  return { frame, hasRid, columns, error: null, errorIndex: -1 };
+}
+
 const STEP_TYPES = Object.entries(TRANSFORMS).map(([type, t]) => ({ type, ...t }));
 const stepPreservesIdentity = (step) => {
   const t = TRANSFORMS[step.type];
@@ -3497,6 +4256,7 @@ function columnsMetaOf(table){
 }
 
 const arqueroPlanTable = new WeakMap();
+const framePlanTable = new WeakMap();
 function makeArqueroPlan({ table, hasRid, columns, error, errorIndex }){
   const plan = {
     hasRid, columns, error, errorIndex,
@@ -3757,9 +4517,236 @@ function createArqueroEngine(){
   };
 }
 
+function makeFramePlan({ frame, hasRid, columns, error, errorIndex }){
+  const plan = {
+    hasRid, columns, error, errorIndex,
+    debug: () => frame ? `Frame table — ${frame.nrows.toLocaleString()} rows × ${frame.names.length} cols\n${frame.names.join(', ')}` : '',
+  };
+  framePlanTable.set(plan, frame);
+  return plan;
+}
+function frameOf(plan){
+  if (!plan || !framePlanTable.has(plan)) throw new Error('Not a valid engine plan.');
+  return framePlanTable.get(plan);
+}
+
+function createFrameEngine(){
+  return {
+    id: 'frame',
+    label: 'Express (fast start, common transforms)',
+    capabilities: new Set(['groupby','pivot','fold','regex']),
+    async init(){},
+    async loadFile(fileSpec){
+      const { format, csvText, buffer, fileName='', firstRowHeader=true, skipRows=0 } = fileSpec;
+      if (format === 'parquet'){
+        throw new Error('Parquet files need Full mode (DuckDB) — switch engines from the import screen.');
+      }
+      let text = csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer);
+      if (skipRows > 0){
+        text = splitCsvLines(text).slice(skipRows).join('\n');
+      }
+      const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+      dataState.frameSourceFrame = frameFromCsv(text, { delimiter, header: firstRowHeader !== false });
+      dataState.rejectCount = 0;
+      dataState.rejectCountUnknown = false;
+    },
+    async getColumns(plan){
+      const frame = frameOf(plan);
+      if (!frame) return [];
+      return frameColumnsMeta(frame);
+    },
+    async preview(plan, limit=200){
+      const t0 = performance.now();
+      const frame = frameOf(plan);
+      if (!frame) return { columns: [], rows: [], hasMore: false, ridIndex: -1, ms: 0 };
+      const cols = frameColumnsMeta(frame);
+      const hasRidCol = frame.names.includes(RID);
+      const total = frame.nrows;
+      const hasMore = total > limit;
+      const n = Math.min(limit, total);
+      const names = cols.map(c=>c.name);
+      const colArrays = names.map(name => frameColumnArray(frame, name));
+      const ridArray = hasRidCol ? frameColumnArray(frame, RID) : null;
+      const rows = new Array(n);
+      for (let i=0;i<n;i++){
+        const row = new Array(colArrays.length);
+        for (let c=0;c<colArrays.length;c++){ const v = colArrays[c][i]; row[c] = v === undefined ? null : v; }
+        if (hasRidCol) row.push(ridArray[i]);
+        rows[i] = row;
+      }
+      return { columns: cols, rows, hasMore, ridIndex: hasRidCol ? cols.length : -1, ms: performance.now()-t0 };
+    },
+    async skippedRows(){
+      return [];
+    },
+    async count(plan){
+      const frame = frameOf(plan);
+      return frame ? frame.nrows : 0;
+    },
+    async loadSecondarySource(id, fileSpec){
+      const { format, csvText, buffer, fileName='', firstRowHeader=true, skipRows=0 } = fileSpec;
+      if (format === 'parquet') throw new Error('Parquet secondary sources need Full mode (DuckDB).');
+      let text = csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer);
+      if (skipRows > 0) text = splitCsvLines(text).slice(skipRows).join('\n');
+      const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+      dataState.secondaryFrames[id] = frameFromCsv(text, { delimiter, header: firstRowHeader !== false, withRid: false });
+    },
+    async getSecondarySourceColumns(id){
+      const frame = dataState.secondaryFrames[id];
+      return frame ? frameColumnsMeta(frame) : [];
+    },
+    async secondarySourceRowCount(id){
+      const frame = dataState.secondaryFrames[id];
+      return frame ? frame.nrows : 0;
+    },
+    async dropSecondarySource(id){
+      delete dataState.secondaryFrames[id];
+    },
+    async distinct(plan, col, opts={}){
+      const { search='', cap=1000 } = opts;
+      const frame = frameOf(plan);
+      if (!frame) return { values: [], truncated: false };
+      const counts = new Map();
+      const arr = frameColumnArray(frame, col);
+      const needle = search.toLowerCase();
+      for (let i=0;i<arr.length;i++){
+        const v = arr[i];
+        if (search && (v==null || !String(v).toLowerCase().includes(needle))) continue;
+        const key = v === null || v === undefined ? '\u0000null' : String(v);
+        const entry = counts.get(key);
+        if (entry) entry.count++; else counts.set(key, { value: v==null?null:v, count: 1 });
+      }
+      const sorted = [...counts.values()].sort((a,b)=>b.count-a.count);
+      const truncated = sorted.length > cap;
+      return { values: truncated ? sorted.slice(0,cap) : sorted, truncated };
+    },
+    async tryCastFailCount(plan, col, targetType){
+      const frame = frameOf(plan);
+      if (!frame) return 0;
+      const arr = frameColumnArray(frame, col);
+      let n = 0;
+      for (let i=0;i<arr.length;i++){
+        if (arr[i] == null) continue;
+        if (coerceForColumn(arr[i], targetType) == null) n++;
+      }
+      return n;
+    },
+    async stats(plan, col){
+      const frame = frameOf(plan);
+      if (!frame) return null;
+      const type = frameInferType(frame, col);
+      const arr = frameColumnArray(frame, col);
+      const total = arr.length;
+      let nonNull = 0;
+      const seen = new Set();
+      for (let i=0;i<arr.length;i++){ if (arr[i]!=null){ nonNull++; seen.add(arr[i] instanceof Date ? arr[i].getTime() : arr[i]); } }
+      const numeric = /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|FLOAT|DOUBLE)/.test(type);
+      const out = { total, nonNull, distinctApprox: seen.size };
+      if (numeric){
+        let min=Infinity, max=-Infinity, sum=0;
+        const vals = [];
+        const samples = [];
+        for (let i=0;i<arr.length;i++){ const v=arr[i]; if (v==null) continue; if (v<min) min=v; if (v>max) max=v; sum+=v; vals.push(v); if (samples.length<8) samples.push(v); }
+        out.min = nonNull ? min : null; out.max = nonNull ? max : null; out.avg = nonNull ? sum/nonNull : null;
+        out.samples = samples;
+        if (nonNull){
+          vals.sort((a,b)=>a-b);
+          const mid = Math.floor(vals.length/2);
+          out.median = vals.length % 2 ? vals[mid] : (vals[mid-1]+vals[mid])/2;
+          const nb = 12;
+          const buckets = new Array(nb).fill(0);
+          if (max > min){
+            for (const v of vals){ let idx = Math.floor((v-min)/(max-min)*nb); if (idx>=nb) idx=nb-1; if (idx<0) idx=0; buckets[idx]++; }
+          } else {
+            buckets[0] = nonNull;
+          }
+          out.histogram = buckets;
+        }
+      } else {
+        const counts = new Map();
+        for (let i=0;i<arr.length;i++){ const v=arr[i]; if (v==null) continue; const key = v instanceof Date ? v.getTime() : v; counts.set(key, (counts.get(key)||0)+1); }
+        const isDateCol = type === 'TIMESTAMP';
+        out.topValues = Array.from(counts.entries()).sort((a,b)=>b[1]-a[1]).slice(0,20).map(([k,n]) => ({ value: isDateCol ? new Date(k) : k, count: n }));
+      }
+      return out;
+    },
+    async export(plan, format){
+      const frame = frameOf(plan);
+      if (!frame) throw new Error('Nothing to export.');
+      const exportFrame = frame.names.includes(RID) ? FR.exclude(frame, [RID]) : frame;
+      if (format === 'csv'){
+        const names = exportFrame.names;
+        const cell = v => {
+          v = csvFormulaGuardCell(v);
+          if (v == null) return '';
+          const s = String(v);
+          return /[",\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+        };
+        const lines = [names.join(',')];
+        for (const row of frameToObjects(exportFrame)) lines.push(names.map(n => cell(row[n])).join(','));
+        const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+        blob.truncated = false;
+        return blob;
+      }
+      if (format === 'json' || format === 'jsonl'){
+        const rows = frameToObjects(exportFrame);
+        const text = format === 'json' ? JSON.stringify(rows, null, 2) : rows.map(r=>JSON.stringify(r)).join('\n');
+        const blob = new Blob([text], {type: format==='json' ? 'application/json' : 'application/x-ndjson'});
+        blob.truncated = false;
+        return blob;
+      }
+      if (format === 'parquet'){
+        throw new Error('Parquet export needs Full mode (DuckDB) — switch engines from the version panel.');
+      }
+      if (format === 'xlsx'){
+        await ensureSheetJS();
+        const XLSX_ROW_CEILING = 1048575;
+        const rows = frameToObjects(exportFrame);
+        const truncated = rows.length > XLSX_ROW_CEILING;
+        const aoa = [exportFrame.names, ...(truncated ? rows.slice(0,XLSX_ROW_CEILING) : rows).map(r => exportFrame.names.map(c=>csvFormulaGuardCell(r[c])))];
+        const ws = window.XLSX.utils.aoa_to_sheet(aoa);
+        const wb = window.XLSX.utils.book_new();
+        window.XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+        const bytes = window.XLSX.write(wb, { type:'array', bookType:'xlsx' });
+        const blob = new Blob([bytes], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+        blob.truncated = truncated;
+        return blob;
+      }
+      throw new Error(`Unsupported export format: ${format}`);
+    },
+    async exportCustomCsv(plan, cols, limit, nullStr){
+      const frame = frameOf(plan);
+      if (!frame) throw new Error('Nothing to export.');
+      const rows = frameToObjects(frame, limit || Infinity);
+      const csvStructEsc = s => /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g,'""')}"` : String(s);
+      const csvEsc = s => { s = csvFormulaGuardCell(s); return s == null ? nullStr||'' : csvStructEsc(s); };
+      const lines = [cols.map(csvStructEsc).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
+      const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+      return blob;
+    },
+    async compile(steps, uptoIndex){
+      const compiled = await compileFrame(steps, uptoIndex, dataState.frameSourceFrame, dataState.secondaryFrames);
+      return makeFramePlan(compiled);
+    },
+    async checkpoint(steps, uptoIndex){
+      const compiled = await compileFrame(steps, uptoIndex - 1, dataState.frameSourceFrame, dataState.secondaryFrames);
+      if (compiled.error) throw Object.assign(new Error(compiled.error), { stepIndex: compiled.errorIndex });
+      return { materialized: true, hasRid: compiled.hasRid, columns: compiled.columns };
+    },
+  };
+}
+
+function expressEngineId(){
+  const flag = new URLSearchParams(location.search).get('engine');
+  if (flag === 'frame') return 'frame';
+  if (flag === 'arquero') return 'arquero';
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('duckbench-express-engine') === 'frame') return 'frame';
+  return 'arquero';
+}
 function createEngine(id){
   if (id === 'duckdb') return createDuckDBEngine();
   if (id === 'arquero') return createArqueroEngine();
+  if (id === 'frame') return createFrameEngine();
   throw new Error(`Unknown engine: ${id}`);
 }
 
@@ -3779,10 +4766,11 @@ const dataState = {
   engine: createEngine('duckdb'),
   db: null, conn: null,
   aqSourceTable: null,
+  frameSourceFrame: null,
   duckdbVersion: null, duckdbBundleName: null, duckdbEngineVersion: null,
   sourceFileName: null, sourceFormat: null, hasSource: false,
   sourceFile: null, sourceImportOptions: null, pendingRecipe: null,
-  secondarySources: [], secondaryAqTables: {},
+  secondarySources: [], secondaryAqTables: {}, secondaryFrames: {},
   steps: [],
   historyPast: [], historyFuture: [],
   pipelineToken: 0, inspectorToken: 0,
@@ -5013,7 +6001,7 @@ box.innerHTML = '';
 box.hidden = false;
 const { format, file } = pendingImport;
 const activeEngineId = dataState.selectedEngineId || dataState.engine.id;
-if (activeEngineId === 'arquero' && file.size > EXPRESS_SIZE_WARNING_BYTES){
+if (activeEngineId !== 'duckdb' && file.size > EXPRESS_SIZE_WARNING_BYTES){
 box.appendChild(el('div', {class:'import-size-warning'}, `Large file detected (~${Math.round(file.size/1024/1024)} MB). Express mode runs in this tab’s main thread and may freeze it — Full mode is recommended for a file this size.`));
 }
 const row = (label, control) => { control.setAttribute('aria-label', label); return el('div',{class:'import-options-row'}, el('span',{},label), control); };
@@ -5095,18 +6083,19 @@ const e = $('#importError');
 if (!msg){ e.hidden = true; e.textContent=''; return; }
 e.hidden = false; e.textContent = msg;
 }
+function expressEngineLabel(){ return dataState.engine.id === 'frame' ? 'Frame' : 'Arquero'; }
 async function runImport(){
 const { file, format, sheet, workbook, skipRows, firstRowHeader } = pendingImport;
 showImportError(null);
 setEngineStatus('loading', 'importing…');
 setImportProgress(0, 'Reading file…');
-const engineLabel = () => dataState.engine.id === 'duckdb' ? 'Full (DuckDB)' : 'Express (Arquero)';
+const engineLabel = () => dataState.engine.id === 'duckdb' ? 'Full (DuckDB)' : `Express (${expressEngineLabel()})`;
 try {
 if (dataState.selectedEngineId && dataState.engine.id !== dataState.selectedEngineId) {
 dataState.engine = createEngine(dataState.selectedEngineId);
 }
 if (!dataState.conn && dataState.engine.id === 'duckdb') await dataState.engine.init();
-if (dataState.engine.id === 'arquero') await dataState.engine.init();
+if (dataState.engine.id !== 'duckdb') await dataState.engine.init();
 if (format === 'parquet'){
   const buffer = await readFileWithProgress(file, makeProgressReporter('Reading file…'));
   setImportProgress(null, `Loading into ${engineLabel()}…`);
@@ -5171,19 +6160,19 @@ restoreImportActionRow();
 if (!dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('error', `Couldn’t start DuckDB: ${e.message}`);
 } finally {
 if (dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${dataState.duckdbVersion}`);
-if (dataState.engine.id === 'arquero') setEngineStatus('ready', 'Express · Arquero');
+if (dataState.engine.id !== 'duckdb') setEngineStatus('ready', `Express · ${expressEngineLabel()}`);
 }
 }
 async function switchEngineMidSession(targetId){
 if (dataState.engine.id === targetId) return;
 if (!dataState.sourceFile){ toast("Can't switch engines — reimport the file to enable this."); return; }
-const targetLabel = targetId === 'duckdb' ? 'Full (DuckDB)' : 'Express (Arquero)';
-const sizeWarn = (targetId === 'arquero' && dataState.sourceFile && dataState.sourceFile.size > EXPRESS_SIZE_WARNING_BYTES)
+const targetLabel = targetId === 'duckdb' ? 'Full (DuckDB)' : `Express (${targetId === 'frame' ? 'Frame' : 'Arquero'})`;
+const sizeWarn = (targetId !== 'duckdb' && dataState.sourceFile && dataState.sourceFile.size > EXPRESS_SIZE_WARNING_BYTES)
 ? ` This file is ~${Math.round(dataState.sourceFile.size/1024/1024)} MB — Express mode may freeze this tab.`
 : '';
 if (dataState.steps.length || sizeWarn){
 const n = dataState.steps.length;
-const stepWarn = targetId === 'arquero' ? ` Any step that needs the Full engine will show an error until you remove or edit it.` : '';
+const stepWarn = targetId !== 'duckdb' ? ` Any step that needs the Full engine will show an error until you remove or edit it.` : '';
 const bodyStart = n ? `Switch to ${targetLabel}? The file will reload and all ${n} step${n===1?'':'s'} will re-run against the new engine.` : `Switch to ${targetLabel}? The file will reload.`;
 const ok = await confirmDialog(`${bodyStart}${stepWarn}${sizeWarn}`);
 if (!ok) return;
@@ -5196,7 +6185,7 @@ try {
 dataState.engine = createEngine(targetId);
 dataState.selectedEngineId = targetId;
 if (!dataState.conn && targetId === 'duckdb') await dataState.engine.init();
-if (targetId === 'arquero') await dataState.engine.init();
+if (targetId !== 'duckdb') await dataState.engine.init();
 const file = dataState.sourceFile;
 const format = dataState.sourceFormat;
 const opts = dataState.sourceImportOptions || {};
@@ -5234,7 +6223,7 @@ saveSessionSnapshot();
 toast(`Couldn’t switch engines: ${e.message}`);
 } finally {
 if (dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${dataState.duckdbVersion}`);
-if (dataState.engine.id === 'arquero') setEngineStatus('ready', 'Express · Arquero');
+if (dataState.engine.id !== 'duckdb') setEngineStatus('ready', `Express · ${expressEngineLabel()}`);
 }
 }
 async function switchToFullAndRetry(retryFn){
@@ -5243,7 +6232,7 @@ if (dataState.engine.id === 'duckdb') retryFn();
 }
 async function toggleEngineMidSession(){
 if (!dataState.hasSource) return;
-await switchEngineMidSession(dataState.engine.id === 'duckdb' ? 'arquero' : 'duckdb');
+await switchEngineMidSession(dataState.engine.id === 'duckdb' ? expressEngineId() : 'duckdb');
 }
 async function viewSkippedRows(){
 const overlay = el('div',{class:'confirm-overlay'});
@@ -5425,7 +6414,7 @@ const failBox = el('div',{id:'inspectorFailNote', class:'fail-count-note'}); fai
 const identityBox = el('div',{id:'inspectorIdentityWarning', class:'identity-warning'}); identityBox.hidden = true;
 body.appendChild(errorBox);
 body.appendChild(identityBox);
-if (dataState.engine.id === 'arquero' && (!t.engines?.includes('arquero'))){
+if (dataState.engine.id !== 'duckdb' && (!t.engines?.includes(dataState.engine.id))){
 const retryBox = el('div',{class:'inspector-error'});
 retryBox.appendChild(htmlIcon('warn',14));
 retryBox.appendChild(el('span',{}, `“${t.label}” needs the Full (DuckDB) engine — Express doesn't support it.`));
@@ -5449,7 +6438,7 @@ body.appendChild(impactBox);
 }
 }
 panel.appendChild(body);
-const engineIncompatible = dataState.engine.id === 'arquero' && !t.engines?.includes('arquero');
+const engineIncompatible = dataState.engine.id !== 'duckdb' && !t.engines?.includes(dataState.engine.id);
 const notReady = !insp.checkpoint || engineIncompatible;
 panel.appendChild(el('div',{class:'inspector-foot'},
 el('button',{class:'btn-ghost', onclick:closeInspector}, 'Cancel'),
@@ -5812,7 +6801,7 @@ return { format, fileName:file.name, buffer, firstRowHeader:true, skipRows:0, de
 async function handleSecondarySourceFile(file){
 const ext = (file.name.split('.').pop()||'').toLowerCase();
 const format = ext==='parquet' ? 'parquet' : (ext==='xlsx'||ext==='xls') ? 'excel' : 'csv';
-if ((format === 'excel' || format === 'parquet') && dataState.engine.id === 'arquero'){
+if ((format === 'excel' || format === 'parquet') && dataState.engine.id !== 'duckdb'){
 toast(`${format==='excel'?'Excel':'Parquet'} secondary sources need Full mode — switch engines first.`);
 return;
 }
@@ -6219,7 +7208,7 @@ el('div',{class:'ribbon-group-label'}, name),
 }
 function ribbonButtonEl(t){
 const small = t.ribbon.size === 'small';
-const needsFull = dataState.engine.id === 'arquero' && !(t.engines||[]).includes('arquero');
+const needsFull = dataState.engine.id !== 'duckdb' && !(t.engines||[]).includes(dataState.engine.id);
 return el('button', {
 class:`ribbon-btn cat-${t.category}${small?' is-small':''}${needsFull?' needs-full':''}`,
 title: needsFull ? 'Needs Full engine — click to switch.' : t.label,
@@ -6291,7 +7280,7 @@ box._matches = matches;
 return;
 }
 matches.forEach((t, i) => {
-const needsFull = dataState.engine.id === 'arquero' && !(t.engines||[]).includes('arquero');
+const needsFull = dataState.engine.id !== 'duckdb' && !(t.engines||[]).includes(dataState.engine.id);
 box.appendChild(el('div',{
 class: `palette-item cat-${t.category}` + (i===paletteActiveIndex?' is-active':'') + (needsFull?' needs-full':''),
 onclick:()=>choosePaletteItem(t.type),
@@ -6360,7 +7349,7 @@ let exportMenuEntry = null;
 function updateExportMenuFullPill(){
 const btn = $('#exportMenu button[data-format="parquet"]');
 if (!btn) return;
-const needsFull = dataState.engine.id === 'arquero';
+const needsFull = dataState.engine.id !== 'duckdb';
 btn.classList.toggle('needs-full', needsFull);
 const pill = btn.querySelector('.engine-pill');
 if (needsFull && !pill) btn.appendChild(el('span',{class:'engine-pill', title:'Needs Full engine'}, 'Full'));
@@ -6375,7 +7364,7 @@ exportMenuEntry = ModalStack.push($('#exportMenu'), { light:true, trigger:$('#ex
 $$('#exportMenu button').forEach(b => b.addEventListener('click', async () => {
 if (exportMenuEntry) ModalStack.pop(exportMenuEntry);
 if (b.dataset.format){
-if (b.dataset.format === 'parquet' && dataState.engine.id === 'arquero'){
+if (b.dataset.format === 'parquet' && dataState.engine.id !== 'duckdb'){
 await switchToFullAndRetry(() => exportData('parquet'));
 } else {
 try { await exportData(b.dataset.format); } catch(e){ toast(`Export failed: ${e.message}`); }
@@ -6398,7 +7387,7 @@ fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFileS
 dropZone.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handleFileSelected(f); });
 $$('#enginePicker .engine-option').forEach(btn => {
 btn.addEventListener('click', () => {
-dataState.selectedEngineId = btn.dataset.engine;
+dataState.selectedEngineId = btn.dataset.engine === 'arquero' ? expressEngineId() : btn.dataset.engine;
 $$('#enginePicker .engine-option').forEach(b => {
 b.classList.toggle('is-selected', b === btn);
 b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
@@ -6736,11 +7725,13 @@ list.appendChild(row);
 panel.appendChild(list);
 }
 
-async function runSelfTest(){
+async function runSelfTest(expressId){
+expressId = expressId === 'frame' ? 'frame' : 'arquero';
+const expressLabel = expressId === 'frame' ? 'Frame' : 'Arquero';
 const results = SELFTEST_CASES.map(c => ({ label: c.label, pending:true }));
 renderSelfTestResults(results, 'Loading DuckDB…');
 const duckEngine = createEngine('duckdb');
-const aqEngine = createEngine('arquero');
+const aqEngine = createEngine(expressId);
 try {
 await duckEngine.init();
 const buffer = new TextEncoder().encode(SAMPLE_SALES_CSV);
@@ -6750,15 +7741,16 @@ dataState.hasSource = true;
 renderSelfTestResults(results, `Could not load DuckDB — ${e.message || e}`);
 return;
 }
-renderSelfTestResults(results, 'Loading Arquero…');
+renderSelfTestResults(results, `Loading ${expressLabel}…`);
 try {
+await aqEngine.init();
 await aqEngine.loadFile({ format:'csv', csvText: SAMPLE_SALES_CSV, fileName:'sample.csv', firstRowHeader:true, skipRows:0 });
 } catch(e){
-renderSelfTestResults(results, `Could not load Arquero — ${e.message || e}`);
+renderSelfTestResults(results, `Could not load ${expressLabel} — ${e.message || e}`);
 return;
 }
 for (let i=0; i<SELFTEST_CASES.length; i++){
-renderSelfTestResults(results, `Running case ${i + 1} of ${SELFTEST_CASES.length}…`);
+renderSelfTestResults(results, `Running case ${i + 1} of ${SELFTEST_CASES.length} (DuckDB vs ${expressLabel})…`);
 try {
 results[i] = SELFTEST_CASES[i].kind === 'export'
 ? await runSelfTestExportCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
@@ -6778,12 +7770,13 @@ results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error
 }
 }
 const passed = results.filter(r => r.pass).length;
-renderSelfTestResults(results, `${passed} / ${results.length} passing`);
+renderSelfTestResults(results, `${passed} / ${results.length} passing (DuckDB vs ${expressLabel})`);
 }
 
 async function init(){
-if (new URLSearchParams(location.search).has('selftest')){
-await runSelfTest();
+const params = new URLSearchParams(location.search);
+if (params.has('selftest')){
+await runSelfTest(params.get('selftest') || params.get('engine'));
 return;
 }
 wireStaticUI();
