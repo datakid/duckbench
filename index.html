@@ -7525,13 +7525,10 @@ async function selfTestDuckDBResult(steps){
 try {
 const compiled = await compilePipeline(steps, steps.length - 1);
 if (compiled.error) return { error: `step ${compiled.errorIndex + 1}: ${compiled.error}` };
-const sql = compiled.sql;
-const physicalCols = await getColumns(sql);
-const cols = physicalCols.filter(c => c.name !== RID);
-const selectList = cols.map(c => q(c.name)).join(', ') || 'NULL';
-const res = await dataState.conn.query(`SELECT ${selectList} FROM (${sql})`);
+const wrapped = await wrapSelectForDisplay(compiled.sql);
+const res = await dataState.conn.query(wrapped.sql);
 const { rows } = extractRows(res);
-return { columns: cols, rows };
+return { columns: wrapped.columns, rows };
 } catch(e){
 return { error: e.message || String(e) };
 }
@@ -7549,16 +7546,62 @@ return { error: e.message || String(e) };
 }
 }
 
-function selfTestNormalizeCell(v){
+function selfTestFormatDate(v, declaredType){
+const pad = n => String(n).padStart(2, '0');
+const datePart = `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())}`;
+if (/^DATE/i.test(declaredType || '')) return datePart;
+return `${datePart} ${pad(v.getUTCHours())}:${pad(v.getUTCMinutes())}:${pad(v.getUTCSeconds())}`;
+}
+function selfTestNormalizeCell(v, declaredType){
 if (v === null || v === undefined) return null;
 if (typeof v === 'bigint') return Number(v);
-if (v instanceof Date) return isNaN(v) ? null : v.toISOString().slice(0,19);
+if (v instanceof Date) return isNaN(v) ? null : selfTestFormatDate(v, declaredType);
 if (typeof v === 'number') return Number.isFinite(v) ? Math.round(v * 1e4) / 1e4 : null;
 if (typeof v === 'boolean') return v;
+if (isNumericType(declaredType)){
+const n = Number(String(v));
+if (Number.isFinite(n)) return Math.round(n * 1e4) / 1e4;
+}
 return String(v);
 }
-function selfTestRowsSorted(rows){
-return rows.map(r => JSON.stringify(r.map(selfTestNormalizeCell))).sort();
+function selfTestRowsSorted(rows, columnTypes){
+return rows.map(r => JSON.stringify(r.map((v,i) => selfTestNormalizeCell(v, columnTypes ? columnTypes[i] : undefined)))).sort();
+}
+function selfTestFirstNonNull(rows, colIndex){
+if (colIndex < 0) return undefined;
+for (const row of rows){
+const v = row[colIndex];
+if (v !== null && v !== undefined) return v;
+}
+return null;
+}
+function selfTestValueKind(v){
+if (v === undefined) return 'n/a';
+if (v === null) return 'null (all rows null)';
+if (typeof v === 'bigint') return 'bigint';
+return (v && v.constructor && v.constructor.name) || typeof v;
+}
+function selfTestColumnDiagnostics(duck, aq){
+const order = [];
+const seen = new Set();
+(duck.columns || []).forEach(c => { if (!seen.has(c.name)){ seen.add(c.name); order.push(c.name); } });
+(aq.columns || []).forEach(c => { if (!seen.has(c.name)){ seen.add(c.name); order.push(c.name); } });
+return order.map(name => {
+const duckIdx = (duck.columns || []).findIndex(c => c.name === name);
+const aqIdx = (aq.columns || []).findIndex(c => c.name === name);
+const duckVal = duckIdx >= 0 ? selfTestFirstNonNull(duck.rows, duckIdx) : undefined;
+const aqVal = aqIdx >= 0 ? selfTestFirstNonNull(aq.rows, aqIdx) : undefined;
+const declaredType = duckIdx >= 0 ? duck.columns[duckIdx].type : (aqIdx >= 0 ? aq.columns[aqIdx].type : undefined);
+return {
+column: name,
+duckdbColumnType: duckIdx >= 0 ? duck.columns[duckIdx].type : 'n/a',
+arqueroColumnType: aqIdx >= 0 ? (aq.columns[aqIdx].type ?? 'n/a') : 'n/a',
+duckdbValueKind: selfTestValueKind(duckVal),
+arqueroValueKind: selfTestValueKind(aqVal),
+duckdbNormalized: duckIdx >= 0 ? selfTestNormalizeCell(duckVal, declaredType) : 'n/a',
+arqueroNormalized: aqIdx >= 0 ? selfTestNormalizeCell(aqVal, declaredType) : 'n/a',
+};
+});
 }
 
 async function runSelfTestParityCase(def, duckEngine, aqEngine){
@@ -7571,16 +7614,17 @@ return { label: def.label, pass:false, reason: duck.error ? `DuckDB error — ${
 const duckNames = duck.columns.map(c => c.name);
 const aqNames = aq.columns.map(c => c.name);
 if (duckNames.length !== aqNames.length || duckNames.some((n,i) => n !== aqNames[i])){
-return { label: def.label, pass:false, reason:'Column name or order mismatch', firstDiffRow: { duckdbColumns: duckNames, arqueroColumns: aqNames } };
+return { label: def.label, pass:false, reason:'Column name or order mismatch', firstDiffRow: { duckdbColumns: duckNames, arqueroColumns: aqNames }, columnDiagnostics: selfTestColumnDiagnostics(duck, aq) };
 }
 if (duck.rows.length !== aq.rows.length){
-return { label: def.label, pass:false, reason:`Row count mismatch — DuckDB ${duck.rows.length} rows vs Arquero ${aq.rows.length} rows`, firstDiffRow: { duckdbFirstRow: duck.rows[0] ?? null, arqueroFirstRow: aq.rows[0] ?? null } };
+return { label: def.label, pass:false, reason:`Row count mismatch — DuckDB ${duck.rows.length} rows vs Arquero ${aq.rows.length} rows`, firstDiffRow: { duckdbFirstRow: duck.rows[0] ?? null, arqueroFirstRow: aq.rows[0] ?? null }, columnDiagnostics: selfTestColumnDiagnostics(duck, aq) };
 }
-const duckSorted = selfTestRowsSorted(duck.rows);
-const aqSorted = selfTestRowsSorted(aq.rows);
+const columnTypes = duck.columns.map(c => c.type);
+const duckSorted = selfTestRowsSorted(duck.rows, columnTypes);
+const aqSorted = selfTestRowsSorted(aq.rows, columnTypes);
 for (let i=0; i<duckSorted.length; i++){
 if (duckSorted[i] !== aqSorted[i]){
-return { label: def.label, pass:false, reason:'Row values differ between engines', firstDiffRow: { columns: duckNames, duckdb: JSON.parse(duckSorted[i]), arquero: JSON.parse(aqSorted[i]) } };
+return { label: def.label, pass:false, reason:'Row values differ between engines', firstDiffRow: { columns: duckNames, duckdb: JSON.parse(duckSorted[i]), arquero: JSON.parse(aqSorted[i]) }, columnDiagnostics: selfTestColumnDiagnostics(duck, aq) };
 }
 }
 return { label: def.label, pass:true };
@@ -7692,7 +7736,7 @@ document.body.appendChild(panel);
 }
 return panel;
 }
-function renderSelfTestResults(results, statusLine){
+function renderSelfTestResults(results, statusLine, verbose){
 const panel = selfTestPanelEl();
 panel.textContent = '';
 panel.appendChild(el('h1', { style:'font-family:var(--font-display);font-weight:500;font-size:22px;margin:0 0 4px;' }, 'Duckbench self-test'));
@@ -7713,17 +7757,20 @@ row.appendChild(el('div', { style:'margin-top:6px;font-size:12px;color:var(--rus
 if (r.firstDiffRow){
 row.appendChild(el('pre', { style:'margin-top:6px;font-size:11px;color:var(--paper-dim);white-space:pre-wrap;word-break:break-word;' }, JSON.stringify(r.firstDiffRow, null, 2)));
 }
+if (verbose && r.columnDiagnostics){
+row.appendChild(el('pre', { style:'margin-top:6px;font-size:11px;color:var(--paper-dim);white-space:pre-wrap;word-break:break-word;border-top:1px solid var(--line-soft);padding-top:6px;' }, JSON.stringify(r.columnDiagnostics, null, 2)));
+}
 }
 list.appendChild(row);
 });
 panel.appendChild(list);
 }
 
-async function runSelfTest(expressId){
+async function runSelfTest(expressId, verbose){
 expressId = expressId === 'frame' ? 'frame' : 'arquero';
 const expressLabel = expressId === 'frame' ? 'Frame' : 'Arquero';
 const results = SELFTEST_CASES.map(c => ({ label: c.label, pending:true }));
-renderSelfTestResults(results, 'Loading DuckDB…');
+renderSelfTestResults(results, 'Loading DuckDB…', verbose);
 const duckEngine = createEngine('duckdb');
 const aqEngine = createEngine(expressId);
 try {
@@ -7732,19 +7779,19 @@ const buffer = new TextEncoder().encode(SAMPLE_SALES_CSV);
 await duckEngine.loadFile({ format:'csv', fileName:'sample.csv', buffer, firstRowHeader:true, skipRows:0 });
 dataState.hasSource = true;
 } catch(e){
-renderSelfTestResults(results, `Could not load DuckDB — ${e.message || e}`);
+renderSelfTestResults(results, `Could not load DuckDB — ${e.message || e}`, verbose);
 return;
 }
-renderSelfTestResults(results, `Loading ${expressLabel}…`);
+renderSelfTestResults(results, `Loading ${expressLabel}…`, verbose);
 try {
 await aqEngine.init();
 await aqEngine.loadFile({ format:'csv', csvText: SAMPLE_SALES_CSV, fileName:'sample.csv', firstRowHeader:true, skipRows:0 });
 } catch(e){
-renderSelfTestResults(results, `Could not load ${expressLabel} — ${e.message || e}`);
+renderSelfTestResults(results, `Could not load ${expressLabel} — ${e.message || e}`, verbose);
 return;
 }
 for (let i=0; i<SELFTEST_CASES.length; i++){
-renderSelfTestResults(results, `Running case ${i + 1} of ${SELFTEST_CASES.length} (DuckDB vs ${expressLabel})…`);
+renderSelfTestResults(results, `Running case ${i + 1} of ${SELFTEST_CASES.length} (DuckDB vs ${expressLabel})…`, verbose);
 try {
 results[i] = SELFTEST_CASES[i].kind === 'export'
 ? await runSelfTestExportCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
@@ -7764,13 +7811,13 @@ results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error
 }
 }
 const passed = results.filter(r => r.pass).length;
-renderSelfTestResults(results, `${passed} / ${results.length} passing (DuckDB vs ${expressLabel})`);
+renderSelfTestResults(results, `${passed} / ${results.length} passing (DuckDB vs ${expressLabel})`, verbose);
 }
 
 async function init(){
 const params = new URLSearchParams(location.search);
 if (params.has('selftest')){
-await runSelfTest(params.get('selftest') || params.get('engine'));
+await runSelfTest(params.get('selftest') || params.get('engine'), params.has('verbose'));
 return;
 }
 wireStaticUI();
