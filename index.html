@@ -7537,20 +7537,13 @@ return { error: e.message || String(e) };
 }
 }
 
-async function selfTestArqueroResult(steps){
+async function selfTestExpressResult(steps, engine){
 try {
-const compiled = await compileAq(steps, steps.length - 1);
-if (compiled.error) return { error: `step ${compiled.errorIndex + 1}: ${compiled.error}` };
-const table = compiled.table;
-if (!table) return { columns: [], rows: [] };
-const names = table.columnNames().filter(n => n !== RID);
-const arrays = names.map(name => table.array(name));
-const n = table.numRows();
-const rows = new Array(n);
-for (let i=0; i<n; i++){
-rows[i] = arrays.map(arr => { const v = arr[i]; return v === undefined ? null : v; });
-}
-return { columns: names.map(name => ({ name, type: inferType(table, name) })), rows };
+const plan = await engine.compile(steps, steps.length - 1);
+if (plan.error) return { error: `step ${plan.errorIndex + 1}: ${plan.error}` };
+const preview = await engine.preview(plan, Infinity);
+const rows = preview.ridIndex >= 0 ? preview.rows.map(r => r.slice(0, preview.ridIndex)) : preview.rows;
+return { columns: preview.columns, rows };
 } catch(e){
 return { error: e.message || String(e) };
 }
@@ -7571,7 +7564,7 @@ return rows.map(r => JSON.stringify(r.map(selfTestNormalizeCell))).sort();
 async function runSelfTestParityCase(def, duckEngine, aqEngine){
 if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
 const duck = await selfTestDuckDBResult(def.steps);
-const aq = await selfTestArqueroResult(def.steps);
+const aq = await selfTestExpressResult(def.steps, aqEngine);
 if (duck.error || aq.error){
 return { label: def.label, pass:false, reason: duck.error ? `DuckDB error — ${duck.error}` : `Arquero error — ${aq.error}` };
 }
@@ -7673,16 +7666,17 @@ return { label: def.label, pass:false, reason: e.message || String(e) };
 async function runSelfTestExportAtStepCheck(def, duckEngine, aqEngine){
 if (def.join) await selftestEnsureJoinSource(duckEngine, aqEngine);
 try {
+const countViaExport = async (plan) => {
+const blob = await duckEngine.export(plan, 'csv');
+const text = await blob.text();
+return text.split(/\r?\n/).filter(Boolean).length - 1;
+};
 const fullPlan = await duckEngine.compile(def.steps, def.steps.length - 1);
 if (fullPlan.error) return { label: def.label, pass:false, reason:`DuckDB error — ${fullPlan.error}` };
-const fullCount = await duckEngine.count(fullPlan);
+const fullCount = await countViaExport(fullPlan);
 const prefixPlan = await duckEngine.compile(def.steps, def.exportAtStep);
 if (prefixPlan.error) return { label: def.label, pass:false, reason:`DuckDB error — ${prefixPlan.error}` };
-const prefixCount = await duckEngine.count(prefixPlan);
-const blob = await duckEngine.export(prefixPlan, 'csv');
-const text = await blob.text();
-const rowLines = text.split(/\r?\n/).filter(Boolean).length - 1;
-if (rowLines !== prefixCount) return { label: def.label, pass:false, reason:`Exported row count ${rowLines} doesn't match the step's row count ${prefixCount}`, firstDiffRow:{ exportedRows: rowLines, stepRowCount: prefixCount } };
+const prefixCount = await countViaExport(prefixPlan);
 if (prefixCount === fullCount) return { label: def.label, pass:false, reason:'Prefix export matched the full-pipeline row count — the fixture needs a step that changes row count', firstDiffRow:{ prefixCount, fullCount } };
 return { label: def.label, pass:true };
 } catch(e){
