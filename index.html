@@ -3182,10 +3182,13 @@ Object.assign(TRANSFORMS, {
     ],
     validate(d){ return d.columns?.length ? null : 'Pick at least one column.'; },
     toSQL(d, from, ctx){
-      const orderExpr = d.orderBy ? q(d.orderBy) : (ctx.hasRid ? q(RID) : null);
+      const dir = d.direction==='up' ? 'DESC' : 'ASC';
+      const orderExpr = d.orderBy
+        ? (ctx.hasRid ? `${q(d.orderBy)} ${dir}, ${q(RID)} ${dir}` : `${q(d.orderBy)} ${dir}`)
+        : (ctx.hasRid ? `${q(RID)} ${dir}` : null);
       const rep = d.columns.map(c => {
         const win = orderExpr
-          ? `OVER (ORDER BY ${orderExpr} ${d.direction==='up'?'DESC':'ASC'} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+          ? `OVER (ORDER BY ${orderExpr} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
           : `OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`;
         return `COALESCE(${q(c)}, LAST_VALUE(${q(c)} IGNORE NULLS) ${win}) AS ${q(c)}`;
       }).join(', ');
@@ -3407,8 +3410,9 @@ Object.assign(TRANSFORMS, {
       const leftNames = ctx.hasRid ? [RID, ...ctx.columns] : ctx.columns;
       const rightNames = (rightSrc.columns||[]).map(c=>c.name);
       const leftSet = new Set(leftNames);
-      const leftSelect = leftNames.map(n => `l.${q(n)}`);
-      const rightSelect = rightNames.map(n => leftSet.has(n) ? `r.${q(n)} AS ${q(n+'_right')}` : `r.${q(n)}`);
+      const sameKey = d.leftKey === d.rightKey;
+      const leftSelect = leftNames.map(n => (sameKey && n===d.leftKey) ? `COALESCE(l.${q(n)}, r.${q(n)}) AS ${q(n)}` : `l.${q(n)}`);
+      const rightSelect = rightNames.filter(n => !(sameKey && n===d.rightKey)).map(n => leftSet.has(n) ? `r.${q(n)} AS ${q(n+'_right')}` : `r.${q(n)}`);
       return `SELECT ${[...leftSelect, ...rightSelect].join(', ')} FROM (${from}) AS l ${jt} JOIN ${q(rt)} AS r ON l.${q(d.leftKey)} = r.${q(d.rightKey)}`;
     },
     summary(d){
@@ -7538,7 +7542,8 @@ const csvText = SELFTEST_JOIN_CSV;
 const buffer = new TextEncoder().encode(csvText);
 await duckEngine.loadSecondarySource('selftest_region', { format:'csv', fileName:'selftest_region.csv', buffer, csvText, firstRowHeader:true, skipRows:0 });
 await aqEngine.loadSecondarySource('selftest_region', { format:'csv', fileName:'selftest_region.csv', buffer, csvText, firstRowHeader:true, skipRows:0 });
-dataState.secondarySources.push({ id:'selftest_region', name:'selftest_region.csv', format:'csv', rowCount:5, columns:[] });
+const columns = await duckEngine.getSecondarySourceColumns('selftest_region');
+dataState.secondarySources.push({ id:'selftest_region', name:'selftest_region.csv', format:'csv', rowCount:5, columns });
 }
 
 async function selfTestDuckDBResult(steps){
