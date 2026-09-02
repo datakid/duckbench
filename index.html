@@ -2433,6 +2433,16 @@ function coerceForColumn(value, colType){
   return String(value);
 }
 function aqOrderKey(v){ return v instanceof Date ? v.getTime() : v; }
+function aqCellText(v){
+  if (v == null) return null;
+  if (v instanceof Date){
+    const pad = n => String(n).padStart(2, '0');
+    const datePart = `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())}`;
+    const hasTime = v.getUTCHours() || v.getUTCMinutes() || v.getUTCSeconds();
+    return hasTime ? `${datePart} ${pad(v.getUTCHours())}:${pad(v.getUTCMinutes())}:${pad(v.getUTCSeconds())}` : datePart;
+  }
+  return String(v);
+}
 
 function colList(names){ return names.map(q).join(', '); }
 function nameCollision(name, existingCols){
@@ -2633,9 +2643,11 @@ const TRANSFORMS = {
     preservesIdentity: true,
     params:[],
     async resolve(d, from, api){
-      const row = await api.queryOne(`SELECT * FROM (${from}) ORDER BY ${api.hasRid ? q(RID) : '1'} LIMIT 1`);
+      const inner = `SELECT * FROM (${from}) ORDER BY ${api.hasRid ? q(RID) : '1'} LIMIT 1`;
+      const wrapped = await wrapSelectForDisplay(inner);
+      const row = await api.queryOne(wrapped.sql);
       if (!row) return { ...d, mapping: [] };
-      const cols = api.columns.filter(c=>c!==RID);
+      const cols = wrapped.columns.map(c=>c.name);
       const used = new Set();
       const mapping = cols.map(oldName => {
         let n = String(row[oldName] ?? oldName).trim() || oldName;
@@ -2664,7 +2676,8 @@ const TRANSFORMS = {
       const row0 = table.object(0);
       const used = new Set();
       const mapping = cols.map(oldName => {
-        let n = String(row0[oldName] ?? oldName).trim() || oldName;
+        const raw = row0[oldName];
+        let n = (raw == null ? oldName : aqCellText(raw)).trim() || oldName;
         n = n.replace(/\s+/g,' ');
         let final = n, i = 2;
         while (used.has(final)) final = `${n}_${i++}`;
@@ -2915,15 +2928,16 @@ Object.assign(TRANSFORMS, {
     },
     toSQL(d, from, ctx){
       const col = q(d.column);
+      const colText = `CAST(${col} AS VARCHAR)`;
       const delim = esc(d.delimiter);
       if (d.mode==='rows'){
         const base = d.keepOriginal ? `*, ` : `* EXCLUDE (${col}), `;
-        return `SELECT ${base}UNNEST(COALESCE(STRING_SPLIT(${col}, ${delim}), [CAST(NULL AS VARCHAR)])) AS ${col} FROM (${from})`;
+        return `SELECT ${base}UNNEST(COALESCE(STRING_SPLIT(${colText}, ${delim}), [CAST(NULL AS VARCHAR)])) AS ${col} FROM (${from})`;
       }
       const n = clamp(Number(d.maxParts)||4, 1, 20);
       const parts = Array.from({length:n}, (_,i)=>{
         const name = dedupeName(`${d.column}_${i+1}`, ctx.columns);
-        return `STRING_SPLIT(${col}, ${delim})[${i+1}] AS ${q(name)}`;
+        return `STRING_SPLIT(${colText}, ${delim})[${i+1}] AS ${q(name)}`;
       });
       const base = d.keepOriginal ? '*, ' : `* EXCLUDE (${col}), `;
       return `SELECT ${base}${parts.join(', ')} FROM (${from})`;
@@ -2935,7 +2949,7 @@ Object.assign(TRANSFORMS, {
       const col = d.column;
       const delim = d.delimiter;
       if (d.mode === 'rows'){
-        let t = table.derive({ [col]: aq.escape(row => row[col]==null ? [null] : String(row[col]).split(delim)) });
+        let t = table.derive({ [col]: aq.escape(row => row[col]==null ? [null] : aqCellText(row[col]).split(delim)) });
         t = t.unroll(col);
         return t;
       }
@@ -2945,7 +2959,7 @@ Object.assign(TRANSFORMS, {
       names.forEach((name, i) => {
         derived[name] = aq.escape(row => {
           if (row[col]==null) return null;
-          const parts = String(row[col]).split(delim);
+          const parts = aqCellText(row[col]).split(delim);
           return parts[i] ?? null;
         });
       });
@@ -3010,11 +3024,12 @@ Object.assign(TRANSFORMS, {
     },
     toSQL(d, from){
       const col = q(d.column);
+      const colText = `CAST(${col} AS VARCHAR)`;
       let expr;
-      if (d.mode==='regex') expr = `regexp_extract(${col}, ${esc(d.pattern)})`;
-      else if (d.mode==='before') expr = `split_part(${col}, ${esc(d.delimiter)}, 1)`;
-      else if (d.mode==='after') expr = `array_to_string((STRING_SPLIT(${col}, ${esc(d.delimiter)}))[2:], ${esc(d.delimiter)})`;
-      else expr = `substr(${col}, ${(Number(d.start)||0)+1}, ${Number(d.length)||1})`;
+      if (d.mode==='regex') expr = `regexp_extract(${colText}, ${esc(d.pattern)})`;
+      else if (d.mode==='before') expr = `split_part(${colText}, ${esc(d.delimiter)}, 1)`;
+      else if (d.mode==='after') expr = `array_to_string((STRING_SPLIT(${colText}, ${esc(d.delimiter)}))[2:], ${esc(d.delimiter)})`;
+      else expr = `substr(${colText}, ${(Number(d.start)||0)+1}, ${Number(d.length)||1})`;
       return `SELECT *, (${expr}) AS ${q(d.name)} FROM (${from})`;
     },
     summary(d){ return `${d.column} (${d.mode}) → “${d.name}”`; },
@@ -3031,21 +3046,21 @@ Object.assign(TRANSFORMS, {
       const fn = mode === 'regex' ? (s) => {
         if (s == null) return null;
         let re; try { re = new RegExp(pattern); } catch { return null; }
-        const m = String(s).match(re);
+        const m = aqCellText(s).match(re);
         return m ? m[0] : null;
       } : mode === 'before' ? (s) => {
         if (s == null) return null;
-        const str = String(s);
+        const str = aqCellText(s);
         const i = str.indexOf(delimiter);
         return i === -1 ? str : str.slice(0, i);
       } : mode === 'after' ? (s) => {
         if (s == null) return null;
-        const str = String(s);
+        const str = aqCellText(s);
         const i = str.indexOf(delimiter);
         return i === -1 ? '' : str.slice(i + delimiter.length);
       } : (s) => {
         if (s == null) return null;
-        return String(s).slice(start, start + length);
+        return aqCellText(s).slice(start, start + length);
       };
       return table.derive({ [name]: aq.escape(row => fn(row[col])) });
     },
@@ -3996,7 +4011,8 @@ const FRAME_IMPLS = {
     const used = new Set();
     const mapping = {};
     cols.forEach(oldName => {
-      let n = String(row[oldName] ?? oldName).trim() || oldName;
+      const raw = row[oldName];
+      let n = (raw == null ? oldName : aqCellText(raw)).trim() || oldName;
       n = n.replace(/\s+/g, ' ');
       let final = n, i = 2;
       while (used.has(final)) final = `${n}_${i++}`;
@@ -4044,7 +4060,7 @@ const FRAME_IMPLS = {
     const col = d.column;
     const delim = d.delimiter;
     if (d.mode === 'rows'){
-      let t = FR.derive(f, { [col]: row => row[col] == null ? [null] : String(row[col]).split(delim) });
+      let t = FR.derive(f, { [col]: row => row[col] == null ? [null] : aqCellText(row[col]).split(delim) });
       t = FR.unroll(t, col);
       return t;
     }
@@ -4054,7 +4070,7 @@ const FRAME_IMPLS = {
     names.forEach((name, i) => {
       spec[name] = row => {
         if (row[col] == null) return null;
-        const parts = String(row[col]).split(delim);
+        const parts = aqCellText(row[col]).split(delim);
         return parts[i] ?? null;
       };
     });
@@ -4076,19 +4092,19 @@ const FRAME_IMPLS = {
     const fn = mode === 'regex' ? (s) => {
       if (s == null) return null;
       let re; try { re = new RegExp(pattern); } catch { return null; }
-      const m = String(s).match(re);
+      const m = aqCellText(s).match(re);
       return m ? m[0] : null;
     } : mode === 'before' ? (s) => {
       if (s == null) return null;
-      const str = String(s); const i = str.indexOf(delimiter);
+      const str = aqCellText(s); const i = str.indexOf(delimiter);
       return i === -1 ? str : str.slice(0, i);
     } : mode === 'after' ? (s) => {
       if (s == null) return null;
-      const str = String(s); const i = str.indexOf(delimiter);
+      const str = aqCellText(s); const i = str.indexOf(delimiter);
       return i === -1 ? '' : str.slice(i + delimiter.length);
     } : (s) => {
       if (s == null) return null;
-      return String(s).slice(start, start + length);
+      return aqCellText(s).slice(start, start + length);
     };
     return FR.derive(f, { [name]: row => fn(row[col]) });
   },
