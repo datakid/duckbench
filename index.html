@@ -3860,18 +3860,21 @@ function parseCsvRowFrame(line, delim){
   fields.push(cur);
   return fields;
 }
+const FRAME_ISO_DATE_RE = /^([-+]\d{2})?\d{4}(-\d{2}(-\d{2})?)?(T\d{2}:\d{2}(:\d{2}(\.\d{3})?)?(Z|[-+]\d{2}:\d{2})?)?$/;
 function inferFrameColumnKind(values){
-  let sawNumber = true, sawBool = true, any = false;
+  let sawNumber = true, sawBool = true, sawDate = true, any = false;
   for (const v of values){
     if (v == null) continue;
     any = true;
     if (sawNumber && !/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(v)) sawNumber = false;
     if (sawBool && !/^(true|false)$/i.test(v)) sawBool = false;
-    if (!sawNumber && !sawBool) break;
+    if (sawDate && !(FRAME_ISO_DATE_RE.test(v) && !isNaN(Date.parse(v)))) sawDate = false;
+    if (!sawNumber && !sawBool && !sawDate) break;
   }
   if (!any) return 'string';
   if (sawBool) return 'boolean';
   if (sawNumber) return 'number';
+  if (sawDate) return 'date';
   return 'string';
 }
 function frameFromCsv(csvText, opts){
@@ -3896,6 +3899,7 @@ function frameFromCsv(csvText, opts){
       if (v == null) return null;
       if (kind === 'number') return Number(v);
       if (kind === 'boolean') return /^true$/i.test(v);
+      if (kind === 'date') return new Date(Date.parse(v));
       return v;
     });
   });
