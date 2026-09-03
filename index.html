@@ -2931,8 +2931,12 @@ Object.assign(TRANSFORMS, {
       const colText = `CAST(${col} AS VARCHAR)`;
       const delim = esc(d.delimiter);
       if (d.mode==='rows'){
-        const base = d.keepOriginal ? `*, ` : `* EXCLUDE (${col}), `;
-        return `SELECT ${base}UNNEST(COALESCE(STRING_SPLIT(${colText}, ${delim}), [CAST(NULL AS VARCHAR)])) AS ${col} FROM (${from})`;
+        const unnestExpr = `UNNEST(COALESCE(STRING_SPLIT(${colText}, ${delim}), [CAST(NULL AS VARCHAR)]))`;
+        if (d.keepOriginal){
+          return `SELECT *, ${unnestExpr} AS ${col} FROM (${from})`;
+        }
+        const selectList = (ctx.hasRid ? [q(RID)] : []).concat(ctx.columns.map(n => n===d.column ? `${unnestExpr} AS ${col}` : q(n)));
+        return `SELECT ${selectList.join(', ')} FROM (${from})`;
       }
       const n = clamp(Number(d.maxParts)||4, 1, 20);
       const parts = Array.from({length:n}, (_,i)=>{
