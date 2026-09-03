@@ -1887,8 +1887,13 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
     } catch(e){
       return { sql: from, hasRid, columns: richColumns, error: e.message || String(e), errorIndex: i };
     }
-    richColumns = t.columnsUnchanged ? richColumns : (await getColumns(from)).filter(c=>c.name!==RID);
-    hasRid = hasRid && (typeof t.preservesIdentity === 'function' ? t.preservesIdentity(data) : !!t.preservesIdentity);
+    let physicalCols = null;
+    if (!t.columnsUnchanged){
+      physicalCols = await getColumns(from);
+      richColumns = physicalCols.filter(c=>c.name!==RID);
+    }
+    const declared = hasRid && (typeof t.preservesIdentity === 'function' ? t.preservesIdentity(data) : !!t.preservesIdentity);
+    hasRid = t.columnsUnchanged ? declared : (declared && physicalCols.some(c=>c.name===RID));
   }
   return { sql: from, hasRid, columns: richColumns, error: null, errorIndex: -1 };
 }
@@ -3754,7 +3759,9 @@ FR.join = function(left, right, leftKey, rightKey, opts){
   const ld = materializeFrame(left), rd = materializeFrame(right);
   const leftNames = ld.names, rightNames = rd.names;
   const leftSet = new Set(leftNames);
-  const rightOutNames = rightNames.map(n => leftSet.has(n) ? n + '_right' : n);
+  const sameKey = leftKey === rightKey;
+  const rightKeptNames = sameKey ? rightNames.filter(n => n !== rightKey) : rightNames;
+  const rightOutNames = rightKeptNames.map(n => leftSet.has(n) ? n + '_right' : n);
   const outNames = leftNames.concat(rightOutNames);
   const outCols = {};
   outNames.forEach(n => outCols[n] = []);
@@ -3769,8 +3776,16 @@ FR.join = function(left, right, leftKey, rightKey, opts){
   const matchedRight = new Uint8Array(rd.nrows);
   let total = 0;
   const pushRow = (li, ri) => {
-    leftNames.forEach(n => outCols[n].push(li == null ? null : ld.cols[n][li]));
-    rightNames.forEach((n, ni) => outCols[rightOutNames[ni]].push(ri == null ? null : rd.cols[n][ri]));
+    leftNames.forEach(n => {
+      if (sameKey && n === leftKey){
+        const lv = li == null ? null : ld.cols[n][li];
+        const rv = ri == null ? null : rd.cols[rightKey][ri];
+        outCols[n].push(lv == null ? rv : lv);
+      } else {
+        outCols[n].push(li == null ? null : ld.cols[n][li]);
+      }
+    });
+    rightKeptNames.forEach((n, ni) => outCols[rightOutNames[ni]].push(ri == null ? null : rd.cols[n][ri]));
     total++;
   };
   for (let i = 0; i < ld.nrows; i++){
