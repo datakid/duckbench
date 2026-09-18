@@ -2,13 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://cdn.sheetjs.com; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://cdn.sheetjs.com https://registry.npmjs.org https://extensions.duckdb.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://registry.npmjs.org https://extensions.duckdb.org; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Duckbench</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImR1Y2tiZW5jaCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTUiIGZpbGw9IiNGRTYxNjQiLz4KICA8ZyBmaWxsPSIjRjJGMkYzIj4KICAgIDxyZWN0IHg9IjgiIHk9IjQyIiB3aWR0aD0iOSIgaGVpZ2h0PSIxMiIgcng9IjQuNSIvPgogICAgPHJlY3QgeD0iMjEiIHk9IjM0IiB3aWR0aD0iOSIgaGVpZ2h0PSIyMCIgcng9IjQuNSIvPgogICAgPHBhdGggZD0iTTM0IDQ5LjUKICAgICAgICAgICAgIFYzMC41CiAgICAgICAgICAgICBBMTAuNSAxMC41IDAgMSAxIDQ4LjQgMTcuNAogICAgICAgICAgICAgTDU2IDE4LjYKICAgICAgICAgICAgIFE1OC42IDIxIDU1LjcgMjMuNgogICAgICAgICAgICAgTDQ3LjYgMjYuMwogICAgICAgICAgICAgQTEwLjUgMTAuNSAwIDAgMSA0MyAzMC41CiAgICAgICAgICAgICBWNDkuNQogICAgICAgICAgICAgQTQuNSA0LjUgMCAwIDEgMzQgNDkuNQogICAgICAgICAgICAgWiIvPgogIDwvZz4KICA8Y2lyY2xlIGN4PSI0MyIgY3k9IjE3IiByPSIzIiBmaWxsPSIjRkU2MTY0Ii8+Cjwvc3ZnPgo=">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:SOFT,WONK,ital,opsz,wght@0..100,0..1,0,9..144,400;0..100,0..1,0,9..144,500;0..100,0..1,0,9..144,600;0..100,0..1,1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts/fonts.css">
 <style>
 :root{
   --ink-0-rgb: 21,19,17;      --ink-0: rgb(var(--ink-0-rgb));
@@ -1539,7 +1537,7 @@ function switchPane(name){
 }
 
 const SHEETJS_VERSION = '0.20.3';
-const SHEETJS_URL = `https://cdn.sheetjs.com/xlsx-${SHEETJS_VERSION}/package/dist/xlsx.full.min.js`;
+const SHEETJS_URL = `vendor/xlsx-${SHEETJS_VERSION}.full.min.js`;
 let sheetJsPromise = null;
 function ensureSheetJS(){
   if (window.XLSX) return Promise.resolve();
@@ -1548,7 +1546,7 @@ function ensureSheetJS(){
     const s = document.createElement('script');
     s.src = SHEETJS_URL;
     s.onload = () => resolve();
-    s.onerror = () => { sheetJsPromise = null; reject(new Error('Could not load the Excel reader from cdn.sheetjs.com.')); };
+    s.onerror = () => { sheetJsPromise = null; reject(new Error('Could not load the local Excel reader (vendor/xlsx-0.20.3.full.min.js missing?).')); };
     document.head.appendChild(s);
   });
   return sheetJsPromise;
@@ -7642,7 +7640,7 @@ const SELFTEST_CASES = [
 { label:'rename_column', steps:[{ type:'rename_column', data:{ column:'customer', newName:'client' } }] },
 { label:'change_type', steps:[{ type:'change_type', data:{ column:'quantity', targetType:'DOUBLE' } }] },
 { label:'split_column — columns', steps:[{ type:'split_column', data:{ column:'order_date', delimiter:'-', mode:'columns', maxParts:3, keepOriginal:false } }] },
-{ label:'split_column — rows with nulls', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', keepOriginal:false } }] },
+{ label:'split_column — rows with nulls', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', rowsOutputName:'customer_part', keepOriginal:false } }] },
 { label:'merge_columns', steps:[{ type:'merge_columns', data:{ columns:['product','category'], separator:' / ', name:'label', keepOriginal:false } }] },
 { label:'extract_text — regex with group', steps:[{ type:'extract_text', data:{ column:'order_date', mode:'regex', pattern:'^(\\d{4})', name:'yr' } }] },
 { label:'replace_values', steps:[{ type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'Open' } }] },
@@ -7678,7 +7676,7 @@ const SELFTEST_CASES = [
 ] },
 { label:'export — pivot has no __rid', kind:'export', steps:[{ type:'pivot', data:{ onColumn:'region', valueColumn:'quantity', fn:'sum', groupColumns:[] } }] },
 { label:'export — unpivot has no __rid', kind:'export', steps:[{ type:'unpivot', data:{ columns:['quantity','unit_price'], nameColumn:'Attribute', valueColumn:'Value' } }] },
-{ label:'export — split-to-rows has no __rid', kind:'export', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', keepOriginal:false } }] },
+{ label:'export — split-to-rows has no __rid', kind:'export', steps:[{ type:'split_column', data:{ column:'customer', delimiter:' ', mode:'rows', rowsOutputName:'customer_part', keepOriginal:false } }] },
 { label:'export — join has no __rid', kind:'export', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left' } }] },
 { label:'export — CSV formula injection guarded', kind:'csv-guard', steps:[{ type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'=1+1' } }] },
 { label:'export — Arquero CSV export is non-empty', kind:'aq-csv-export', steps:[] },
