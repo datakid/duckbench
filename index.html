@@ -1431,10 +1431,10 @@ function confirmDialog(message){
     const overlay = $('#confirmOverlay');
     $('#confirmMsg').textContent = message;
     let result = false;
-    const entry = ModalStack.push(overlay, { onClose: () => resolve(result) });
-    const onOk = () => { result = true; cleanup(); ModalStack.pop(entry); };
-    const onCancel = () => { cleanup(); ModalStack.pop(entry); };
     function cleanup(){ $('#confirmOk').removeEventListener('click', onOk); $('#confirmCancel').removeEventListener('click', onCancel); }
+    const entry = ModalStack.push(overlay, { onClose: () => { cleanup(); resolve(result); } });
+    const onOk = () => { result = true; ModalStack.pop(entry); };
+    const onCancel = () => { ModalStack.pop(entry); };
     $('#confirmOk').addEventListener('click', onOk);
     $('#confirmCancel').addEventListener('click', onCancel);
   });
@@ -1647,7 +1647,9 @@ return (typeof v === 'string' && v.length && /^[=+\-@]/.test(v)) ? `'${v}` : v;
 function csvGuardedSelectList(cols){
 return cols.map(c => {
 const isText = !NUMERIC_TYPE_RE.test(c.type) && !BOOL_TYPE_RE.test(c.type) && !DATE_TYPE_RE.test(c.type);
-return isText ? `(CASE WHEN ${q(c.name)} IS NOT NULL AND LEFT(${q(c.name)}, 1) IN ('=', '+', '-', '@') THEN '''' || ${q(c.name)} ELSE ${q(c.name)} END) AS ${q(c.name)}` : q(c.name);
+const valueExpr = isText ? `(CASE WHEN ${q(c.name)} IS NOT NULL AND LEFT(${q(c.name)}, 1) IN ('=', '+', '-', '@') THEN '''' || ${q(c.name)} ELSE ${q(c.name)} END)` : q(c.name);
+const guardedAlias = /^[=+\-@]/.test(c.name) ? `'${c.name}` : c.name;
+return `${valueExpr} AS ${q(guardedAlias)}`;
 }).join(', ');
 }
 const extReady = new Map();
@@ -1712,8 +1714,7 @@ function sqlLiteral(value, columnType){
     if (value === '') return 'NULL';
     if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
     if (typeof value === 'bigint') return value.toString();
-    const n = Number(value);
-    return Number.isFinite(n) ? String(n) : `TRY_CAST(${esc(String(value))} AS ${type})`;
+    return `TRY_CAST(${esc(String(value))} AS ${type})`;
   }
   if (isDateType(type)){
     if (value === '') return 'NULL';
@@ -1867,7 +1868,12 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
   }
   let from = baseFrom ?? `SELECT * FROM ${q(SOURCE_TABLE)}`;
   let hasRid = baseHasRid ?? true;
-  let richColumns = baseColumns ? baseColumns.slice() : (await getColumns(from)).filter(c=>c.name!==RID);
+  let richColumns;
+  try {
+    richColumns = baseColumns ? baseColumns.slice() : (await getColumns(from)).filter(c=>c.name!==RID);
+  } catch(e){
+    return { sql: from, hasRid, columns: [], error: e.message || String(e), errorIndex: -1 };
+  }
   const end = uptoIndex ?? steps.length - 1;
   for (let i=0; i<=end; i++){
     const step = steps[i];
@@ -1876,6 +1882,7 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
     if (!t) continue;
     let data = step.data;
     const columnNames = richColumns.map(c=>c.name);
+    let physicalCols = null;
     try {
       if (t.resolve){
         data = await t.resolve(data, from, { queryOne: queryOneRaw, columns: columnNames, hasRid });
@@ -1884,13 +1891,12 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
       const err = t.validate ? t.validate(data, ctx) : null;
       if (err) return { sql: from, hasRid, columns: richColumns, error: err, errorIndex: i };
       from = t.toSQL(data, from, ctx);
+      if (!t.columnsUnchanged){
+        physicalCols = await getColumns(from);
+        richColumns = physicalCols.filter(c=>c.name!==RID);
+      }
     } catch(e){
       return { sql: from, hasRid, columns: richColumns, error: e.message || String(e), errorIndex: i };
-    }
-    let physicalCols = null;
-    if (!t.columnsUnchanged){
-      physicalCols = await getColumns(from);
-      richColumns = physicalCols.filter(c=>c.name!==RID);
     }
     const declared = hasRid && (typeof t.preservesIdentity === 'function' ? t.preservesIdentity(data) : !!t.preservesIdentity);
     hasRid = t.columnsUnchanged ? declared : (declared && physicalCols.some(c=>c.name===RID));
@@ -1957,7 +1963,9 @@ async function runPreview(sql, limit=200){
   const nonRid = colTypes.filter(c=>c.name!==RID);
   const hasRid = colTypes.some(c=>c.name===RID);
   const selectList = nonRid.map(c => isRiskyDisplayType(c.type) ? `CAST(${q(c.name)} AS VARCHAR) AS ${q(c.name)}` : q(c.name));
-  const wrapped = `SELECT ${selectList.join(', ') || 'NULL'}${hasRid?`, ${q(RID)}`:''} FROM (${sql}) LIMIT ${limit+1}`;
+  const parts = selectList.slice();
+  if (hasRid) parts.push(q(RID));
+  const wrapped = `SELECT ${parts.join(', ') || 'NULL'} FROM (${sql}) LIMIT ${limit+1}`;
   const result = await dataState.conn.query(wrapped);
   const { rows } = extractRows(result);
   const hasMore = rows.length > limit;
@@ -2319,7 +2327,7 @@ async function exportPlanImpl(plan, format){
     const res = await dataState.conn.query(`${safeSql} LIMIT ${XLSX_ROW_CEILING + 1}`);
     const { rows } = extractRows(res);
     const truncated = rows.length > XLSX_ROW_CEILING;
-    const aoa = [columns.map(c=>c.name), ...(truncated ? rows.slice(0, XLSX_ROW_CEILING) : rows).map(row => row.map(csvFormulaGuardCell))];
+    const aoa = [columns.map(c=>csvFormulaGuardCell(c.name)), ...(truncated ? rows.slice(0, XLSX_ROW_CEILING) : rows).map(row => row.map(csvFormulaGuardCell))];
     const ws = window.XLSX.utils.aoa_to_sheet(aoa);
     const wb = window.XLSX.utils.book_new();
     window.XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
@@ -2334,7 +2342,14 @@ async function exportCustomCsvImpl(plan, cols, limit, nullStr){
   const sql = sqlOf(plan);
   const allCols = await getColumns(sql);
   const selectCols = cols.map(name => allCols.find(c=>c.name===name) || { name, type:'VARCHAR' });
-  const selectList = csvGuardedSelectList(selectCols);
+  const selectList = selectCols.map(c => {
+    const isText = !NUMERIC_TYPE_RE.test(c.type) && !BOOL_TYPE_RE.test(c.type) && !DATE_TYPE_RE.test(c.type);
+    const valueExpr = isText
+      ? `(CASE WHEN ${q(c.name)} IS NOT NULL AND LEFT(${q(c.name)}, 1) IN ('=', '+', '-', '@') THEN '''' || ${q(c.name)} ELSE ${q(c.name)} END)`
+      : q(c.name);
+    const guardedAlias = /^[=+\-@]/.test(c.name) ? `'${c.name}` : c.name;
+    return `${valueExpr} AS ${q(guardedAlias)}`;
+  }).join(', ');
   const exportSql = `SELECT ${selectList} FROM (${sql})${limit ? ` LIMIT ${limit}` : ''}`;
   const target = `${uid('exp_')}.csv`;
   await dataState.conn.query(`COPY (${exportSql}) TO ${esc(target)} (FORMAT CSV, HEADER TRUE, NULLSTR ${esc(nullStr||'')})`);
@@ -2648,7 +2663,7 @@ const TRANSFORMS = {
     preservesIdentity: true,
     params:[],
     async resolve(d, from, api){
-      const inner = `SELECT * FROM (${from}) ORDER BY ${api.hasRid ? q(RID) : '1'} LIMIT 1`;
+      const inner = `SELECT * FROM (${from}) LIMIT 1`;
       const wrapped = await wrapSelectForDisplay(inner);
       const row = await api.queryOne(wrapped.sql);
       if (!row) return { ...d, mapping: [] };
@@ -2667,9 +2682,7 @@ const TRANSFORMS = {
     toSQL(d, from, ctx){
       const mapping = d.mapping || [];
       const renameClause = mapping.filter(m=>m.from!==m.to).map(m=>`${q(m.from)} AS ${q(m.to)}`).join(', ');
-      const base = ctx.hasRid
-        ? `SELECT * FROM (${from}) QUALIFY ${q(RID)} > MIN(${q(RID)}) OVER ()`
-        : `SELECT * FROM (${from}) QUALIFY ROW_NUMBER() OVER () > 1`;
+      const base = `SELECT * FROM (${from}) QUALIFY ROW_NUMBER() OVER () > 1`;
       return renameClause ? `SELECT * RENAME (${renameClause}) FROM (${base})` : base;
     },
     summary(d){ return d.mapping?.length ? `→ ${d.mapping.slice(0,3).map(m=>m.to).join(', ')}${d.mapping.length>3?'…':''}` : 'renames columns from row 1'; },
@@ -2862,6 +2875,7 @@ Object.assign(TRANSFORMS, {
   add_column: {
     label:'Add custom column', category:'column', code:'ADD',
     ribbon:{ tab:'add', group:'From formula', icon:'plus-square', size:'large' },
+    executesUserSql: true,
     preservesIdentity: true,
     params:[
       { key:'name', type:'text', label:'New column name', default:'New column' },
@@ -2880,6 +2894,7 @@ Object.assign(TRANSFORMS, {
   conditional_column: {
     label:'Add conditional column', category:'column', code:'CND',
     ribbon:{ tab:'add', group:'From formula', icon:'git-branch', size:'large' },
+    executesUserSql: true,
     preservesIdentity: true,
     params:[
       { key:'name', type:'text', label:'New column name', default:'New column' },
@@ -2924,11 +2939,16 @@ Object.assign(TRANSFORMS, {
       { key:'mode', type:'enum', label:'Split into', default:'columns', reactive: true,
         options:[{value:'columns',label:'Columns'},{value:'rows',label:'Rows'}] },
       { key:'maxParts', type:'number', label:'Max columns to create', default:4, visible:d=>d.mode==='columns' },
+      { key:'rowsOutputName', type:'text', label:'New column name', default:(d,ctx)=>dedupeName(`${d.column||'value'}_part`, ctx.columns), visible:d=>d.mode==='rows' },
       { key:'keepOriginal', type:'toggle', label:'Keep original column', default:false },
     ],
-    validate(d){
+    validate(d, ctx){
       if (!d.column) return 'Choose a column.';
       if (!d.delimiter) return 'Enter a delimiter.';
+      if (d.mode === 'rows'){
+        if (!d.rowsOutputName) return 'Name the new column.';
+        if (nameCollision(d.rowsOutputName, ctx.columns)) return `“${d.rowsOutputName}” already exists — pick another name.`;
+      }
       return null;
     },
     toSQL(d, from, ctx){
@@ -2937,11 +2957,9 @@ Object.assign(TRANSFORMS, {
       const delim = esc(d.delimiter);
       if (d.mode==='rows'){
         const unnestExpr = `UNNEST(COALESCE(STRING_SPLIT(${colText}, ${delim}), [CAST(NULL AS VARCHAR)]))`;
-        if (d.keepOriginal){
-          return `SELECT *, ${unnestExpr} AS ${col} FROM (${from})`;
-        }
-        const selectList = (ctx.hasRid ? [q(RID)] : []).concat(ctx.columns.map(n => n===d.column ? `${unnestExpr} AS ${col}` : q(n)));
-        return `SELECT ${selectList.join(', ')} FROM (${from})`;
+        const outCol = q(d.rowsOutputName);
+        const base = d.keepOriginal ? '*' : `* EXCLUDE (${col})`;
+        return `SELECT ${base}, ${unnestExpr} AS ${outCol} FROM (${from})`;
       }
       const n = clamp(Number(d.maxParts)||4, 1, 20);
       const parts = Array.from({length:n}, (_,i)=>{
@@ -2958,8 +2976,10 @@ Object.assign(TRANSFORMS, {
       const col = d.column;
       const delim = d.delimiter;
       if (d.mode === 'rows'){
-        let t = table.derive({ [col]: aq.escape(row => row[col]==null ? [null] : aqCellText(row[col]).split(delim)) });
-        t = t.unroll(col);
+        const outName = d.rowsOutputName;
+        let t = table.derive({ [outName]: aq.escape(row => row[col]==null ? [null] : aqCellText(row[col]).split(delim)) });
+        t = t.unroll(outName);
+        if (!d.keepOriginal) t = t.select(aq.not(col));
         return t;
       }
       const n = clamp(Number(d.maxParts)||4, 1, 20);
@@ -3240,10 +3260,11 @@ Object.assign(TRANSFORMS, {
       if (nameCollision(d.name, ctx.columns)) return `“${d.name}” already exists.`;
       return null;
     },
-    toSQL(d, from){
+    toSQL(d, from, ctx){
       const fn = { rank:'RANK', dense_rank:'DENSE_RANK', row_number:'ROW_NUMBER' }[d.mode] || 'RANK';
       const part = d.partitionBy?.length ? `PARTITION BY ${colList(d.partitionBy)} ` : '';
-      return `SELECT *, ${fn}() OVER (${part}ORDER BY ${q(d.column)} ${d.direction==='asc'?'ASC':'DESC'}) AS ${q(d.name)} FROM (${from})`;
+      const tiebreak = ctx.hasRid ? `, ${q(RID)} ASC` : '';
+      return `SELECT *, ${fn}() OVER (${part}ORDER BY ${q(d.column)} ${d.direction==='asc'?'ASC':'DESC'}${tiebreak}) AS ${q(d.name)} FROM (${from})`;
     },
     summary(d){ return `“${d.name}” by ${d.column}`; },
     engines: ['duckdb','arquero'],
@@ -3258,7 +3279,8 @@ Object.assign(TRANSFORMS, {
       t = part ? t.groupby(...part) : t;
       const nullFlag = aq.escape(row => row[col]==null ? 1 : 0);
       const valueKey = aq.escape(row => aqOrderKey(row[col]));
-      t = t.orderby(nullFlag, desc ? aq.desc(valueKey) : valueKey);
+      const tieKey = ctx.hasRid ? aq.escape(row => row[RID]) : '__origIdx';
+      t = t.orderby(nullFlag, desc ? aq.desc(valueKey) : valueKey, tieKey);
       t = mode === 'dense_rank' ? t.derive({ [name]: () => aq.op.dense_rank() })
         : mode === 'row_number' ? t.derive({ [name]: () => aq.op.row_number() })
         : t.derive({ [name]: () => aq.op.rank() });
@@ -3286,7 +3308,8 @@ Object.assign(TRANSFORMS, {
     toSQL(d, from, ctx){
       const orderExpr = d.orderBy ? q(d.orderBy) : (ctx.hasRid ? q(RID) : q(d.column));
       const part = d.partitionBy?.length ? `PARTITION BY ${colList(d.partitionBy)} ` : '';
-      return `SELECT *, SUM(${q(d.column)}) OVER (${part}ORDER BY ${orderExpr} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS ${q(d.name)} FROM (${from})`;
+      const tiebreak = (ctx.hasRid && orderExpr !== q(RID)) ? `, ${q(RID)} ASC` : '';
+      return `SELECT *, SUM(${q(d.column)}) OVER (${part}ORDER BY ${orderExpr}${tiebreak} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS ${q(d.name)} FROM (${from})`;
     },
     summary(d){ return `“${d.name}” = running ${d.column}`; },
     engines: ['duckdb','arquero'],
@@ -3299,7 +3322,8 @@ Object.assign(TRANSFORMS, {
       let t = table.derive({ __origIdx: () => aq.op.row_number() });
       t = part ? t.groupby(...part) : t;
       const orderKey = aq.escape(row => aqOrderKey(row[orderCol]));
-      t = t.orderby(orderKey);
+      const tieKey = (ctx.hasRid && orderCol !== RID) ? aq.escape(row => row[RID]) : null;
+      t = tieKey ? t.orderby(orderKey, tieKey) : t.orderby(orderKey);
       t = t.derive({ [name]: aq.rolling(aq.op.sum(col), [-Infinity, 0]) });
       if (part) t = t.ungroup();
       t = t.orderby('__origIdx').select(aq.not('__origIdx'));
@@ -3323,6 +3347,15 @@ Object.assign(TRANSFORMS, {
       if (!d.groupColumns?.length) return 'Pick at least one column to group by.';
       if (!d.aggregations?.length) return 'Add at least one calculation.';
       for (const a of d.aggregations) if (a.fn !== 'count' && !a.column) return 'Every calculation except “Count rows” needs a column.';
+      const names = d.aggregations.map(a => a.name?.trim() || (a.fn==='count' ? 'Count' : `${a.fn}_${a.column}`));
+      const seen = new Set();
+      for (const n of names){
+        if (seen.has(n)) return `“${n}” is used by more than one calculation — give each a unique name.`;
+        seen.add(n);
+      }
+      for (const n of names){
+        if (d.groupColumns.includes(n)) return `“${n}” is already one of the group-by columns — pick another result name.`;
+      }
       return null;
     },
     toSQL(d, from){
@@ -3384,7 +3417,7 @@ Object.assign(TRANSFORMS, {
       const valCol = d.valueColumn;
       const aggSpec = d.fn === 'sum' ? { [valCol]: aq.op.sum(valCol) }
         : d.fn === 'avg' ? { [valCol]: aq.op.mean(valCol) }
-        : d.fn === 'count' ? { [valCol]: aq.op.count() }
+        : d.fn === 'count' ? { [valCol]: aq.op.valid(valCol) }
         : d.fn === 'min' ? { [valCol]: aq.op.min(valCol) }
         : d.fn === 'max' ? { [valCol]: aq.op.max(valCol) }
         : { [valCol]: aq.op.any(valCol) };
@@ -3421,7 +3454,13 @@ Object.assign(TRANSFORMS, {
       const leftSet = new Set(leftNames);
       const sameKey = d.leftKey === d.rightKey;
       const leftSelect = leftNames.map(n => (sameKey && n===d.leftKey) ? `COALESCE(l.${q(n)}, r.${q(n)}) AS ${q(n)}` : `l.${q(n)}`);
-      const rightSelect = rightNames.filter(n => !(sameKey && n===d.rightKey)).map(n => leftSet.has(n) ? `r.${q(n)} AS ${q(n+'_right')}` : `r.${q(n)}`);
+      const usedNames = new Set(leftNames);
+      const rightSelect = rightNames.filter(n => !(sameKey && n===d.rightKey)).map(n => {
+        const base = leftSet.has(n) ? `${n}_right` : n;
+        const outName = dedupeName(base, Array.from(usedNames));
+        usedNames.add(outName);
+        return outName === n ? `r.${q(n)}` : `r.${q(n)} AS ${q(outName)}`;
+      });
       return `SELECT ${[...leftSelect, ...rightSelect].join(', ')} FROM (${from}) AS l ${jt} JOIN ${q(rt)} AS r ON l.${q(d.leftKey)} = r.${q(d.rightKey)}`;
     },
     summary(d){
@@ -3445,7 +3484,16 @@ Object.assign(TRANSFORMS, {
       { key:'nameColumn', type:'text', label:'New “name” column', default:'Attribute' },
       { key:'valueColumn', type:'text', label:'New “value” column', default:'Value' },
     ],
-    validate(d){ return (d.columns?.length >= 2) ? null : 'Pick at least two columns to unpivot.'; },
+    validate(d, ctx){
+      if (!(d.columns?.length >= 2)) return 'Pick at least two columns to unpivot.';
+      if (!d.nameColumn?.trim()) return 'Name the “name” column.';
+      if (!d.valueColumn?.trim()) return 'Name the “value” column.';
+      if (d.nameColumn === d.valueColumn) return 'The “name” and “value” columns need different names.';
+      const retained = (ctx.columns||[]).filter(c => !d.columns.includes(c) && c !== RID);
+      if (retained.includes(d.nameColumn)) return `“${d.nameColumn}” is already a column that isn’t being unpivoted — pick another name.`;
+      if (retained.includes(d.valueColumn)) return `“${d.valueColumn}” is already a column that isn’t being unpivoted — pick another name.`;
+      return null;
+    },
     toSQL(d, from){
       return `SELECT * FROM (UNPIVOT (${from}) ON ${colList(d.columns)} INTO NAME ${q(d.nameColumn)} VALUE ${q(d.valueColumn)}) unpivoted`;
     },
@@ -3458,6 +3506,7 @@ Object.assign(TRANSFORMS, {
   raw_sql: {
     label:'Custom SQL', category:'sql', code:'SQL',
     ribbon:{ tab:'transform', group:'Advanced', icon:'terminal', size:'large' },
+    executesUserSql: true,
     preservesIdentity: false, 
     params:[
       { key:'sql', type:'sql', label:'SQL — use {{prev}} for the pipeline so far', default:'SELECT * FROM {{prev}}\nWHERE ', big:true },
@@ -3685,6 +3734,7 @@ function frameAggAdd(st, v){
 function frameAggResult(st, fn){
   switch (fn){
     case 'count': return st.count;
+    case 'count_nonnull': return st.n;
     case 'count_distinct': return st.distinct.size;
     case 'sum': return st.n ? st.sum : null;
     case 'avg': return st.n ? st.sum / st.n : null;
@@ -3750,7 +3800,7 @@ FR.pivot = function(f, groupNames, onName, valueName, fn){
     groupNames.forEach((gn, gi) => outCols[gn].push(g.keyVals[gi]));
     pivotCols.forEach(pcol => {
       const cell = g.cells[pcol];
-      outCols[pcol].push(cell ? frameAggResult(cell, fn) : null);
+      outCols[pcol].push(cell ? frameAggResult(cell, fn === 'count' ? 'count_nonnull' : fn) : null);
     });
   }
   return makeFrame(outNames, outCols, null, groups.size);
@@ -3761,7 +3811,13 @@ FR.join = function(left, right, leftKey, rightKey, opts){
   const leftSet = new Set(leftNames);
   const sameKey = leftKey === rightKey;
   const rightKeptNames = sameKey ? rightNames.filter(n => n !== rightKey) : rightNames;
-  const rightOutNames = rightKeptNames.map(n => leftSet.has(n) ? n + '_right' : n);
+  const usedJoinNames = new Set(leftNames);
+  const rightOutNames = rightKeptNames.map(n => {
+    const base = leftSet.has(n) ? `${n}_right` : n;
+    const outName = dedupeName(base, Array.from(usedJoinNames));
+    usedJoinNames.add(outName);
+    return outName;
+  });
   const outNames = leftNames.concat(rightOutNames);
   const outCols = {};
   outNames.forEach(n => outCols[n] = []);
@@ -3922,7 +3978,9 @@ function frameFromCsv(csvText, opts){
   const rows = rawLines.map(l => parseCsvRowFrame(l, delimiter));
   let names, dataRows;
   if (header !== false){
-    names = rows[0].map((n, i) => n.trim() || `column_${i+1}`);
+    const rawNames = rows[0].map((n, i) => n.trim() || `column_${i+1}`);
+    const used = [];
+    names = rawNames.map(n => { const d = dedupeName(n, used); used.push(d); return d; });
     dataRows = rows.slice(1);
   } else {
     names = rows[0].map((_, i) => `column_${i+1}`);
@@ -4083,8 +4141,10 @@ const FRAME_IMPLS = {
     const col = d.column;
     const delim = d.delimiter;
     if (d.mode === 'rows'){
-      let t = FR.derive(f, { [col]: row => row[col] == null ? [null] : aqCellText(row[col]).split(delim) });
-      t = FR.unroll(t, col);
+      const outName = d.rowsOutputName;
+      let t = FR.derive(f, { [outName]: row => row[col] == null ? [null] : aqCellText(row[col]).split(delim) });
+      t = FR.unroll(t, outName);
+      if (!d.keepOriginal) t = FR.exclude(t, [col]);
       return t;
     }
     const n = clamp(Number(d.maxParts) || 4, 1, 20);
@@ -4164,15 +4224,25 @@ const FRAME_IMPLS = {
   fill(d, f, ctx){
     const orderCol = d.orderBy || (ctx.hasRid ? RID : null);
     let t = FR.derive(f, { __origIdx: (row, i) => i });
-    const base = orderCol ? FR.sort(t, [{ name: orderCol, desc: d.direction === 'up', nullsLast: true }]) : t;
+    const base = orderCol ? FR.sort(t, [{ name: orderCol, desc: false, nullsLast: true }]) : t;
     const bd = materializeFrame(base);
     const outCols = Object.assign({}, bd.cols);
     d.columns.forEach(c => {
-      let arr = bd.cols[c].slice();
-      if (d.direction === 'up') arr.reverse();
-      let last = null;
-      const filled = arr.map(v => { if (v != null){ last = v; return v; } return last; });
-      outCols[c] = d.direction === 'up' ? filled.reverse() : filled;
+      const filled = bd.cols[c].slice();
+      if (d.direction === 'up'){
+        let next = null;
+        for (let i = filled.length - 1; i >= 0; i--){
+          if (filled[i] != null) next = filled[i];
+          else filled[i] = next;
+        }
+      } else {
+        let last = null;
+        for (let i = 0; i < filled.length; i++){
+          if (filled[i] != null) last = filled[i];
+          else filled[i] = last;
+        }
+      }
+      outCols[c] = filled;
     });
     let result = makeFrame(bd.names, outCols, null, bd.nrows);
     result = FR.sort(result, [{ name: '__origIdx', desc: false, nullsLast: true }]);
@@ -4506,7 +4576,7 @@ function createArqueroEngine(){
           const s = String(v);
           return /[",\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
         };
-        const lines = [names.join(',')];
+        const lines = [names.map(cell).join(',')];
         for (const row of exportTable.objects()) lines.push(names.map(n => cell(row[n])).join(','));
         const blob = new Blob([lines.join('\n')], {type:'text/csv'});
         blob.truncated = false;
@@ -4527,7 +4597,7 @@ function createArqueroEngine(){
         const XLSX_ROW_CEILING = 1048575;
         const rows = exportTable.objects();
         const truncated = rows.length > XLSX_ROW_CEILING;
-        const aoa = [exportTable.columnNames(), ...(truncated ? rows.slice(0,XLSX_ROW_CEILING) : rows).map(r => exportTable.columnNames().map(c=>csvFormulaGuardCell(r[c])))];
+        const aoa = [exportTable.columnNames().map(csvFormulaGuardCell), ...(truncated ? rows.slice(0,XLSX_ROW_CEILING) : rows).map(r => exportTable.columnNames().map(c=>csvFormulaGuardCell(r[c])))];
         const ws = window.XLSX.utils.aoa_to_sheet(aoa);
         const wb = window.XLSX.utils.book_new();
         window.XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
@@ -4544,7 +4614,7 @@ function createArqueroEngine(){
       const rows = table.objects({ limit: limit || Infinity });
       const csvStructEsc = s => /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g,'""')}"` : String(s);
       const csvEsc = s => { s = csvFormulaGuardCell(s); return s == null ? nullStr||'' : csvStructEsc(s); };
-      const lines = [cols.map(csvStructEsc).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
+      const lines = [cols.map(c=>csvStructEsc(csvFormulaGuardCell(c))).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
       const blob = new Blob([lines.join('\n')], {type:'text/csv'});
       return blob;
     },
@@ -4725,7 +4795,7 @@ function createFrameEngine(){
           const s = String(v);
           return /[",\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
         };
-        const lines = [names.join(',')];
+        const lines = [names.map(cell).join(',')];
         for (const row of frameToObjects(exportFrame)) lines.push(names.map(n => cell(row[n])).join(','));
         const blob = new Blob([lines.join('\n')], {type:'text/csv'});
         blob.truncated = false;
@@ -4746,7 +4816,7 @@ function createFrameEngine(){
         const XLSX_ROW_CEILING = 1048575;
         const rows = frameToObjects(exportFrame);
         const truncated = rows.length > XLSX_ROW_CEILING;
-        const aoa = [exportFrame.names, ...(truncated ? rows.slice(0,XLSX_ROW_CEILING) : rows).map(r => exportFrame.names.map(c=>csvFormulaGuardCell(r[c])))];
+        const aoa = [exportFrame.names.map(csvFormulaGuardCell), ...(truncated ? rows.slice(0,XLSX_ROW_CEILING) : rows).map(r => exportFrame.names.map(c=>csvFormulaGuardCell(r[c])))];
         const ws = window.XLSX.utils.aoa_to_sheet(aoa);
         const wb = window.XLSX.utils.book_new();
         window.XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
@@ -4763,7 +4833,7 @@ function createFrameEngine(){
       const rows = frameToObjects(frame, limit || Infinity);
       const csvStructEsc = s => /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g,'""')}"` : String(s);
       const csvEsc = s => { s = csvFormulaGuardCell(s); return s == null ? nullStr||'' : csvStructEsc(s); };
-      const lines = [cols.map(csvStructEsc).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
+      const lines = [cols.map(c=>csvStructEsc(csvFormulaGuardCell(c))).join(','), ...rows.map(r => cols.map(c=>csvEsc(r[c])).join(','))];
       const blob = new Blob([lines.join('\n')], {type:'text/csv'});
       return blob;
     },
@@ -4834,14 +4904,16 @@ const SESSION_DB_NAME = 'duckbench';
 const SESSION_STORE = 'sessions';
 const SESSION_KEY = 'last';
 const PIPELINES_STORE = 'pipelines';
+const SOURCES_STORE = 'sources';
 function openSessionDB(){
 return new Promise((resolve, reject) => {
 if (!window.indexedDB){ reject(new Error('IndexedDB unavailable')); return; }
-const req = indexedDB.open(SESSION_DB_NAME, 2);
+const req = indexedDB.open(SESSION_DB_NAME, 3);
 req.onupgradeneeded = (e) => {
 const db = req.result;
 if (!db.objectStoreNames.contains(SESSION_STORE)) db.createObjectStore(SESSION_STORE);
 if (!db.objectStoreNames.contains(PIPELINES_STORE)) db.createObjectStore(PIPELINES_STORE, { keyPath:'id' });
+if (!db.objectStoreNames.contains(SOURCES_STORE)) db.createObjectStore(SOURCES_STORE, { keyPath:'id' });
 };
 req.onsuccess = () => resolve(req.result);
 req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
@@ -4885,23 +4957,35 @@ function queueSessionSnapshot(){
 clearTimeout(sessionSaveTimer);
 sessionSaveTimer = setTimeout(saveSessionSnapshot, 500);
 }
+let lastSavedSourceFile = null;
+let lastSavedSecondaryFiles = new Map();
 async function saveSessionSnapshot(){
 if (!dataState.hasSource || !dataState.sourceFile) return;
 try {
 const db = await openSessionDB();
-const tx = db.transaction(SESSION_STORE, 'readwrite');
+const currentSecondary = new Map(dataState.secondarySources.map(s => [s.id, s.file]));
+const needsMainBlob = dataState.sourceFile !== lastSavedSourceFile;
+const changedSecondaryIds = [];
+for (const [id, file] of currentSecondary){ if (lastSavedSecondaryFiles.get(id) !== file) changedSecondaryIds.push(id); }
+const removedSecondaryIds = [...lastSavedSecondaryFiles.keys()].filter(id => !currentSecondary.has(id));
+const touchesSources = needsMainBlob || changedSecondaryIds.length || removedSecondaryIds.length;
+const tx = db.transaction(touchesSources ? [SESSION_STORE, SOURCES_STORE] : [SESSION_STORE], 'readwrite');
 tx.objectStore(SESSION_STORE).put({
-file: dataState.sourceFile,
 fileName: dataState.sourceFileName,
 format: dataState.sourceFormat,
 importOptions: dataState.sourceImportOptions,
 engineId: dataState.engine.id,
 steps: dataState.steps,
-secondarySources: dataState.secondarySources.map(s => ({ id:s.id, name:s.name, format:s.format, file:s.file })),
+secondarySources: dataState.secondarySources.map(s => ({ id:s.id, name:s.name, format:s.format })),
 savedAt: Date.now(),
 }, SESSION_KEY);
+if (needsMainBlob) tx.objectStore(SOURCES_STORE).put({ id:'main', file: dataState.sourceFile });
+changedSecondaryIds.forEach(id => tx.objectStore(SOURCES_STORE).put({ id:`sec_${id}`, file: currentSecondary.get(id) }));
+removedSecondaryIds.forEach(id => tx.objectStore(SOURCES_STORE).delete(`sec_${id}`));
 await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
 db.close();
+if (needsMainBlob) lastSavedSourceFile = dataState.sourceFile;
+lastSavedSecondaryFiles = currentSecondary;
 sessionSaveFailed = false;
 } catch(e){
 if (!sessionSaveFailed){
@@ -4913,20 +4997,42 @@ toast('Couldn’t save this session for resume — local storage may be full or 
 async function loadSessionSnapshot(){
 try {
 const db = await openSessionDB();
-const tx = db.transaction(SESSION_STORE, 'readonly');
-const req = tx.objectStore(SESSION_STORE).get(SESSION_KEY);
-const result = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+const tx = db.transaction([SESSION_STORE, SOURCES_STORE], 'readonly');
+let meta = null, mainRow = null;
+const secReqs = [];
+const metaReq = tx.objectStore(SESSION_STORE).get(SESSION_KEY);
+metaReq.onsuccess = () => {
+meta = metaReq.result;
+if (meta){
+const mainReq = tx.objectStore(SOURCES_STORE).get('main');
+mainReq.onsuccess = () => { mainRow = mainReq.result; };
+(meta.secondarySources||[]).forEach(s => {
+const req = tx.objectStore(SOURCES_STORE).get(`sec_${s.id}`);
+secReqs.push({ id: s.id, req });
+});
+}
+};
+await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
 db.close();
-return result || null;
+if (!meta) return null;
+const secondarySources = (meta.secondarySources||[]).map(s => {
+const found = secReqs.find(r => r.id === s.id);
+return { ...s, file: found?.req.result?.file ?? s.file };
+});
+return { ...meta, file: mainRow?.file ?? meta.file, secondarySources };
 } catch(e){ return null; }
 }
 async function clearSessionSnapshot(){
 try {
 const db = await openSessionDB();
-const tx = db.transaction(SESSION_STORE, 'readwrite');
+const tx = db.transaction([SESSION_STORE, SOURCES_STORE], 'readwrite');
 tx.objectStore(SESSION_STORE).delete(SESSION_KEY);
+tx.objectStore(SOURCES_STORE).delete('main');
+lastSavedSecondaryFiles.forEach((_, id) => tx.objectStore(SOURCES_STORE).delete(`sec_${id}`));
 await new Promise(res => { tx.oncomplete = res; tx.onerror = res; });
 db.close();
+lastSavedSourceFile = null;
+lastSavedSecondaryFiles = new Map();
 } catch(e){}
 }
 function relativeTimeFromNow(ts){
@@ -4996,9 +5102,9 @@ try {
 const text = await file.text();
 const recipe = JSON.parse(text);
 if (!recipe || !Array.isArray(recipe.steps)) throw new Error('Not a valid recipe file');
-const sqlSteps = recipe.steps.filter(s=>s.type==='raw_sql').length;
+const sqlSteps = recipe.steps.filter(s=>TRANSFORMS[s.type]?.executesUserSql).length;
 if (sqlSteps){
-const ok = await confirmDialog(`This recipe includes ${sqlSteps} Custom SQL step${sqlSteps===1?'':'s'} that will run automatically as soon as it’s applied. Only continue if you trust where this recipe file came from — open it in a text editor first if you’re unsure what the SQL does.`);
+const ok = await confirmDialog(`This recipe includes ${sqlSteps} step${sqlSteps===1?'':'s'} that run custom SQL expressions automatically as soon as it’s applied. Only continue if you trust where this recipe file came from — open it in a text editor first if you’re unsure what the SQL does.`);
 if (!ok) return;
 }
 if (dataState.hasSource){
@@ -5121,6 +5227,11 @@ function buildDraftCtx(){
 const cols = (dataState.currentColumns||[]).map(c=>c.name);
 return { columns: cols, firstColumn: cols[0]||null, hasRid: !!dataState.currentPipelineHasRid, q, esc, lit: sqlLiteral };
 }
+function inspectorDraftCtx(insp){
+const columnsMeta = insp?.checkpoint?.columns || [];
+const cols = columnsMeta.map(c=>c.name);
+return { columns: cols, columnsMeta, firstColumn: cols[0]||null, hasRid: !!insp?.checkpoint?.hasRid, q, esc, lit: sqlLiteral };
+}
 function buildDefaultDraft(type, seedPartial={}){
 const t = TRANSFORMS[type];
 const ctx = buildDraftCtx();
@@ -5132,9 +5243,9 @@ if (draft[p.key] === undefined) draft[p.key] = typeof p.default === 'function' ?
 }
 return draft;
 }
-function commitNewStep(type, draft){
+function commitNewStep(type, draft, ctxOverride){
 const t = TRANSFORMS[type];
-const ctx = buildDraftCtx();
+const ctx = ctxOverride || buildDraftCtx();
 const err = t.validate ? t.validate(draft, ctx) : null;
 if (err) return err;
 const insertAt = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex + 1 : dataState.steps.length;
@@ -5161,9 +5272,9 @@ const summary = safeSummary(t, draft);
 toast(`Added: ${t.label}${summary ? ' — ' + summary : ''}`, { actionLabel:'Undo', onAction: undo });
 return null;
 }
-function commitEditStep(index, draft){
+function commitEditStep(index, draft, ctxOverride){
 const t = TRANSFORMS[dataState.steps[index].type];
-const ctx = buildDraftCtx();
+const ctx = ctxOverride || buildDraftCtx();
 const err = t.validate ? t.validate(draft, ctx) : null;
 if (err) return err;
 const steps = dataState.steps.map((s,i) => i===index ? { ...s, data: draft } : s);
@@ -5504,7 +5615,13 @@ if (!dataState.hasSource) return;
 if (!lastPreview) $('#gridSkeleton').hidden = false;
 const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length - 1;
 const myToken = ++dataState.pipelineToken;
-const plan = await dataState.engine.compile(dataState.steps, upto);
+let plan;
+try {
+plan = await dataState.engine.compile(dataState.steps, upto);
+} catch(e){
+if (dataState.pipelineToken !== myToken) return;
+plan = { sql: null, hasRid: true, columns: [], error: e.message || String(e), errorIndex: upto };
+}
 if (dataState.pipelineToken !== myToken) return;
 renderStepErrorFlags(plan);
 updateEngineEditor(plan);
@@ -5840,16 +5957,17 @@ let rowCountFetchToken = 0;
 async function fetchExactRowCount(){
 if (!dataState.currentPlan || dataState.currentRowCountKnown) return;
 const token = ++rowCountFetchToken;
+const planAtStart = dataState.currentPlan;
 const targets = [$('#sbRows'), $('#rowCountLabel')].filter(Boolean);
 targets.forEach(lbl => { lbl.innerHTML = ''; lbl.appendChild(el('span',{class:'rc-approx is-loading'}, 'Counting…')); });
 try {
-const n = await dataState.engine.count(dataState.currentPlan);
-if (token !== rowCountFetchToken) return;
+const n = await dataState.engine.count(planAtStart);
+if (token !== rowCountFetchToken || dataState.currentPlan !== planAtStart) return;
 dataState.currentRowCountKnown = true;
 dataState.currentRowCountExact = n;
 renderRowCountLabel(lastPreview || { hasMore:false, rows:[] });
 } catch(e){
-if (token !== rowCountFetchToken) return;
+if (token !== rowCountFetchToken || dataState.currentPlan !== planAtStart) return;
 toast(`Couldn’t get exact count: ${e.message}`);
 renderRowCountLabel(lastPreview || { hasMore:true, rows:[] });
 }
@@ -6223,6 +6341,13 @@ if (!ok) return;
 const savedSteps = dataState.steps;
 const savedSelected = uiState.selectedStepIndex;
 const savedSecondary = dataState.secondarySources.slice();
+const previous = {
+engine: dataState.engine,
+selectedEngineId: dataState.selectedEngineId,
+secondarySources: dataState.secondarySources,
+secondaryAqTables: dataState.secondaryAqTables,
+secondaryFrames: dataState.secondaryFrames,
+};
 setEngineStatus('loading', 'switching engines…');
 try {
 dataState.engine = createEngine(targetId);
@@ -6250,6 +6375,7 @@ await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowH
 }
 dataState.secondarySources = [];
 dataState.secondaryAqTables = {};
+dataState.secondaryFrames = {};
 await restoreSecondarySources(savedSecondary.map(s => ({ id:s.id, name:s.name, format:s.format, file:s.file })));
 dataState.steps = savedSteps;
 uiState.selectedStepIndex = savedSelected;
@@ -6263,7 +6389,12 @@ await refreshPreview();
 toast(`Switched to ${targetLabel}.`);
 saveSessionSnapshot();
 } catch(e){
-toast(`Couldn’t switch engines: ${e.message}`);
+dataState.engine = previous.engine;
+dataState.selectedEngineId = previous.selectedEngineId;
+dataState.secondarySources = previous.secondarySources;
+dataState.secondaryAqTables = previous.secondaryAqTables;
+dataState.secondaryFrames = previous.secondaryFrames;
+toast(`Couldn’t switch engines: ${e.message} — staying on the previous engine.`);
 } finally {
 if (dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${dataState.duckdbVersion}`);
 if (dataState.engine.id !== 'duckdb') setEngineStatus('ready', `Express · ${expressEngineLabel()}`);
@@ -6396,7 +6527,10 @@ return;
 const preview = await computeAndRenderPreview('inspector', plan, myToken, `previewing “${t.label}”`);
 if (!preview) return;
 if (insp.type === 'change_type' && insp.data.column){
-dataState.engine.tryCastFailCount(plan, insp.data.column, insp.data.targetType).then(n => {
+const inputPlanPromise = dataState.engine.id === 'duckdb'
+? dataState.engine.compile([], -1, insp.checkpoint)
+: dataState.engine.compile(dataState.steps.slice(0, insp.insertPosition), insp.insertPosition - 1);
+inputPlanPromise.then(inputPlan => dataState.engine.tryCastFailCount(inputPlan, insp.data.column, insp.data.targetType)).then(n => {
 if (uiState.inspector !== insp || dataState.inspectorToken !== myToken) return;
 insp.failNote = n>0 ? `${n.toLocaleString()} value${n===1?'':'s'} won’t fit ${insp.data.targetType} and will become empty.` : null;
 renderInspectorFailNote();
@@ -6569,7 +6703,8 @@ insp.error = e.message; renderInspectorError();
 return;
 }
 }
-const err = insp.isNew ? commitNewStep(insp.type, insp.data) : commitEditStep(insp.forIndex, insp.data);
+const inspCtx = inspectorDraftCtx(insp);
+const err = insp.isNew ? commitNewStep(insp.type, insp.data, inspCtx) : commitEditStep(insp.forIndex, insp.data, inspCtx);
 if (err){ insp.error = err; renderInspectorError(); return; }
 const wasNew = insp.isNew;
 closeInspector();
