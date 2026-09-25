@@ -331,6 +331,11 @@ input,select,textarea{font-family:inherit;}
   display:flex;flex-direction:column;min-height:0;
 }
 .sources-panel{padding:12px 14px 4px;display:flex;flex-direction:column;gap:6px;flex-shrink:0;}
+.queries-panel{display:flex;flex-direction:column;gap:4px;padding:12px;border-bottom:1px solid var(--line-soft);max-height:220px;overflow:auto;}
+.queries-title{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
+.query-button{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid transparent;border-radius:var(--radius-s);background:transparent;color:var(--paper-dim);padding:7px 9px;text-align:left;cursor:pointer;width:100%;font:inherit;font-size:12px;}
+.query-button:hover,.query-button.is-active{background:var(--ink-2);color:var(--paper);border-color:var(--line);}
+.query-button small{color:var(--muted);white-space:nowrap;}
 .sources-panel:empty{display:none;}
 .sources-panel.is-dragover{outline:1.5px dashed var(--brass-dim);outline-offset:-4px;border-radius:var(--radius-s);background:rgba(var(--brass-rgb),0.06);}
 .source-card{
@@ -340,7 +345,7 @@ input,select,textarea{font-family:inherit;}
 .source-card-icon{width:20px;height:20px;flex-shrink:0;border-radius:5px;background:rgba(var(--brass-rgb),0.14);color:var(--brass);display:flex;align-items:center;justify-content:center;}
 .source-card-body{flex:1;min-width:0;}
 .source-card-name{color:var(--paper);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.source-card-meta{color:var(--muted);font-family:var(--font-mono);font-size:10px;}
+.source-card-meta{color:var(--muted);font-family:var(--font-mono);font-size:10px;display:flex;align-items:center;flex-wrap:wrap;gap:3px;}
 .source-card-remove{background:none;border:none;color:var(--muted);cursor:pointer;padding:3px;flex-shrink:0;font-size:14px;line-height:1;}
 .source-card-remove:hover{color:var(--rust-text);}
 .source-card.is-unused{opacity:0.62;}
@@ -1121,6 +1126,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
     </svg>
     <div class="import-card">
       <div class="folio-number">Import</div>
+      <button id="backToWorkbenchBtn" class="btn-ghost btn-small" type="button" hidden style="margin-bottom:12px">← Back to workbench</button>
       <h2>Bring in your data</h2>
       <p class="import-copy">A CSV, Excel, or Parquet file. Your data is processed in this browser tab and isn’t uploaded — but the app does fetch some libraries from the internet on first load, and the page’s security policy blocks Custom SQL steps from reaching any site except the library CDNs it loads from.</p>
       <div class="import-formats">
@@ -1168,6 +1174,7 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
 
     <div class="workbench-body">
       <aside class="steps-rail">
+        <nav id="queriesPanel" class="queries-panel" aria-label="Queries"></nav>
         <div id="sourcesPanel" class="sources-panel"></div>
         <div class="rail-head">
           <h2>Applied steps</h2>
@@ -1190,6 +1197,9 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
         <ol id="stepsList" class="steps-list"></ol>
 
         <div class="rail-foot">
+          <button id="replaceFileBtn" class="rail-clear-link" type="button">Replace data file, keep queries…</button>
+          <button id="newFileBtn" class="rail-clear-link" type="button">Close file &amp; start over</button>
+          <input id="replaceFileInput" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" hidden>
           <button id="resetPipelineBtn" class="rail-clear-link">Clear all steps</button>
         </div>
       </aside>
@@ -2160,7 +2170,7 @@ async function loadSecondaryTableImpl(tableName, { format, fileName, buffer, csv
   }
   await dataState.db.registerFileBuffer(fileName, buffer);
   try {
-    await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, ignore_errors=true, sample_size=-1${delim||''})`);
+    await dataState.conn.query(`CREATE OR REPLACE TABLE ${q(tableName)} AS SELECT * FROM read_csv(${esc(fileName)}, header=${firstRowHeader}, skip=${skipRows||0}, ignore_errors=false, sample_size=-1${delim||''})`);
   } finally {
     try { await dataState.db.dropFile(fileName); } catch(e){}
   }
@@ -2172,8 +2182,8 @@ async function buildBatchFileSpec(file){
     await ensureSheetJS();
     const wb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const csvText = XLSX.utils.sheet_to_csv(ws);
-    return { format, fileName:`${file.name}.csv`, csvText, firstRowHeader:true };
+    const rows = excelSheetToRows(ws, { skipRows:0, firstRowHeader:true });
+    return { format, fileName:`${file.name}.json`, rows, firstRowHeader:true };
   }
   if (format === 'parquet'){
     const buffer = new Uint8Array(await file.arrayBuffer());
@@ -2464,7 +2474,9 @@ function createDuckDBEngine(){
     },
     async loadSecondarySource(id, fileSpec){
       clearColumnsCache();
-      return loadSecondaryTableImpl(`src_${id}`, fileSpec);
+      await loadSecondaryTableImpl(`raw_${id}`, fileSpec);
+      await dataState.conn.query(`CREATE OR REPLACE VIEW ${q('src_'+id)} AS SELECT * FROM ${q('raw_'+id)}`);
+      clearColumnsCache();
     },
     async getSecondarySourceColumns(id){
       return getColumns(`SELECT * FROM ${q('src_'+id)}`);
@@ -2475,7 +2487,9 @@ function createDuckDBEngine(){
       return typeof rows[0][0]==='bigint' ? Number(rows[0][0]) : rows[0][0];
     },
     async dropSecondarySource(id){
-      try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q('src_'+id)}`); } catch(e){}
+      try { await dataState.conn.query(`DROP VIEW IF EXISTS ${q('src_'+id)}`); } catch(e){}
+      try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q('raw_'+id)}`); } catch(e){}
+      clearColumnsCache();
     },
     async export(plan, format){
       return exportPlanImpl(plan, format);
@@ -2484,12 +2498,21 @@ function createDuckDBEngine(){
       return exportCustomCsvImpl(plan, cols, limit, nullStr);
     },
     async compile(steps, uptoIndex, checkpoint){
-      const compiled = checkpoint
-        ? await compilePipeline(steps, uptoIndex, checkpointFrom(checkpoint), checkpoint.hasRid, checkpoint.columns, checkpoint.orderBy)
-        : await compilePipeline(steps, uptoIndex);
+      const active = dataState.activeQueryId;
+      const compiled = active !== 'main' && dataState.secondarySources.some(s=>s.id===active)
+        ? await compilePipeline(steps, uptoIndex, `SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${q('raw_'+active)}`, true)
+        : checkpoint
+          ? await compilePipeline(steps, uptoIndex, checkpointFrom(checkpoint), checkpoint.hasRid, checkpoint.columns, checkpoint.orderBy)
+          : await compilePipeline(steps, uptoIndex);
       return makeDuckDBPlan(compiled);
     },
     async checkpoint(steps, uptoIndex){
+      if (dataState.activeQueryId !== 'main'){
+        const id=dataState.activeQueryId;
+        const compiled=await compilePipeline(steps,uptoIndex-1,`SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${q('raw_'+id)}`,true);
+        if (compiled.error) throw Object.assign(new Error(compiled.error),{stepIndex:compiled.errorIndex});
+        return {materialized:false,sql:compiled.sql,hasRid:compiled.hasRid,columns:compiled.columns,orderBy:compiled.orderBy};
+      }
       return ensureCheckpoint(steps, uptoIndex);
     },
   };
@@ -3686,15 +3709,20 @@ Object.assign(TRANSFORMS, {
     preservesIdentity: (d) => d.joinType === 'left_anti' || d.joinType === 'left_semi',
     params:[
       { key:'rightSource', type:'enum', label:'Join with', default:'', reactive:true,
-        options:()=>dataState.secondarySources.map(s=>({value:s.id,label:`${s.name}${s.rowCount!=null?` (${s.rowCount.toLocaleString()} rows)`:''}`})) },
+        options:()=>[...dataState.secondarySources.filter(s=>s.id!==dataState.activeQueryId).map(s=>({value:s.id,label:`${s.name}${s.rowCount!=null?` (${s.rowCount.toLocaleString()} rows)`:''}`})),...dataState.missingSources.map(s=>({value:s.id,label:`${s.name || s.id} (not attached)`}))] },
       { key:'leftKey', type:'column', label:'Left key (this table)', default:'' },
       { key:'rightKey', type:'rightColumn', label:'Right key (joined table)', default:'' },
       { key:'joinType', type:'enum', label:'Join type', default:'inner',
         options:[{value:'inner',label:'Inner — matching rows only'},{value:'left',label:'Left — keep all rows from this table'},{value:'right',label:'Right — keep all rows from the joined table'},{value:'full',label:'Full — keep all rows from both'},{value:'left_anti',label:'Anti — rows with no match (this table’s columns)'},{value:'left_semi',label:'Semi — rows with a match (this table’s columns)'}] },
     ],
     validate(d){
-      if (!dataState.secondarySources.length) return 'Add a source to join with first — use the Sources panel at the top of the rail.';
+      if (!dataState.secondarySources.length && !dataState.missingSources.length) return 'Add a source to join with first — use the Sources panel at the top of the rail.';
       if (!d.rightSource) return 'Pick a source to join with.';
+      if (!dataState.secondarySources.some(s=>s.id===d.rightSource)){
+        const missing = dataState.missingSources.find(s=>s.id===d.rightSource);
+        return missing?.name ? `Attach “${missing.name}” from the Sources panel to run this step.` : 'This query is not attached — attach it from the Sources panel.';
+      }
+      if (d.rightSource === dataState.activeQueryId) return 'A query cannot join itself.';
       if (!d.leftKey) return 'Pick the key column from this table.';
       if (!d.rightKey) return 'Pick the key column from the joined table.';
       return null;
@@ -3727,10 +3755,35 @@ Object.assign(TRANSFORMS, {
     },
     engines: ['duckdb','arquero'],
     toAq(d, table, ctx){
-      const right = dataState.secondaryAqTables[d.rightSource];
-      if (!right) throw new Error('Joined source not loaded.');
-      const opts = { left: d.joinType==='left'||d.joinType==='full', right: d.joinType==='right'||d.joinType==='full', suffix:['','_right'] };
-      return table.join(right, [d.leftKey, d.rightKey], undefined, opts);
+      const { aq } = ctx;
+      const right0 = dataState.secondaryAqTables[d.rightSource];
+      if (!right0) throw new Error('Joined source not loaded.');
+      const LK = '__jk_left', RK = '__jk_right', RV = '__jk_rval';
+      let ln = 0, rn = 0;
+      const keyOf = (v, side) => v == null ? `\u0000${side}${side === 'L' ? ln++ : rn++}` : (v instanceof Date ? v.getTime() : v);
+      const left = table.derive({ [LK]: aq.escape(r => keyOf(r[d.leftKey], 'L')) });
+      const rightKeyed = right0.derive({ [RK]: aq.escape(r => keyOf(r[d.rightKey], 'R')), [RV]: aq.escape(r => r[d.rightKey]) });
+      if (d.joinType === 'left_anti' || d.joinType === 'left_semi'){
+        const rOnly = rightKeyed.select(RK);
+        const out = d.joinType === 'left_anti' ? left.antijoin(rOnly, [LK, RK]) : left.semijoin(rOnly, [LK, RK]);
+        return out.select(aq.not(LK));
+      }
+      const leftNames = table.columnNames();
+      const leftSet = new Set(leftNames);
+      const sameKey = d.leftKey === d.rightKey;
+      const used = new Set(leftNames);
+      const renameMap = {};
+      right0.columnNames().forEach(n => {
+        if (sameKey && n === d.rightKey) return;
+        const base = leftSet.has(n) ? `${n}_right` : n;
+        const out = dedupeName(base, Array.from(used));
+        used.add(out); renameMap[n] = out;
+      });
+      const right = rightKeyed.select({ ...renameMap, [RK]: RK, [RV]: RV });
+      const opts = { left: d.joinType === 'left' || d.joinType === 'full', right: d.joinType === 'right' || d.joinType === 'full' };
+      let out = left.join(right, [LK, RK], undefined, opts);
+      if (sameKey) out = out.derive({ [d.leftKey]: aq.escape(r => r[d.leftKey] == null ? r[RV] : r[d.leftKey]) });
+      return out.select(aq.not(LK, RK, RV));
     },
   },
   unpivot: {
@@ -3810,6 +3863,70 @@ Object.assign(TRANSFORMS, {
       const ridSet = new Set(d.rids.map(String));
       return table.filter(aq.escape(row => !ridSet.has(String(row[RID]))));
     },
+  },
+});
+
+Object.assign(TRANSFORMS, {
+  append: {
+    label:'Append rows from query', category:'shape', code:'APP',
+    ribbon:{ tab:'transform', group:'Combine', icon:'merge', size:'large' },
+    preservesIdentity:false,
+    params:[{ key:'rightSource', type:'enum', label:'Append query', default:'', options:()=>dataState.secondarySources.filter(s=>s.id!==dataState.activeQueryId).map(s=>({value:s.id,label:s.name})) }],
+    validate(d){
+      if (!d.rightSource) return 'Pick a query to append.';
+      if (d.rightSource===dataState.activeQueryId) return 'A query cannot append itself.';
+      if (!dataState.secondarySources.some(s=>s.id===d.rightSource)) return 'Attach the missing query from the Sources panel first.';
+      return null;
+    },
+    toSQL(d, from, ctx){
+      const left = ctx.hasRid ? `SELECT * EXCLUDE (${q(RID)}) FROM (${from})` : from;
+      return `SELECT * FROM (${left}) UNION ALL BY NAME SELECT * FROM ${q('src_'+d.rightSource)}`;
+    },
+    summary(d){ return `append ${dataState.secondarySources.find(s=>s.id===d.rightSource)?.name || 'missing query'}`; },
+    engines:['duckdb'],
+  },
+  date_part: {
+    label:'Extract date part', category:'column', code:'DAT',
+    ribbon:{ tab:'add', group:'From column', icon:'calendar', size:'large' },
+    preservesIdentity:true,
+    params:[
+      { key:'column', type:'column', label:'Date column', default:(d,ctx)=>d.column||ctx.firstColumn },
+      { key:'part', type:'enum', label:'Date part', default:'year', options:[{value:'year',label:'Year'},{value:'quarter',label:'Quarter'},{value:'month',label:'Month'},{value:'week',label:'Week'},{value:'day',label:'Day'},{value:'isodow',label:'ISO weekday'},{value:'hour',label:'Hour'}] },
+      { key:'name', type:'text', label:'New column name', default:'Year' },
+    ],
+    validate(d,ctx){
+      if (!d.column) return 'Choose a date column.';
+      if (!['year','quarter','month','week','day','isodow','hour'].includes(d.part)) return 'Choose a valid date part.';
+      if (!d.name?.trim()) return 'Name the new column.';
+      if (nameCollision(d.name,ctx.columns)) return `“${d.name}” already exists.`;
+      return null;
+    },
+    toSQL(d,from){ return `SELECT *, date_part('${d.part}', ${q(d.column)}) AS ${q(d.name)} FROM (${from})`; },
+    summary(d){ return `${d.part} of ${d.column} → ${d.name}`; },
+    engines:['duckdb'],
+  },
+  round_number: {
+    label:'Round number', category:'column', code:'RND',
+    ribbon:{ tab:'transform', group:'Values', icon:'hash', size:'small' },
+    preservesIdentity:true, columnsUnchanged:true,
+    params:[
+      { key:'column', type:'column', label:'Number column', default:(d,ctx)=>d.column||ctx.firstColumn },
+      { key:'decimals', type:'number', label:'Decimal places (0–10)', default:2 },
+      { key:'mode', type:'enum', label:'Rounding mode', default:'round', options:[{value:'round',label:'Round'},{value:'floor',label:'Floor'},{value:'ceil',label:'Ceiling'}] },
+    ],
+    validate(d){
+      if (!d.column) return 'Choose a number column.';
+      if (!Number.isInteger(Number(d.decimals)) || Number(d.decimals)<0 || Number(d.decimals)>10) return 'Enter 0 to 10 decimal places.';
+      if (!['round','floor','ceil'].includes(d.mode)) return 'Choose a rounding mode.';
+      return null;
+    },
+    toSQL(d,from){
+      const n=Number(d.decimals), c=q(d.column);
+      const expr=d.mode==='floor' ? `FLOOR(${c} * POW(10, ${n})) / POW(10, ${n})` : d.mode==='ceil' ? `CEIL(${c} * POW(10, ${n})) / POW(10, ${n})` : `ROUND(${c}, ${n})`;
+      return `SELECT * REPLACE (${expr} AS ${c}) FROM (${from})`;
+    },
+    summary(d){ return `${d.column} → ${d.mode} (${d.decimals} places)`; },
+    engines:['duckdb'],
   },
 });
 
@@ -4565,6 +4682,20 @@ const FRAME_IMPLS = {
   join(d, f, ctx){
     const right = (ctx.secondaryFrames || {})[d.rightSource];
     if (!right) throw new Error('Joined source not loaded.');
+    if (d.joinType === 'left_anti' || d.joinType === 'left_semi'){
+      const ld = materializeFrame(f), rd = materializeFrame(right);
+      const keys = new Set();
+      for (let j=0;j<rd.nrows;j++){ const v=rd.cols[d.rightKey][j]; if (v!=null) keys.add(v instanceof Date ? v.getTime() : v); }
+      const want = d.joinType === 'left_semi';
+      const outCols = {}; ld.names.forEach(n=>outCols[n]=[]);
+      let total = 0;
+      for (let i=0;i<ld.nrows;i++){
+        const v = ld.cols[d.leftKey][i];
+        const hit = v!=null && keys.has(v instanceof Date ? v.getTime() : v);
+        if (hit===want){ ld.names.forEach(n=>outCols[n].push(ld.cols[n][i])); total++; }
+      }
+      return makeFrame(ld.names,outCols,null,total);
+    }
     const opts = { left: d.joinType === 'left' || d.joinType === 'full', right: d.joinType === 'right' || d.joinType === 'full' };
     return FR.join(f, right, d.leftKey, d.rightKey, opts);
   },
@@ -4681,7 +4812,7 @@ async function compileAq(steps, uptoIndex, baseTable){
     return { table: null, hasRid: true, columns: [], error: null, errorIndex: -1 };
   }
   let table = sourceTable;
-  let hasRid = !baseTable;
+  let hasRid = table.columnNames().includes(RID);
   let columns = columnsMetaOf(table).filter(c=>c.name!==RID);
   const end = uptoIndex ?? steps.length - 1;
   let pendingOrderBy = null;
@@ -4779,10 +4910,11 @@ function createArqueroEngine(){
       const aq = await loadAq();
       const { format, csvText, buffer, fileName='', firstRowHeader=true, skipRows=0 } = fileSpec;
       if (format === 'parquet') throw new Error('Parquet secondary sources need Full mode (DuckDB).');
-      let text = csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer);
-      if (skipRows > 0) text = splitCsvLines(text).slice(skipRows).join('\n');
+      let text = fileSpec.rows ? '' : (csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer));
+      if (skipRows > 0 && !fileSpec.rows) text = splitCsvLines(text).slice(skipRows).join('\n');
       const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
-      const table = aq.fromCSV(text, { parse:'auto', delimiter, header: firstRowHeader !== false });
+      const table = fileSpec.rows ? aq.from(fileSpec.rows) : aq.fromCSV(text, { parse:'auto', delimiter, header: firstRowHeader !== false });
+      dataState.rawAqTables[id] = table;
       dataState.secondaryAqTables[id] = table;
     },
     async getSecondarySourceColumns(id){
@@ -4795,6 +4927,7 @@ function createArqueroEngine(){
     },
     async dropSecondarySource(id){
       delete dataState.secondaryAqTables[id];
+      delete dataState.rawAqTables[id];
     },
     async distinct(plan, col, opts={}){
       const { search='', cap=1000 } = opts;
@@ -4920,11 +5053,16 @@ function createArqueroEngine(){
       return blob;
     },
     async compile(steps, uptoIndex){
-      const compiled = await compileAq(steps, uptoIndex);
+      const source = dataState.activeQueryId === 'main' ? null : dataState.rawAqTables[dataState.activeQueryId];
+      const aq = source ? await loadAq() : null;
+      const compiled = source ? await compileAq(steps, uptoIndex, source.derive({ [RID]: () => aq.op.row_number() }).relocate(RID, { before:source.columnNames()[0] })) : await compileAq(steps, uptoIndex);
       return makeArqueroPlan(compiled);
     },
     async checkpoint(steps, uptoIndex){
-      const compiled = await compileAq(steps, uptoIndex - 1);
+      const raw=dataState.activeQueryId==='main' ? null : dataState.rawAqTables[dataState.activeQueryId];
+      const aq=raw ? await loadAq() : null;
+      const base=raw ? raw.derive({[RID]:()=>aq.op.row_number()}).relocate(RID,{before:raw.columnNames()[0]}) : undefined;
+      const compiled = await compileAq(steps, uptoIndex - 1, base);
       if (compiled.error) throw Object.assign(new Error(compiled.error), { stepIndex: compiled.errorIndex });
       return { materialized: true, hasRid: compiled.hasRid, columns: compiled.columns };
     },
@@ -5002,12 +5140,14 @@ function createFrameEngine(){
       return frame ? frame.nrows : 0;
     },
     async loadSecondarySource(id, fileSpec){
-      const { format, csvText, buffer, fileName='', firstRowHeader=true, skipRows=0 } = fileSpec;
+      const { format, csvText, buffer, rows, fileName='', firstRowHeader=true, skipRows=0 } = fileSpec;
       if (format === 'parquet') throw new Error('Parquet secondary sources need Full mode (DuckDB).');
-      let text = csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer);
-      if (skipRows > 0) text = splitCsvLines(text).slice(skipRows).join('\n');
+      let text = rows ? '' : (csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer));
+      if (skipRows > 0 && !rows) text = splitCsvLines(text).slice(skipRows).join('\n');
       const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
-      dataState.secondaryFrames[id] = frameFromCsv(text, { delimiter, header: firstRowHeader !== false, withRid: false });
+      const frame = rows ? frameFromRows(rows) : frameFromCsv(text, { delimiter, header: firstRowHeader !== false, withRid: false });
+      dataState.rawFrames[id] = frame;
+      dataState.secondaryFrames[id] = frame;
     },
     async getSecondarySourceColumns(id){
       const frame = dataState.secondaryFrames[id];
@@ -5019,6 +5159,7 @@ function createFrameEngine(){
     },
     async dropSecondarySource(id){
       delete dataState.secondaryFrames[id];
+      delete dataState.rawFrames[id];
     },
     async distinct(plan, col, opts={}){
       const { search='', cap=1000 } = opts;
@@ -5143,11 +5284,15 @@ function createFrameEngine(){
       return blob;
     },
     async compile(steps, uptoIndex){
-      const compiled = await compileFrame(steps, uptoIndex, dataState.frameSourceFrame, dataState.secondaryFrames);
+      const source = dataState.activeQueryId === 'main' ? null : dataState.rawFrames[dataState.activeQueryId];
+      const base = source ? FR.derive(source, { [RID]:(row,i)=>i+1 }) : dataState.frameSourceFrame;
+      const compiled = await compileFrame(steps, uptoIndex, base, dataState.secondaryFrames);
       return makeFramePlan(compiled);
     },
     async checkpoint(steps, uptoIndex){
-      const compiled = await compileFrame(steps, uptoIndex - 1, dataState.frameSourceFrame, dataState.secondaryFrames);
+      const raw=dataState.activeQueryId==='main' ? null : dataState.rawFrames[dataState.activeQueryId];
+      const base=raw ? FR.derive(raw,{[RID]:(row,i)=>i+1}) : dataState.frameSourceFrame;
+      const compiled = await compileFrame(steps, uptoIndex - 1, base, dataState.secondaryFrames);
       if (compiled.error) throw Object.assign(new Error(compiled.error), { stepIndex: compiled.errorIndex });
       return { materialized: true, hasRid: compiled.hasRid, columns: compiled.columns };
     },
@@ -5188,8 +5333,8 @@ const dataState = {
   duckdbVersion: null, duckdbBundleName: null, duckdbEngineVersion: null,
   sourceFileName: null, sourceFormat: null, hasSource: false,
   sourceFile: null, sourceImportOptions: null, pendingRecipe: null,
-  secondarySources: [], secondaryAqTables: {}, secondaryFrames: {},
-  steps: [],
+  secondarySources: [], secondaryAqTables: {}, secondaryFrames: {}, rawAqTables: {}, rawFrames: {}, missingSources: [],
+  activeQueryId: 'main', mainSteps: [], steps: [],
   historyPast: [], historyFuture: [],
   pipelineToken: 0, inspectorToken: 0,
   statsGenToken: 0,
@@ -5205,6 +5350,36 @@ const dataState = {
 };
 
 function resetHistory(){ dataState.historyPast = []; dataState.historyFuture = []; updateUndoRedoButtons(); }
+function syncActiveQuerySteps(){
+  if (dataState.activeQueryId === 'main') dataState.mainSteps = dataState.steps;
+  else { const source = dataState.secondarySources.find(s=>s.id===dataState.activeQueryId); if (source) source.steps = dataState.steps; }
+}
+function renderQueriesPanel(){
+  const box = $('#queriesPanel');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!dataState.hasSource) return;
+  box.appendChild(el('div',{class:'queries-title'}, 'Queries'));
+  const items = [{ id:'main', name:dataState.sourceFileName || 'Main', steps:dataState.mainSteps }, ...dataState.secondarySources];
+  items.forEach(item => box.appendChild(el('button',{type:'button',class:'query-button' + (dataState.activeQueryId===item.id ? ' is-active' : ''), 'aria-current':dataState.activeQueryId===item.id ? 'page' : null, onclick:()=>selectQuery(item.id)},
+    el('span',{},item.name), el('small',{},`${(item.steps||[]).length} steps`))));
+}
+async function selectQuery(id){
+  if (id === dataState.activeQueryId) return;
+  const source = dataState.secondarySources.find(s=>s.id===id);
+  if (id !== 'main' && !source) return;
+  syncActiveQuerySteps();
+  dataState.activeQueryId = id;
+  dataState.steps = id === 'main' ? dataState.mainSteps : (source.steps ||= []);
+  uiState.selectedStepIndex = null;
+  uiState.rowSelection.clear();
+  closeInspector();
+  resetHistory();
+  lastPreview = null;
+  lastPreviewColKey = null;
+  renderAll();
+  await refreshPreview();
+}
 const SESSION_DB_NAME = 'duckbench';
 const SESSION_STORE = 'sessions';
 const SESSION_KEY = 'last';
@@ -5266,6 +5441,7 @@ let lastSavedSourceFile = null;
 let lastSavedSecondaryFiles = new Map();
 async function saveSessionSnapshot(){
 if (!dataState.hasSource || !dataState.sourceFile) return;
+syncActiveQuerySteps();
 try {
 const db = await openSessionDB();
 const currentSecondary = new Map(dataState.secondarySources.map(s => [s.id, s.file]));
@@ -5280,8 +5456,10 @@ fileName: dataState.sourceFileName,
 format: dataState.sourceFormat,
 importOptions: dataState.sourceImportOptions,
 engineId: dataState.engine.id,
-steps: dataState.steps,
-secondarySources: dataState.secondarySources.map(s => ({ id:s.id, name:s.name, format:s.format, importOptions: s.importOptions || {} })),
+steps: dataState.mainSteps,
+activeQueryId: dataState.activeQueryId,
+secondarySources: dataState.secondarySources.map(s => ({ id:s.id, name:s.name, format:s.format, importOptions: s.importOptions || {}, steps:s.steps || [] })),
+missingSources: dataState.missingSources,
 savedAt: Date.now(),
 }, SESSION_KEY);
 if (needsMainBlob) tx.objectStore(SOURCES_STORE).put({ id:'main', file: dataState.sourceFile });
@@ -5381,22 +5559,28 @@ dataState.selectedEngineId = snapshot.engineId;
 await runImport();
 if (dataState.hasSource){
 await restoreSecondarySources(snapshot.secondarySources);
-dataState.steps = Array.isArray(snapshot.steps) ? snapshot.steps : [];
+dataState.mainSteps = Array.isArray(snapshot.steps) ? snapshot.steps : [];
+dataState.steps = dataState.mainSteps;
+dataState.activeQueryId = 'main';
+dataState.missingSources = [...new Map([...(snapshot.missingSources || []), ...dataState.missingSources].map(s=>[s.id,s])).values()];
 uiState.selectedStepIndex = null;
 resetHistory();
 renderAll();
 await refreshPreview();
-saveSessionSnapshot();
+if (snapshot.activeQueryId && snapshot.activeQueryId !== 'main') await selectQuery(snapshot.activeQueryId);
+await saveSessionSnapshot();
 }
 }
 function saveRecipe(){
 if (!dataState.hasSource) return;
+syncActiveQuerySteps();
 const recipe = {
 duckbenchRecipe: 1,
 savedAt: new Date().toISOString(),
 sourceFileName: dataState.sourceFileName,
 engineId: dataState.engine.id,
-steps: dataState.steps,
+steps: dataState.mainSteps,
+sources: dataState.secondarySources.map(s=>({ id:s.id, name:s.name, format:s.format, importOptions:s.importOptions || {}, steps:s.steps || [], columns:(s.columns || []).map(c=>c.name) })),
 };
 const blob = new Blob([JSON.stringify(recipe, null, 2)], { type:'application/json' });
 downloadBlob(blob, `${(dataState.sourceFileName||'recipe').replace(/\.[^.]+$/,'')}.duckbench.json`);
@@ -5407,11 +5591,12 @@ try {
 const text = await file.text();
 const recipe = JSON.parse(text);
 if (!recipe || !Array.isArray(recipe.steps)) throw new Error('Not a valid recipe file');
-const unknownTypes = [...new Set(recipe.steps.map(s=>s?.type).filter(t=>!TRANSFORMS[t]))];
+const allRecipeSteps = [...recipe.steps, ...(Array.isArray(recipe.sources) ? recipe.sources.flatMap(s=>Array.isArray(s.steps) ? s.steps : []) : [])];
+const unknownTypes = [...new Set(allRecipeSteps.map(s=>s?.type).filter(t=>!TRANSFORMS[t]))];
 if (unknownTypes.length) throw new Error(`This recipe uses steps this version doesn’t know: ${unknownTypes.join(', ')}`);
-const badDataStep = recipe.steps.find(s => s.data===null || typeof s.data!=='object' || Array.isArray(s.data));
+const badDataStep = allRecipeSteps.find(s => s.data===null || typeof s.data!=='object' || Array.isArray(s.data));
 if (badDataStep) throw new Error(`This recipe has a “${badDataStep.type}” step with invalid data.`);
-const sqlSteps = recipe.steps.filter(s=>TRANSFORMS[s.type]?.executesUserSql).length;
+const sqlSteps = allRecipeSteps.filter(s=>TRANSFORMS[s.type]?.executesUserSql).length;
 if (sqlSteps){
 const ok = await confirmDialog(`This recipe includes ${sqlSteps} step${sqlSteps===1?'':'s'} that run custom SQL expressions automatically as soon as it’s applied. Only continue if you trust where this recipe file came from — open it in a text editor first if you’re unsure what the SQL does.`);
 if (!ok) return;
@@ -5422,13 +5607,17 @@ const ok = await confirmDialog(`Replace the current ${dataState.steps.length} st
 if (!ok) return;
 }
 closeInspector();
-dataState.steps = recipe.steps;
+dataState.mainSteps = recipe.steps;
+recipe.sources?.forEach(m=>{ const attached = dataState.secondarySources.find(s=>s.id===m.id); if (attached) attached.steps = Array.isArray(m.steps) ? m.steps : []; });
+dataState.activeQueryId = 'main';
+dataState.steps = dataState.mainSteps;
+applyRecipeSourcesManifest(recipe);
 uiState.selectedStepIndex = null;
 resetHistory();
 renderAll();
 await refreshPreview();
 saveSessionSnapshot();
-const missingJoins = recipe.steps.filter(s=>s.type==='join' && s.data?.rightSource && !dataState.secondarySources.some(src=>src.id===s.data.rightSource)).length;
+const missingJoins = dataState.missingSources.length;
 toast(missingJoins
 ? `Recipe applied — ${recipe.steps.length} step${recipe.steps.length===1?'':'s'}, but ${missingJoins} join step${missingJoins===1?'':'s'} reference${missingJoins===1?'s':''} a file not included in the recipe. Re-attach it from the Sources panel.`
 : `Recipe applied — ${recipe.steps.length} step${recipe.steps.length===1?'':'s'}.`);
@@ -5445,6 +5634,7 @@ function applyStepsChange(newSteps){
   if (dataState.historyPast.length > 60) dataState.historyPast.shift();
   dataState.historyFuture = [];
   dataState.steps = newSteps;
+  syncActiveQuerySteps();
   afterStepsChanged();
 }
 function undo(){
@@ -5452,6 +5642,7 @@ function undo(){
   dataState.historyFuture.push(JSON.stringify({ steps: dataState.steps, selectedStepIndex: uiState.selectedStepIndex }));
   const prev = JSON.parse(dataState.historyPast.pop());
   dataState.steps = prev.steps;
+  syncActiveQuerySteps();
   uiState.selectedStepIndex = prev.selectedStepIndex;
   closeInspector();
   afterStepsChanged();
@@ -5461,6 +5652,7 @@ function redo(){
   dataState.historyPast.push(JSON.stringify({ steps: dataState.steps, selectedStepIndex: uiState.selectedStepIndex }));
   const next = JSON.parse(dataState.historyFuture.pop());
   dataState.steps = next.steps;
+  syncActiveQuerySteps();
   uiState.selectedStepIndex = next.selectedStepIndex;
   closeInspector();
   afterStepsChanged();
@@ -5481,6 +5673,7 @@ updateUndoRedoButtons();
 renderStepsList();
 renderRibbon();
 renderSourcesPanel();
+renderQueriesPanel();
 refreshPreview();
 queueSessionSnapshot();
 }
@@ -5640,6 +5833,7 @@ return null;
 }
 function currentSelectionForSeed(){ return { column: uiState.focusedColumn || null }; }
 function renderAll(){
+renderQueriesPanel();
 renderRailSource();
 renderSourcesPanel();
 renderStepsList();
@@ -5666,6 +5860,7 @@ if (btn.dataset.originalLabel) btn.textContent = btn.dataset.originalLabel;
 }
 }
 async function exportData(format){
+try { await queryBuildPromise; } catch(e){ toast(`Cannot export — ${e.message}`); return; }
 const steps = dataState.steps;
 const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : steps.length-1;
 const plan = await dataState.engine.compile(steps, upto);
@@ -5975,6 +6170,52 @@ status.classList.add('is-ok');
 status.textContent = '';
 }
 }
+let queryBuildPromise = Promise.resolve();
+async function rebuildQuerySources(targetIds){
+  const sources = new Map(dataState.secondarySources.map(s=>[s.id,s]));
+  const visited = new Set(), visiting = new Set();
+  async function build(id){
+    if (visited.has(id)) return;
+    if (visiting.has(id)) throw new Error('Query dependency cycle detected. Remove a join or append that points back to this query.');
+    const source = sources.get(id);
+    if (!source) throw new Error(`A query needs an unattached source (${id}).`);
+    visiting.add(id);
+    for (const step of source.steps || []){
+      if (!step.disabled && step.data?.rightSource) await build(step.data.rightSource);
+    }
+    if (dataState.engine.id === 'duckdb'){
+      const compiled = await compilePipeline(source.steps || [], (source.steps || []).length-1, `SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${q('raw_'+id)}`, true);
+      if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
+      const ordered = `${compiled.sql}${orderBySQL(compiled.orderBy)}${compiled.orderBy && compiled.hasRid ? `, ${q(RID)}` : ''}`;
+      await dataState.conn.query(`CREATE OR REPLACE VIEW ${q('src_'+id)} AS SELECT ${compiled.hasRid ? `* EXCLUDE (${q(RID)})` : '*'} FROM (${ordered})`);
+      clearColumnsCache();
+      source.columns = compiled.columns;
+    } else if (dataState.engine.id === 'arquero'){
+      const aq = await loadAq();
+      const raw = dataState.rawAqTables[id];
+      if (!raw) throw new Error(`Source ${source.name} is not loaded.`);
+      const base = raw.derive({ [RID]:()=>aq.op.row_number() }).relocate(RID, { before:raw.columnNames()[0] });
+      const compiled = await compileAq(source.steps || [], (source.steps || []).length-1, base);
+      if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
+      dataState.secondaryAqTables[id] = compiled.hasRid ? compiled.table.select(aq.not(RID)) : compiled.table;
+      source.columns = compiled.columns;
+    } else {
+      const raw = dataState.rawFrames[id];
+      if (!raw) throw new Error(`Source ${source.name} is not loaded.`);
+      const compiled = await compileFrame(source.steps || [], (source.steps || []).length-1, FR.derive(raw, { [RID]:(row,i)=>i+1 }), dataState.secondaryFrames);
+      if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
+      dataState.secondaryFrames[id] = compiled.hasRid ? FR.exclude(compiled.frame, [RID]) : compiled.frame;
+      source.columns = compiled.columns.filter(c=>c.name!==RID);
+    }
+    visiting.delete(id);
+    visited.add(id);
+  }
+  const roots = targetIds || [...new Set([
+    ...(dataState.activeQueryId !== 'main' ? [dataState.activeQueryId] : []),
+    ...dataState.steps.filter(s=>s && !s.disabled && s.data?.rightSource).map(s=>s.data.rightSource),
+  ])];
+  for (const id of roots) await build(id);
+}
 async function refreshPreview(){
 if (!dataState.hasSource) return;
 if (!lastPreview) $('#gridSkeleton').hidden = false;
@@ -5982,6 +6223,10 @@ const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : da
 const myToken = ++dataState.pipelineToken;
 let plan;
 try {
+const previousBuild = queryBuildPromise;
+queryBuildPromise = previousBuild.catch(()=>{}).then(()=>rebuildQuerySources());
+await queryBuildPromise;
+if (dataState.pipelineToken !== myToken) return;
 plan = await dataState.engine.compile(dataState.steps, upto);
 } catch(e){
 if (dataState.pipelineToken !== myToken) return;
@@ -6610,6 +6855,28 @@ if (!msg){ e.hidden = true; e.textContent=''; return; }
 e.hidden = false; e.textContent = msg;
 }
 function expressEngineLabel(){ return dataState.engine.id === 'frame' ? 'Frame' : 'Arquero'; }
+async function replaceSourceFile(file){
+  syncActiveQuerySteps();
+  await dropAllCheckpoints();
+  dataState.pendingRecipe = {
+    duckbenchRecipe:1,
+    steps:JSON.parse(JSON.stringify(dataState.mainSteps)),
+    sources:dataState.secondarySources.map(s=>({ id:s.id, name:s.name, format:s.format, importOptions:s.importOptions || {}, steps:JSON.parse(JSON.stringify(s.steps || [])) })),
+  };
+  closeInspector();
+  $('#workbench').hidden = true;
+  $('#importScreen').hidden = false;
+  $('#backToWorkbenchBtn').hidden = false;
+  await handleFileSelected(file);
+}
+async function closeFileAndStartOver(){
+  const ok = await confirmDialog('Close this file and return to the import screen? Steps are lost unless you saved a recipe — undo cannot restore them.');
+  if (!ok) return;
+  clearTimeout(sessionSaveTimer);
+  dataState.hasSource = false;
+  await clearSessionSnapshot();
+  location.reload();
+}
 async function runImport(){
 const { file, format, sheet, workbook, skipRows, firstRowHeader } = pendingImport;
 showImportError(null);
@@ -6642,12 +6909,23 @@ if (format === 'parquet'){
   await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowHeader, skipRows, delim });
 }
 
+if (!dataState.pendingRecipe){
+  for (const source of dataState.secondarySources){ try { await dataState.engine.dropSecondarySource(source.id); } catch(e){} }
+  dataState.secondarySources = [];
+  dataState.secondaryAqTables = {};
+  dataState.secondaryFrames = {};
+  dataState.rawAqTables = {};
+  dataState.rawFrames = {};
+}
 dataState.hasSource = true;
 dataState.sourceFileName = file.name;
 dataState.sourceFormat = format;
 dataState.sourceFile = file;
 dataState.sourceImportOptions = { sheet, skipRows, firstRowHeader };
 dataState.steps = [];
+dataState.mainSteps = dataState.steps;
+dataState.activeQueryId = 'main';
+dataState.missingSources = [];
 uiState.selectedStepIndex = null;
 lastPreview = null;
 lastPreviewColKey = null;
@@ -6655,6 +6933,8 @@ await refreshSourceSchema();
 resetHistory();
 $('#importOptions').hidden = true;
 $('#importScreen').hidden = true;
+$('#backToWorkbenchBtn').hidden = true;
+await dropAllCheckpoints();
 $('#workbench').hidden = false;
 $('#engineStatus').classList.add('is-swappable');
 $('#engineStatus').title = 'Click to swap engines';
@@ -6667,17 +6947,20 @@ advanceTourPastImport();
 if (dataState.pendingRecipe){
 const recipe = dataState.pendingRecipe;
 dataState.pendingRecipe = null;
-dataState.steps = Array.isArray(recipe.steps) ? recipe.steps : [];
+dataState.mainSteps = Array.isArray(recipe.steps) ? recipe.steps : [];
+dataState.steps = dataState.mainSteps;
+recipe.sources?.forEach(m=>{ const attached = dataState.secondarySources.find(s=>s.id===m.id); if (attached) attached.steps = Array.isArray(m.steps) ? m.steps : []; });
+applyRecipeSourcesManifest(recipe);
 uiState.selectedStepIndex = null;
 resetHistory();
 renderAll();
 await refreshPreview();
-const missingJoins = dataState.steps.filter(s=>s.type==='join' && s.data?.rightSource && !dataState.secondarySources.some(src=>src.id===s.data.rightSource)).length;
+const missingJoins = dataState.missingSources.length;
 toast(missingJoins
 ? `Recipe applied — ${dataState.steps.length} step${dataState.steps.length===1?'':'s'}, but ${missingJoins} join step${missingJoins===1?'':'s'} reference${missingJoins===1?'s':''} a file not included in the recipe. Re-attach it from the Sources panel.`
 : `Recipe applied — ${dataState.steps.length} step${dataState.steps.length===1?'':'s'}.`);
 }
-saveSessionSnapshot();
+await saveSessionSnapshot();
 } catch(e){
 showImportError(e.message || String(e));
 restoreImportActionRow();
@@ -6706,6 +6989,8 @@ const savedSelected = uiState.selectedStepIndex;
 const savedSecondary = dataState.secondarySources.slice();
 const previous = {
 engine: dataState.engine,
+rawAqTables: dataState.rawAqTables,
+rawFrames: dataState.rawFrames,
 selectedEngineId: dataState.selectedEngineId,
 secondarySources: dataState.secondarySources,
 secondaryAqTables: dataState.secondaryAqTables,
@@ -6737,7 +7022,9 @@ await dataState.engine.loadFile({ format, fileName: file.name, buffer, firstRowH
 dataState.secondarySources = [];
 dataState.secondaryAqTables = {};
 dataState.secondaryFrames = {};
-await restoreSecondarySources(savedSecondary.map(s => ({ id:s.id, name:s.name, format:s.format, file:s.file, importOptions:s.importOptions })));
+dataState.rawAqTables = {};
+dataState.rawFrames = {};
+await restoreSecondarySources(savedSecondary.map(s => ({ id:s.id, name:s.name, format:s.format, file:s.file, importOptions:s.importOptions, steps:s.steps })));
 dataState.steps = savedSteps;
 uiState.selectedStepIndex = savedSelected;
 await refreshSourceSchema();
@@ -6755,6 +7042,8 @@ dataState.selectedEngineId = previous.selectedEngineId;
 dataState.secondarySources = previous.secondarySources;
 dataState.secondaryAqTables = previous.secondaryAqTables;
 dataState.secondaryFrames = previous.secondaryFrames;
+dataState.rawAqTables = previous.rawAqTables;
+dataState.rawFrames = previous.rawFrames;
 toast(`Couldn’t switch engines: ${e.message} — staying on the previous engine.`);
 } finally {
 if (dataState.conn && dataState.engine.id === 'duckdb') setEngineStatus('ready', `Full · DuckDB ${dataState.duckdbVersion}`);
@@ -6837,6 +7126,7 @@ refreshPreview();
 }
 async function primeInspectorCheckpoint(){
 const insp = uiState.inspector; if (!insp) return;
+try { await queryBuildPromise; } catch(e){}
 insp.insertPosition = insp.isNew ? (uiState.selectedStepIndex!==null ? uiState.selectedStepIndex+1 : dataState.steps.length) : insp.forIndex;
 try { insp.checkpoint = await dataState.engine.checkpoint(dataState.steps, insp.insertPosition); }
 catch(e){
@@ -7299,7 +7589,9 @@ function renderRailSource(){
 const box = $('#railSource');
 box.innerHTML = '';
 if (!dataState.hasSource) return;
-box.appendChild(el('div',{class:'rail-source-name', title:dataState.sourceFileName||''}, dataState.sourceFileName||''));
+const activeSource = dataState.secondarySources.find(s=>s.id===dataState.activeQueryId);
+box.appendChild(el('div',{class:'rail-source-name', title:activeSource?.name || dataState.sourceFileName||''}, activeSource?.name || dataState.sourceFileName||''));
+if (activeSource) return;
 if (dataState.rejectCountUnknown){
 box.appendChild(el('div',{class:'import-reject-note'}, `Some malformed rows may have been silently skipped during import — the exact count isn’t available for this file.`));
 } else if (dataState.rejectCount > 0){
@@ -7315,7 +7607,7 @@ const box = $('#sourcesPanel');
 if (!box) return;
 box.innerHTML = '';
 if (!dataState.hasSource) return;
-const usedIds = new Set(dataState.steps.filter(s => s && s.data && s.data.rightSource).map(s => s.data.rightSource));
+const usedIds = new Set([dataState.mainSteps, ...dataState.secondarySources.map(s=>s.steps || [])].flat().filter(s=>s?.data?.rightSource).map(s=>s.data.rightSource));
 dataState.secondarySources.forEach(s => {
 const unused = !usedIds.has(s.id);
 box.appendChild(el('div',{class:'source-card' + (unused ? ' is-unused' : '')},
@@ -7328,7 +7620,10 @@ unused ? el('span',{class:'source-card-badge', title:'No step uses this source.'
 el('button',{class:'source-card-remove', 'aria-label':`Remove ${s.name}`, title:'Remove source', onclick:()=>removeSecondarySource(s.id)}, '×'),
 ));
 });
-box.appendChild(el('button',{class:'source-add-btn', type:'button', onclick:()=>$('#secondarySourceInput').click()}, '+ Add source'));
+dataState.missingSources.forEach(m=>box.appendChild(el('div',{class:'source-card'},
+  el('div',{class:'source-card-body'},el('div',{class:'source-card-name'},m.name || 'Unattached query'),el('div',{class:'source-card-meta'},'Needed by a step — not attached')),
+  el('button',{class:'btn-ghost btn-small',type:'button',onclick:()=>{ pendingMissingSourceId=m.id; $('#secondarySourceInput').click(); }},'Attach…'))));
+box.appendChild(el('button',{class:'source-add-btn', type:'button', onclick:()=>{ pendingMissingSourceId=null; $('#secondarySourceInput').click(); }}, '+ Add source'));
 }
 async function buildSecondarySourceFileSpec(file, format, opts={}){
 if (format === 'excel'){
@@ -7371,11 +7666,30 @@ cancelBtn.addEventListener('click', () => ModalStack.pop(entry));
 goBtn.addEventListener('click', () => { result = { ...state }; ModalStack.pop(entry); });
 });
 }
+let pendingMissingSourceId = null;
+function stableSourceId(name, sheet){
+  const s = `${String(name).toLowerCase()}\u0000${sheet || ''}`;
+  let h = 0x811c9dc5;
+  for (let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return `f${h.toString(16).padStart(8,'0')}`;
+}
+function applyRecipeSourcesManifest(recipe){
+  const manifest = Array.isArray(recipe.sources) ? recipe.sources : [];
+  const allSteps = [...(recipe.steps || []), ...(Array.isArray(recipe.sources) ? recipe.sources.flatMap(s=>s.steps || []) : [])];
+  const needed = [...new Set([...manifest.map(s=>s.id), ...allSteps.filter(s=>s?.data?.rightSource).map(s=>s.data.rightSource)])];
+  const attached = new Set(dataState.secondarySources.map(s=>s.id));
+  dataState.missingSources = needed.filter(id=>!attached.has(id)).map(id=>{
+    const m = manifest.find(x=>x.id===id);
+    return { id, name:m?.name || null, format:m?.format || null, importOptions:m?.importOptions || {}, steps:m?.steps || [] };
+  });
+  renderSourcesPanel();
+  return dataState.missingSources;
+}
 async function handleSecondarySourceFile(file){
 const ext = (file.name.split('.').pop()||'').toLowerCase();
 const format = ext==='parquet' ? 'parquet' : (ext==='xlsx'||ext==='xls') ? 'excel' : 'csv';
-if ((format === 'excel' || format === 'parquet') && dataState.engine.id !== 'duckdb'){
-toast(`${format==='excel'?'Excel':'Parquet'} secondary sources need Full mode — switch engines first.`);
+if (format === 'parquet' && dataState.engine.id !== 'duckdb'){
+toast('Parquet secondary sources need Full mode — switch engines first.');
 return;
 }
 let importOptions = {};
@@ -7396,9 +7710,23 @@ importOptions = chosen;
 importOptions = { sheet: wb.SheetNames[0], skipRows:0, firstRowHeader:true };
 }
 }
-const id = `s${Date.now().toString(36)}${Math.floor(Math.random()*1000)}`;
-const entry = { id, name: file.name, format, file, rowCount:null, columns:[], importOptions };
+const id = stableSourceId(file.name, importOptions.sheet || '');
+const slotId = pendingMissingSourceId; pendingMissingSourceId = null;
+const slot = slotId ? dataState.missingSources.find(m=>m.id===slotId) : null;
+if (slot?.name && slot.name !== file.name){
+  const ok = await confirmDialog(`This query expects “${slot.name}”, but you picked “${file.name}”. Attach it anyway? Check that the key columns still match.`);
+  if (!ok) return;
+}
+const existing = dataState.secondarySources.find(s=>s.id===id);
+if (existing){
+  const ok = await confirmDialog(`Replace the attached file “${existing.name}” and keep its query steps?`);
+  if (!ok) return;
+}
+const entry = { id, name:file.name, format, file, rowCount:null, columns:[], importOptions, steps:existing?.steps || slot?.steps || [] };
+if (existing) await dataState.engine.dropSecondarySource(id);
+dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
 dataState.secondarySources.push(entry);
+if (dataState.activeQueryId === id) dataState.steps = entry.steps;
 renderSourcesPanel();
 toast(`Loading ${file.name}…`);
 try {
@@ -7406,26 +7734,36 @@ const fileSpec = await buildSecondarySourceFileSpec(file, format, importOptions)
 await dataState.engine.loadSecondarySource(id, fileSpec);
 entry.columns = await dataState.engine.getSecondarySourceColumns(id);
 entry.rowCount = await dataState.engine.secondarySourceRowCount(id);
+dataState.missingSources = dataState.missingSources.filter(m=>m.id!==id && m.id!==slotId);
+if (slot && slot.id !== id){
+  const all = [dataState.mainSteps, ...dataState.secondarySources.map(s=>s.steps || [])];
+  all.forEach(steps=>steps.forEach(step=>{ if (step.data?.rightSource===slot.id) step.data.rightSource=id; }));
+}
 renderSourcesPanel();
-toast(`${file.name} ready to join.`);
+refreshPreview();
+renderQueriesPanel();
+toast(`${file.name} ready to join. Choose its query to clean it before joining.`);
 queueSessionSnapshot();
 } catch(e){
 dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
+if (existing) dataState.secondarySources.push(existing);
 renderSourcesPanel();
+renderQueriesPanel();
 toast(`Couldn’t load ${file.name}: ${e.message}`);
 }
 }
 async function restoreSecondarySources(list){
 if (!Array.isArray(list) || !list.length) return;
 for (const s of list){
-if (!s.file) continue;
+if (!s.file){ dataState.missingSources.push({id:s.id,name:s.name,format:s.format,importOptions:s.importOptions || {},steps:s.steps || []}); continue; }
 try {
 const fileSpec = await buildSecondarySourceFileSpec(s.file, s.format, s.importOptions || {});
 await dataState.engine.loadSecondarySource(s.id, fileSpec);
 const columns = await dataState.engine.getSecondarySourceColumns(s.id);
 const rowCount = await dataState.engine.secondarySourceRowCount(s.id);
-dataState.secondarySources.push({ id:s.id, name:s.name, format:s.format, file:s.file, rowCount, columns, importOptions: s.importOptions });
+dataState.secondarySources.push({ id:s.id, name:s.name, format:s.format, file:s.file, rowCount, columns, importOptions: s.importOptions, steps: Array.isArray(s.steps) ? s.steps : [] });
 } catch(e){
+dataState.missingSources.push({id:s.id,name:s.name,format:s.format,importOptions:s.importOptions || {},steps:s.steps || []});
 toast(`Couldn’t restore joined source “${s.name}” — ${e.message}`);
 }
 }
@@ -7434,16 +7772,43 @@ renderSourcesPanel();
 async function removeSecondarySource(id){
 const entry = dataState.secondarySources.find(s=>s.id===id);
 if (!entry) return;
-const usedBy = dataState.steps.filter(s=>s.type==='join' && s.data.rightSource===id);
+const usedBy = [dataState.mainSteps, ...dataState.secondarySources.map(s=>s.steps || [])].flat().filter(s=>s.data?.rightSource===id);
 if (usedBy.length){
 const ok = await confirmDialog(`${usedBy.length} join step${usedBy.length===1?' uses':'s use'} this source. Remove it anyway? That step will show an error.`);
 if (!ok) return;
 }
 try { await dataState.engine.dropSecondarySource(id); } catch(e){}
+if (usedBy.length) dataState.missingSources.push({id,name:entry.name,format:entry.format,importOptions:entry.importOptions,steps:entry.steps || []});
 dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
+if (dataState.activeQueryId === id){
+  dataState.activeQueryId = 'main';
+  dataState.steps = dataState.mainSteps;
+  uiState.selectedStepIndex = null;
+  resetHistory();
+  renderAll();
+}
 renderSourcesPanel();
+renderQueriesPanel();
 refreshPreview();
 queueSessionSnapshot();
+}
+function startRenameStep(i, node){
+  const step = dataState.steps[i]; if (!step) return;
+  const card = node.closest('.step-card'); if (card) card.setAttribute('draggable','false');
+  node.contentEditable = 'true'; node.focus();
+  document.getSelection().selectAllChildren(node);
+  let done = false;
+  const finish = commit => {
+    if (done) return; done = true;
+    node.contentEditable = 'false';
+    const text = node.textContent.trim().slice(0,80);
+    const def = TRANSFORMS[step.type]?.label || step.type;
+    const next = text && text !== def ? text : undefined;
+    if (commit && next !== step.label) applyStepsChange(dataState.steps.map((s,j)=>j===i ? { ...s, label:next } : s));
+    else renderStepsList();
+  };
+  node.addEventListener('keydown',e=>{ e.stopPropagation(); if (e.key==='Enter'){ e.preventDefault(); finish(true); } else if (e.key==='Escape'){ e.preventDefault(); finish(false); } });
+  node.addEventListener('blur',()=>finish(true),{once:true});
 }
 function renderStepsList(){
 const list = $('#stepsList');
@@ -7467,7 +7832,7 @@ el('span',{class:'step-num'}, String(i+1)),
 el('span',{class:`step-code code-${t.category}`}, t.code),
 step.hasError ? el('span',{class:'step-error-flag', title:step.errorMessage||'This step has a problem'}, htmlIcon('warn',12)) : null,
 ),
-el('div',{class:'step-title'}, t.label),
+el('div',{class:'step-title',title:'Double-click to rename',ondblclick:e=>{ e.stopPropagation(); startRenameStep(i,e.currentTarget); }}, step.label || t.label),
 buildStepDetail(t, step.data),
 el('div',{class:'step-row-actions'},
 mini('Edit', ()=>openInspectorForEdit(i)),
@@ -7924,6 +8289,16 @@ $('#engineVersionBtn').addEventListener('click', openVersionPanel);
 $('#saveRecipeBtn').addEventListener('click', saveRecipe);
 $('#loadRecipeBtn').addEventListener('click', () => $('#recipeFileInput').click());
 $('#recipeFileInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleRecipeFileSelected(f); e.target.value=''; });
+$('#replaceFileBtn').addEventListener('click',()=>$('#replaceFileInput').click());
+$('#replaceFileInput').addEventListener('change',e=>{ const f=e.target.files[0]; e.target.value=''; if (f) replaceSourceFile(f); });
+$('#newFileBtn').addEventListener('click',closeFileAndStartOver);
+$('#backToWorkbenchBtn').addEventListener('click',()=>{
+  dataState.pendingRecipe = null;
+  $('#backToWorkbenchBtn').hidden = true;
+  $('#importOptions').hidden = true;
+  $('#importScreen').hidden = true;
+  $('#workbench').hidden = false;
+});
 $('#gridScroll').addEventListener('keydown', handleGridKeydown);
 $('#sampleDataBtn').addEventListener('click', loadSampleData);
 $('#tourStartBtn').addEventListener('click', () => showTourStep(0));
@@ -8128,6 +8503,14 @@ return Number(duck.rows[0][i]) === max ? null : `first row unit_price ${duck.row
 { label:'combo — join with second source', join:true, steps:[
 { type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left' } },
 ] },
+{ label:'join — inner', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'inner' } }] },
+{ label:'join — full', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'full' } }] },
+{ label:'join — anti', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left_anti' } }] },
+{ label:'join — semi', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left_semi' } }] },
+{ label:'duck-only — append query', kind:'duck-only', join:true, steps:[{ type:'append', data:{rightSource:'selftest_region'} }] },
+{ label:'duck-only — date part', kind:'duck-only', steps:[{ type:'date_part', data:{column:'order_date',part:'year',name:'Year'} }] },
+{ label:'duck-only — round number', kind:'duck-only', steps:[{ type:'round_number', data:{column:'unit_price',decimals:1,mode:'round'} }] },
+{ label:'query graph — clean lookup before join', kind:'query-graph', join:true, steps:[{type:'join',data:{rightSource:'selftest_region',leftKey:'region',rightKey:'region',joinType:'left'}}] },
 { label:'combo — filter contains literal underscore', steps:[
 { type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'AB_CD' } },
 { type:'replace_values', data:{ column:'status', scope:'value', find:'Shipped', replace:'ABXCD' } },
@@ -8410,6 +8793,45 @@ list.appendChild(row);
 panel.appendChild(list);
 }
 
+async function runSelfTestQueryGraphCheck(def, duckEngine, expressEngine){
+  await selftestEnsureJoinSource(duckEngine,expressEngine);
+  const source = dataState.secondarySources.find(s=>s.id==='selftest_region');
+  const previous = dataState.engine;
+  source.steps = [{type:'filter',data:{column:'manager',mode:'operator',operator:'=',value:'Alice'}}];
+  try {
+    for (const engine of [duckEngine,expressEngine]){
+      dataState.engine = engine;
+      await rebuildQuerySources(['selftest_region']);
+      const plan = await engine.compile(def.steps,0);
+      if (plan.error) return {label:def.label,pass:false,reason:`${engine.id}: ${plan.error}`};
+      const result = await engine.preview(plan,200);
+      const ri=result.columns.findIndex(c=>c.name==='region'), mi=result.columns.findIndex(c=>c.name==='manager');
+      if (ri<0 || mi<0 || !result.rows.some(r=>r[ri]==='North' && r[mi]==='Alice') || result.rows.some(r=>r[ri]!=='North' && r[mi]!=null))
+        return {label:def.label,pass:false,reason:`${engine.id}: lookup filtering did not flow into the join`};
+    }
+    dataState.engine=duckEngine;
+    await selectQuery(source.id);
+    const sourcePlan=await duckEngine.compile(dataState.steps,dataState.steps.length-1);
+    const sourcePreview=await duckEngine.preview(sourcePlan,200);
+    if (sourcePlan.error || sourcePreview.rows.length!==1 || sourcePreview.rows[0][sourcePreview.columns.findIndex(c=>c.name==='manager')]!=='Alice')
+      return {label:def.label,pass:false,reason:'Selecting a source query did not show its cleaned rows'};
+    await selectQuery('main');
+    return {label:def.label,pass:true};
+  } finally {
+    dataState.activeQueryId='main';
+    dataState.steps=dataState.mainSteps;
+    source.steps=[];
+    dataState.engine=previous;
+    await rebuildQuerySources(['selftest_region']);
+  }
+}
+async function runSelfTestDuckOnlyCheck(def, duckEngine, aqEngine){
+  if (def.join) await selftestEnsureJoinSource(duckEngine,aqEngine);
+  const plan = await duckEngine.compile(def.steps,def.steps.length-1);
+  if (plan.error) return {label:def.label,pass:false,reason:`DuckDB error — ${plan.error}`};
+  const preview = await duckEngine.preview(plan,200);
+  return preview.rows.length ? {label:def.label,pass:true} : {label:def.label,pass:false,reason:'Query returned no rows'};
+}
 async function runSelfTestXlsxFidelityCheck(def, duckEngine){
   const steps = def.steps || [];
   const plan = await duckEngine.compile(steps, steps.length - 1);
@@ -8467,6 +8889,10 @@ results[i] = SELFTEST_CASES[i].kind === 'export'
   ? await runSelfTestExportAtStepCheck(SELFTEST_CASES[i], duckEngine, aqEngine)
   : SELFTEST_CASES[i].kind === 'xlsx-fidelity'
   ? await runSelfTestXlsxFidelityCheck(SELFTEST_CASES[i], duckEngine)
+  : SELFTEST_CASES[i].kind === 'duck-only'
+  ? await runSelfTestDuckOnlyCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
+  : SELFTEST_CASES[i].kind === 'query-graph'
+  ? await runSelfTestQueryGraphCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
 : await runSelfTestParityCase(SELFTEST_CASES[i], duckEngine, aqEngine);
 } catch(e){
 results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error — ${e.message || e}` };
