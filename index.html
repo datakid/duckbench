@@ -336,6 +336,8 @@ input,select,textarea{font-family:inherit;}
 .query-button{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid transparent;border-radius:var(--radius-s);background:transparent;color:var(--paper-dim);padding:7px 9px;text-align:left;cursor:pointer;width:100%;font:inherit;font-size:12px;}
 .query-button:hover,.query-button.is-active{background:var(--ink-2);color:var(--paper);border-color:var(--line);}
 .query-button small{color:var(--muted);white-space:nowrap;}
+.query-reference-btn{border-style:dashed;border-color:var(--line);color:var(--brass-dim);}
+.query-reference-btn:disabled{opacity:.45;cursor:not-allowed;}
 .sources-panel:empty{display:none;}
 .sources-panel.is-dragover{outline:1.5px dashed var(--brass-dim);outline-offset:-4px;border-radius:var(--radius-s);background:rgba(var(--brass-rgb),0.06);}
 .source-card{
@@ -1030,6 +1032,42 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
     background-image:linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 50%);
   }
   .ribbon-btn{width:52px;}
+}
+@media (max-width:600px){
+  .masthead{padding:7px 9px;gap:4px;}
+  .masthead-left,.masthead-right{gap:5px;min-width:0;}
+  .mark,.mark svg{width:25px;height:25px;}
+  .masthead-text h1{font-size:16px;}
+  .tagline,.engine-version-btn{display:none;}
+  .engine-status{font-size:10px;gap:4px;}
+  .engine-status .status-label{max-width:86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .icon-btn-row{gap:0;}
+  .workbench-body{flex-direction:column;}
+  .steps-rail{width:100%;height:min(42vh,340px);min-height:230px;border-right:0;border-bottom:1px solid var(--line-soft);}
+  .queries-panel{flex-direction:row;align-items:center;padding:6px 8px;gap:4px;max-height:56px;overflow-x:auto;overflow-y:hidden;flex-shrink:0;}
+  .queries-title{display:none;}
+  .query-button{min-width:130px;max-width:180px;width:auto;flex-shrink:0;}
+  .query-button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .sources-panel{padding:5px 8px;max-height:110px;overflow-y:auto;flex-shrink:0;}
+  .sources-panel .source-card{padding:4px 7px;}
+  .rail-head{padding:5px 10px;}
+  .rail-add{padding:0 8px 4px;}
+  .rail-add-btn{padding:5px 10px;}
+  .rail-source{display:none;}
+  .steps-list{padding:2px 8px;min-height:0;}
+  .steps-empty{margin:3px;padding:5px 8px;}
+  .rail-foot{flex-direction:row;gap:8px;padding:3px 8px;overflow-x:auto;flex-shrink:0;}
+  .rail-clear-link{width:auto;min-width:max-content;font-size:10px;}
+  .ribbon-tabs{overflow-x:auto;white-space:nowrap;}
+  .ribbon-tab{flex-shrink:0;}
+  .bench-main{flex:1;min-height:0;}
+  .bench-toolbar{padding:6px 8px;gap:3px;}
+  .toolbar-actions{gap:3px;}
+  .row-count-label,#qualityToggleBtn{display:none;}
+  .grid-shell{margin:4px 4px 0;}
+  .statusbar{gap:8px;padding:0 8px;overflow-x:auto;}
+  .statusbar-spacer{display:none;}
+  .db-toast{max-width:calc(100vw - 20px);bottom:30px;}
 }
 .engine-picker{display:flex;gap:8px;margin:0 0 18px;}
 .engine-option{
@@ -2009,7 +2047,6 @@ async function runPreview(sql, limit=200, orderBy=null){
 
 async function fetchExactCount(sql, orderBy=null){
   const res = await dataState.conn.query(`SELECT COUNT(*) AS n FROM (${sql})`);
-  if (currentPlanSql() !== sql) return null;
   const n = res.getChildAt(0).get(0);
   return typeof n === 'bigint' ? Number(n) : n;
 }
@@ -2499,17 +2536,17 @@ function createDuckDBEngine(){
     },
     async compile(steps, uptoIndex, checkpoint){
       const active = dataState.activeQueryId;
-      const compiled = active !== 'main' && dataState.secondarySources.some(s=>s.id===active)
-        ? await compilePipeline(steps, uptoIndex, `SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${q('raw_'+active)}`, true)
-        : checkpoint
-          ? await compilePipeline(steps, uptoIndex, checkpointFrom(checkpoint), checkpoint.hasRid, checkpoint.columns, checkpoint.orderBy)
+      const compiled = checkpoint
+        ? await compilePipeline(steps, uptoIndex, checkpointFrom(checkpoint), checkpoint.hasRid, checkpoint.columns, checkpoint.orderBy)
+        : active !== 'main' && dataState.secondarySources.some(s=>s.id===active)
+          ? await compilePipeline(steps, uptoIndex, sourceQueryBaseSql(active), true)
           : await compilePipeline(steps, uptoIndex);
       return makeDuckDBPlan(compiled);
     },
     async checkpoint(steps, uptoIndex){
       if (dataState.activeQueryId !== 'main'){
         const id=dataState.activeQueryId;
-        const compiled=await compilePipeline(steps,uptoIndex-1,`SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${q('raw_'+id)}`,true);
+        const compiled=await compilePipeline(steps,uptoIndex-1,sourceQueryBaseSql(id),true);
         if (compiled.error) throw Object.assign(new Error(compiled.error),{stepIndex:compiled.errorIndex});
         return {materialized:false,sql:compiled.sql,hasRid:compiled.hasRid,columns:compiled.columns,orderBy:compiled.orderBy};
       }
@@ -5053,13 +5090,13 @@ function createArqueroEngine(){
       return blob;
     },
     async compile(steps, uptoIndex){
-      const source = dataState.activeQueryId === 'main' ? null : dataState.rawAqTables[dataState.activeQueryId];
+      const source = dataState.activeQueryId === 'main' ? null : sourceQueryBaseAq(dataState.activeQueryId);
       const aq = source ? await loadAq() : null;
       const compiled = source ? await compileAq(steps, uptoIndex, source.derive({ [RID]: () => aq.op.row_number() }).relocate(RID, { before:source.columnNames()[0] })) : await compileAq(steps, uptoIndex);
       return makeArqueroPlan(compiled);
     },
     async checkpoint(steps, uptoIndex){
-      const raw=dataState.activeQueryId==='main' ? null : dataState.rawAqTables[dataState.activeQueryId];
+      const raw=dataState.activeQueryId==='main' ? null : sourceQueryBaseAq(dataState.activeQueryId);
       const aq=raw ? await loadAq() : null;
       const base=raw ? raw.derive({[RID]:()=>aq.op.row_number()}).relocate(RID,{before:raw.columnNames()[0]}) : undefined;
       const compiled = await compileAq(steps, uptoIndex - 1, base);
@@ -5284,13 +5321,13 @@ function createFrameEngine(){
       return blob;
     },
     async compile(steps, uptoIndex){
-      const source = dataState.activeQueryId === 'main' ? null : dataState.rawFrames[dataState.activeQueryId];
+      const source = dataState.activeQueryId === 'main' ? null : sourceQueryBaseFrame(dataState.activeQueryId);
       const base = source ? FR.derive(source, { [RID]:(row,i)=>i+1 }) : dataState.frameSourceFrame;
       const compiled = await compileFrame(steps, uptoIndex, base, dataState.secondaryFrames);
       return makeFramePlan(compiled);
     },
     async checkpoint(steps, uptoIndex){
-      const raw=dataState.activeQueryId==='main' ? null : dataState.rawFrames[dataState.activeQueryId];
+      const raw=dataState.activeQueryId==='main' ? null : sourceQueryBaseFrame(dataState.activeQueryId);
       const base=raw ? FR.derive(raw,{[RID]:(row,i)=>i+1}) : dataState.frameSourceFrame;
       const compiled = await compileFrame(steps, uptoIndex - 1, base, dataState.secondaryFrames);
       if (compiled.error) throw Object.assign(new Error(compiled.error), { stepIndex: compiled.errorIndex });
@@ -5350,6 +5387,19 @@ const dataState = {
 };
 
 function resetHistory(){ dataState.historyPast = []; dataState.historyFuture = []; updateUndoRedoButtons(); }
+function sourceQueryBaseSql(id){
+  const source=dataState.secondarySources.find(s=>s.id===id);
+  const table=source?.kind==='reference' ? `src_${source.parentId}` : `raw_${id}`;
+  return `SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${q(table)}`;
+}
+function sourceQueryBaseAq(id){
+  const source=dataState.secondarySources.find(s=>s.id===id);
+  return source?.kind==='reference' ? dataState.secondaryAqTables[source.parentId] : dataState.rawAqTables[id];
+}
+function sourceQueryBaseFrame(id){
+  const source=dataState.secondarySources.find(s=>s.id===id);
+  return source?.kind==='reference' ? dataState.secondaryFrames[source.parentId] : dataState.rawFrames[id];
+}
 function syncActiveQuerySteps(){
   if (dataState.activeQueryId === 'main') dataState.mainSteps = dataState.steps;
   else { const source = dataState.secondarySources.find(s=>s.id===dataState.activeQueryId); if (source) source.steps = dataState.steps; }
@@ -5363,6 +5413,20 @@ function renderQueriesPanel(){
   const items = [{ id:'main', name:dataState.sourceFileName || 'Main', steps:dataState.mainSteps }, ...dataState.secondarySources];
   items.forEach(item => box.appendChild(el('button',{type:'button',class:'query-button' + (dataState.activeQueryId===item.id ? ' is-active' : ''), 'aria-current':dataState.activeQueryId===item.id ? 'page' : null, onclick:()=>selectQuery(item.id)},
     el('span',{},item.name), el('small',{},`${(item.steps||[]).length} steps`))));
+  box.appendChild(el('button',{type:'button',class:'query-button query-reference-btn',disabled:dataState.activeQueryId==='main',title:dataState.activeQueryId==='main'?'Select an attached query first to create a reference.':'Make a new query that follows this query’s cleaned result.',onclick:createQueryReference}, '+ Reference query'));
+}
+function createQueryReference(){
+  const parent=dataState.secondarySources.find(s=>s.id===dataState.activeQueryId);
+  if (!parent) return;
+  syncActiveQuerySteps();
+  const id=uid('ref_');
+  const name=`${parent.name} · reference`;
+  const entry={id,kind:'reference',parentId:parent.id,name,format:'reference',file:null,rowCount:parent.rowCount,columns:(parent.columns || []).slice(),importOptions:{},steps:[]};
+  dataState.secondarySources.push(entry);
+  renderQueriesPanel();
+  renderSourcesPanel();
+  queueSessionSnapshot();
+  selectQuery(id);
 }
 async function selectQuery(id){
   if (id === dataState.activeQueryId) return;
@@ -5373,7 +5437,11 @@ async function selectQuery(id){
   dataState.steps = id === 'main' ? dataState.mainSteps : (source.steps ||= []);
   uiState.selectedStepIndex = null;
   uiState.rowSelection.clear();
-  closeInspector();
+  await closeInspector(false);
+  uiState.focusedColumn = null;
+  uiState.activeCell = null;
+  dataState.currentColumns = [];
+  dataState.currentPlan = null;
   resetHistory();
   lastPreview = null;
   lastPreviewColKey = null;
@@ -5444,7 +5512,7 @@ if (!dataState.hasSource || !dataState.sourceFile) return;
 syncActiveQuerySteps();
 try {
 const db = await openSessionDB();
-const currentSecondary = new Map(dataState.secondarySources.map(s => [s.id, s.file]));
+const currentSecondary = new Map(dataState.secondarySources.filter(s=>s.kind!=='reference').map(s => [s.id, s.file]));
 const needsMainBlob = dataState.sourceFile !== lastSavedSourceFile;
 const changedSecondaryIds = [];
 for (const [id, file] of currentSecondary){ if (lastSavedSecondaryFiles.get(id) !== file) changedSecondaryIds.push(id); }
@@ -5458,7 +5526,7 @@ importOptions: dataState.sourceImportOptions,
 engineId: dataState.engine.id,
 steps: dataState.mainSteps,
 activeQueryId: dataState.activeQueryId,
-secondarySources: dataState.secondarySources.map(s => ({ id:s.id, name:s.name, format:s.format, importOptions: s.importOptions || {}, steps:s.steps || [] })),
+secondarySources: dataState.secondarySources.map(s => ({ id:s.id, name:s.name, format:s.format, kind:s.kind || 'file', parentId:s.parentId || null, importOptions: s.importOptions || {}, steps:s.steps || [] })),
 missingSources: dataState.missingSources,
 savedAt: Date.now(),
 }, SESSION_KEY);
@@ -5580,7 +5648,7 @@ savedAt: new Date().toISOString(),
 sourceFileName: dataState.sourceFileName,
 engineId: dataState.engine.id,
 steps: dataState.mainSteps,
-sources: dataState.secondarySources.map(s=>({ id:s.id, name:s.name, format:s.format, importOptions:s.importOptions || {}, steps:s.steps || [], columns:(s.columns || []).map(c=>c.name) })),
+sources: dataState.secondarySources.map(s=>({ id:s.id, name:s.name, format:s.format, kind:s.kind || 'file', parentId:s.parentId || null, importOptions:s.importOptions || {}, steps:s.steps || [], columns:(s.columns || []).map(c=>c.name) })),
 };
 const blob = new Blob([JSON.stringify(recipe, null, 2)], { type:'application/json' });
 downloadBlob(blob, `${(dataState.sourceFileName||'recipe').replace(/\.[^.]+$/,'')}.duckbench.json`);
@@ -5960,6 +6028,7 @@ await runCustomCsvExport(chosenCols, limit, nullInput.value);
 });
 }
 async function runCustomCsvExport(cols, limit, nullStr){
+try { await queryBuildPromise; } catch(e){ toast(`Cannot export — ${e.message}`); return; }
 const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length-1;
 const plan = await dataState.engine.compile(dataState.steps, upto);
 if (plan.error){ toast(`Can't export — step ${plan.errorIndex+1} has a problem: ${plan.error}`); return; }
@@ -6037,6 +6106,7 @@ if (!ok) return;
 ModalStack.pop(entry);
 closeInspector();
 dataState.steps = JSON.parse(JSON.stringify(p.steps));
+syncActiveQuerySteps();
 uiState.selectedStepIndex = null;
 resetHistory();
 renderAll();
@@ -6180,31 +6250,36 @@ async function rebuildQuerySources(targetIds){
     const source = sources.get(id);
     if (!source) throw new Error(`A query needs an unattached source (${id}).`);
     visiting.add(id);
+    if (source.kind==='reference'){
+      if (!source.parentId) throw new Error(`${source.name} has no parent query.`);
+      await build(source.parentId);
+    }
     for (const step of source.steps || []){
       if (!step.disabled && step.data?.rightSource) await build(step.data.rightSource);
     }
     if (dataState.engine.id === 'duckdb'){
-      const compiled = await compilePipeline(source.steps || [], (source.steps || []).length-1, `SELECT ROW_NUMBER() OVER () AS ${q(RID)}, * FROM ${q('raw_'+id)}`, true);
+      const compiled = await compilePipeline(source.steps || [], (source.steps || []).length-1, sourceQueryBaseSql(id), true);
       if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
       const ordered = `${compiled.sql}${orderBySQL(compiled.orderBy)}${compiled.orderBy && compiled.hasRid ? `, ${q(RID)}` : ''}`;
-      await dataState.conn.query(`CREATE OR REPLACE VIEW ${q('src_'+id)} AS SELECT ${compiled.hasRid ? `* EXCLUDE (${q(RID)})` : '*'} FROM (${ordered})`);
+      const physicalRid = (await getColumns(compiled.sql)).some(c=>c.name===RID);
+      await dataState.conn.query(`CREATE OR REPLACE VIEW ${q('src_'+id)} AS SELECT ${physicalRid ? `* EXCLUDE (${q(RID)})` : '*'} FROM (${ordered})`);
       clearColumnsCache();
       source.columns = compiled.columns;
     } else if (dataState.engine.id === 'arquero'){
       const aq = await loadAq();
-      const raw = dataState.rawAqTables[id];
+      const raw = sourceQueryBaseAq(id);
       if (!raw) throw new Error(`Source ${source.name} is not loaded.`);
       const base = raw.derive({ [RID]:()=>aq.op.row_number() }).relocate(RID, { before:raw.columnNames()[0] });
       const compiled = await compileAq(source.steps || [], (source.steps || []).length-1, base);
       if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
-      dataState.secondaryAqTables[id] = compiled.hasRid ? compiled.table.select(aq.not(RID)) : compiled.table;
+      dataState.secondaryAqTables[id] = compiled.table.columnNames().includes(RID) ? compiled.table.select(aq.not(RID)) : compiled.table;
       source.columns = compiled.columns;
     } else {
-      const raw = dataState.rawFrames[id];
+      const raw = sourceQueryBaseFrame(id);
       if (!raw) throw new Error(`Source ${source.name} is not loaded.`);
       const compiled = await compileFrame(source.steps || [], (source.steps || []).length-1, FR.derive(raw, { [RID]:(row,i)=>i+1 }), dataState.secondaryFrames);
       if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
-      dataState.secondaryFrames[id] = compiled.hasRid ? FR.exclude(compiled.frame, [RID]) : compiled.frame;
+      dataState.secondaryFrames[id] = compiled.frame.names.includes(RID) ? FR.exclude(compiled.frame, [RID]) : compiled.frame;
       source.columns = compiled.columns.filter(c=>c.name!==RID);
     }
     visiting.delete(id);
@@ -6224,7 +6299,11 @@ const myToken = ++dataState.pipelineToken;
 let plan;
 try {
 const previousBuild = queryBuildPromise;
-queryBuildPromise = previousBuild.catch(()=>{}).then(()=>rebuildQuerySources());
+const roots = [...new Set([
+  ...(dataState.activeQueryId !== 'main' ? [dataState.activeQueryId] : []),
+  ...dataState.steps.slice(0,upto+1).filter(s=>s && !s.disabled && s.data?.rightSource).map(s=>s.data.rightSource),
+])];
+queryBuildPromise = previousBuild.catch(()=>{}).then(()=>rebuildQuerySources(roots));
 await queryBuildPromise;
 if (dataState.pipelineToken !== myToken) return;
 plan = await dataState.engine.compile(dataState.steps, upto);
@@ -6861,7 +6940,7 @@ async function replaceSourceFile(file){
   dataState.pendingRecipe = {
     duckbenchRecipe:1,
     steps:JSON.parse(JSON.stringify(dataState.mainSteps)),
-    sources:dataState.secondarySources.map(s=>({ id:s.id, name:s.name, format:s.format, importOptions:s.importOptions || {}, steps:JSON.parse(JSON.stringify(s.steps || [])) })),
+    sources:dataState.secondarySources.map(s=>({ id:s.id, name:s.name, format:s.format, kind:s.kind || 'file', parentId:s.parentId || null, importOptions:s.importOptions || {}, steps:JSON.parse(JSON.stringify(s.steps || [])) })),
   };
   closeInspector();
   $('#workbench').hidden = true;
@@ -6973,13 +7052,19 @@ if (dataState.engine.id !== 'duckdb') setEngineStatus('ready', `Express · ${exp
 async function switchEngineMidSession(targetId){
 if (dataState.engine.id === targetId) return;
 if (!dataState.sourceFile){ toast("Can't switch engines — reimport the file to enable this."); return; }
+if (targetId !== 'duckdb' && (dataState.sourceFormat === 'parquet' || dataState.secondarySources.some(s=>s.format==='parquet'))){
+  toast('Parquet files need Full mode — remove Parquet join sources before switching to Express.');
+  return;
+}
 const targetLabel = targetId === 'duckdb' ? 'Full (DuckDB)' : `Express (${targetId === 'frame' ? 'Frame' : 'Arquero'})`;
 const sizeWarn = (targetId !== 'duckdb' && dataState.sourceFile && dataState.sourceFile.size > EXPRESS_SIZE_WARNING_BYTES)
 ? ` This file is ~${Math.round(dataState.sourceFile.size/1024/1024)} MB — Express mode may freeze this tab.`
 : '';
-if (dataState.steps.length || sizeWarn){
-const n = dataState.steps.length;
-const stepWarn = targetId !== 'duckdb' ? ` Any step that needs the Full engine will show an error until you remove or edit it.` : '';
+const allQuerySteps = [dataState.mainSteps, ...dataState.secondarySources.map(s=>s.steps || [])].flat();
+if (allQuerySteps.length || sizeWarn){
+const n = allQuerySteps.length;
+const unsupported = targetId !== 'duckdb' ? allQuerySteps.filter(s=>!s.disabled && !TRANSFORMS[s.type]?.engines?.includes(targetId)).length : 0;
+const stepWarn = unsupported ? ` ${unsupported} step${unsupported===1?'':'s'} across your queries need Full mode and will show an error in Express.` : '';
 const bodyStart = n ? `Switch to ${targetLabel}? The file will reload and all ${n} step${n===1?'':'s'} will re-run against the new engine.` : `Switch to ${targetLabel}? The file will reload.`;
 const ok = await confirmDialog(`${bodyStart}${stepWarn}${sizeWarn}`);
 if (!ok) return;
@@ -7024,7 +7109,7 @@ dataState.secondaryAqTables = {};
 dataState.secondaryFrames = {};
 dataState.rawAqTables = {};
 dataState.rawFrames = {};
-await restoreSecondarySources(savedSecondary.map(s => ({ id:s.id, name:s.name, format:s.format, file:s.file, importOptions:s.importOptions, steps:s.steps })));
+await restoreSecondarySources(savedSecondary.map(s => ({ id:s.id, name:s.name, format:s.format, kind:s.kind, parentId:s.parentId, file:s.file, importOptions:s.importOptions, steps:s.steps, columns:s.columns })));
 dataState.steps = savedSteps;
 uiState.selectedStepIndex = savedSelected;
 await refreshSourceSchema();
@@ -7115,14 +7200,14 @@ uiState.inspector = { forIndex:index, isNew:false, type:step.type, data, checkpo
 renderInspector();
 primeInspectorCheckpoint();
 }
-async function closeInspector(){
+async function closeInspector(refresh = true){
 if (!uiState.inspector) return;
 uiState.inspector = null;
 dataState.inspectorToken++;
 $('#inspector').hidden = true;
 $('#inspector').innerHTML = '';
 await dropAllCheckpoints();
-refreshPreview();
+if (refresh) refreshPreview();
 }
 async function primeInspectorCheckpoint(){
 const insp = uiState.inspector; if (!insp) return;
@@ -7607,14 +7692,14 @@ const box = $('#sourcesPanel');
 if (!box) return;
 box.innerHTML = '';
 if (!dataState.hasSource) return;
-const usedIds = new Set([dataState.mainSteps, ...dataState.secondarySources.map(s=>s.steps || [])].flat().filter(s=>s?.data?.rightSource).map(s=>s.data.rightSource));
+const usedIds = new Set([...dataState.secondarySources.filter(s=>s.kind==='reference').map(s=>s.parentId), ...[dataState.mainSteps, ...dataState.secondarySources.map(s=>s.steps || [])].flat().filter(s=>s?.data?.rightSource).map(s=>s.data.rightSource)]);
 dataState.secondarySources.forEach(s => {
 const unused = !usedIds.has(s.id);
 box.appendChild(el('div',{class:'source-card' + (unused ? ' is-unused' : '')},
 el('div',{class:'source-card-icon'}, htmlIcon('table',12)),
 el('div',{class:'source-card-body'},
 el('div',{class:'source-card-name', title:s.name}, s.name),
-el('div',{class:'source-card-meta'}, s.rowCount!=null ? `${s.rowCount.toLocaleString()} rows` : 'loading…',
+el('div',{class:'source-card-meta'}, s.kind==='reference' ? 'reference query' : s.rowCount!=null ? `${s.rowCount.toLocaleString()} rows` : 'loading…',
 unused ? el('span',{class:'source-card-badge', title:'No step uses this source.'}, 'not currently used') : null),
 ),
 el('button',{class:'source-card-remove', 'aria-label':`Remove ${s.name}`, title:'Remove source', onclick:()=>removeSecondarySource(s.id)}, '×'),
@@ -7675,6 +7760,10 @@ function stableSourceId(name, sheet){
 }
 function applyRecipeSourcesManifest(recipe){
   const manifest = Array.isArray(recipe.sources) ? recipe.sources : [];
+  manifest.filter(s=>s.kind==='reference' && s.parentId && !dataState.secondarySources.some(x=>x.id===s.id)).forEach(s=>{
+    const parent=dataState.secondarySources.find(x=>x.id===s.parentId);
+    dataState.secondarySources.push({id:s.id,kind:'reference',parentId:s.parentId,name:s.name || 'Reference query',format:'reference',file:null,rowCount:parent?.rowCount ?? null,columns:(s.columns || parent?.columns || []).map(c=>typeof c==='string'?{name:c,type:'VARCHAR'}:c),importOptions:{},steps:Array.isArray(s.steps)?s.steps:[]});
+  });
   const allSteps = [...(recipe.steps || []), ...(Array.isArray(recipe.sources) ? recipe.sources.flatMap(s=>s.steps || []) : [])];
   const needed = [...new Set([...manifest.map(s=>s.id), ...allSteps.filter(s=>s?.data?.rightSource).map(s=>s.data.rightSource)])];
   const attached = new Set(dataState.secondarySources.map(s=>s.id));
@@ -7738,8 +7827,9 @@ dataState.missingSources = dataState.missingSources.filter(m=>m.id!==id && m.id!
 if (slot && slot.id !== id){
   const all = [dataState.mainSteps, ...dataState.secondarySources.map(s=>s.steps || [])];
   all.forEach(steps=>steps.forEach(step=>{ if (step.data?.rightSource===slot.id) step.data.rightSource=id; }));
-}
-renderSourcesPanel();
+  dataState.secondarySources.forEach(source=>{ if (source.kind==='reference' && source.parentId===slot.id) source.parentId=id; });
+  }
+  renderSourcesPanel();
 refreshPreview();
 renderQueriesPanel();
 toast(`${file.name} ready to join. Choose its query to clean it before joining.`);
@@ -7755,6 +7845,7 @@ toast(`Couldn’t load ${file.name}: ${e.message}`);
 async function restoreSecondarySources(list){
 if (!Array.isArray(list) || !list.length) return;
 for (const s of list){
+if (s.kind==='reference') continue;
 if (!s.file){ dataState.missingSources.push({id:s.id,name:s.name,format:s.format,importOptions:s.importOptions || {},steps:s.steps || []}); continue; }
 try {
 const fileSpec = await buildSecondarySourceFileSpec(s.file, s.format, s.importOptions || {});
@@ -7767,18 +7858,27 @@ dataState.missingSources.push({id:s.id,name:s.name,format:s.format,importOptions
 toast(`Couldn’t restore joined source “${s.name}” — ${e.message}`);
 }
 }
+for (const s of list.filter(x=>x.kind==='reference')){
+  const parent=dataState.secondarySources.find(x=>x.id===s.parentId);
+  const columns=(s.columns || parent?.columns || []).map(c=>typeof c==='string'?{name:c,type:'VARCHAR'}:c);
+  dataState.secondarySources.push({id:s.id,kind:'reference',parentId:s.parentId,name:s.name,format:'reference',file:null,rowCount:parent?.rowCount ?? null,columns,importOptions:{},steps:Array.isArray(s.steps)?s.steps:[]});
+}
 renderSourcesPanel();
+renderQueriesPanel();
 }
 async function removeSecondarySource(id){
 const entry = dataState.secondarySources.find(s=>s.id===id);
 if (!entry) return;
+const referencedBy = dataState.secondarySources.filter(s=>s.kind==='reference' && s.parentId===id);
+if (referencedBy.length){ toast(`Remove ${referencedBy.map(s=>s.name).join(', ')} before removing this query.`); return; }
 const usedBy = [dataState.mainSteps, ...dataState.secondarySources.map(s=>s.steps || [])].flat().filter(s=>s.data?.rightSource===id);
-if (usedBy.length){
-const ok = await confirmDialog(`${usedBy.length} join step${usedBy.length===1?' uses':'s use'} this source. Remove it anyway? That step will show an error.`);
-if (!ok) return;
-}
-try { await dataState.engine.dropSecondarySource(id); } catch(e){}
-if (usedBy.length) dataState.missingSources.push({id,name:entry.name,format:entry.format,importOptions:entry.importOptions,steps:entry.steps || []});
+  if (usedBy.length){
+  if (entry.kind==='reference'){ toast('Remove joins and appends using this reference before deleting it.'); return; }
+  const ok = await confirmDialog(`${usedBy.length} join step${usedBy.length===1?' uses':'s use'} this source. Remove it anyway? That step will show an error.`);
+  if (!ok) return;
+  }
+  try { await dataState.engine.dropSecondarySource(id); } catch(e){}
+  if (usedBy.length) dataState.missingSources.push({id,name:entry.name,format:entry.format,importOptions:entry.importOptions,steps:entry.steps || []});
 dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
 if (dataState.activeQueryId === id){
   dataState.activeQueryId = 'main';
@@ -7948,6 +8048,7 @@ const entry = ModalStack.push(pop, { light:true, trigger:anchorEl, onClose:()=>p
 positionPopoverWithinViewport(pop, rect);
 const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length-1;
 const baseUpto = existingIdx>=0 ? existingIdx-1 : upto;
+await queryBuildPromise.catch(()=>{});
 const plan = await dataState.engine.compile(dataState.steps, baseUpto);
 async function loadList(search){
 try {
@@ -8525,6 +8626,7 @@ return Number(duck.rows[0][i]) === max ? null : `first row unit_price ${duck.row
 { label:'export — Arquero CSV export is non-empty', kind:'aq-csv-export', steps:[] },
 { label:'export — DuckDB Parquet export has bytes', kind:'parquet-export', steps:[] },
 { label:'export — DuckDB JSONL export parses', kind:'jsonl-export', steps:[] },
+{ label:'count — independent plans return exact rows', kind:'count', steps:[{type:'filter',data:{column:'status',mode:'operator',operator:'=',value:'Shipped'}}] },
 { label:'export — at selected step returns prefix row count', kind:'export-prefix', exportAtStep:0, steps:[
 { type:'filter', data:{ column:'status', mode:'values', values:{ include:true, list:['Completed','Shipped'] } } },
 { type:'group_by', data:{ groupColumns:['region'], aggregations:[{fn:'sum',column:'quantity',name:'total_qty'},{fn:'count',column:'',name:'n'}] } },
@@ -8793,21 +8895,39 @@ list.appendChild(row);
 panel.appendChild(list);
 }
 
+async function runSelfTestCountCheck(def, duckEngine, expressEngine){
+  const duckPlan=await duckEngine.compile(def.steps,def.steps.length-1);
+  const expressPlan=await expressEngine.compile(def.steps,def.steps.length-1);
+  if (duckPlan.error || expressPlan.error) return {label:def.label,pass:false,reason:duckPlan.error || expressPlan.error};
+  const [duckCount,expressCount]=await Promise.all([duckEngine.count(duckPlan),expressEngine.count(expressPlan)]);
+  return Number.isInteger(duckCount) && duckCount>0 && duckCount===expressCount
+    ? {label:def.label,pass:true}
+    : {label:def.label,pass:false,reason:`Expected matching exact counts, received ${duckCount} and ${expressCount}`};
+}
 async function runSelfTestQueryGraphCheck(def, duckEngine, expressEngine){
   await selftestEnsureJoinSource(duckEngine,expressEngine);
   const source = dataState.secondarySources.find(s=>s.id==='selftest_region');
   const previous = dataState.engine;
   source.steps = [{type:'filter',data:{column:'manager',mode:'operator',operator:'=',value:'Alice'}}];
+  const reference={id:'selftest_reference',kind:'reference',parentId:source.id,name:'selftest_reference',format:'reference',file:null,columns:[],steps:[{type:'rename_column',data:{column:'manager',newName:'owner'}}]};
+  dataState.secondarySources.push(reference);
+  const referenceJoin=[{type:'join',data:{rightSource:reference.id,leftKey:'region',rightKey:'region',joinType:'left'}}];
   try {
     for (const engine of [duckEngine,expressEngine]){
       dataState.engine = engine;
-      await rebuildQuerySources(['selftest_region']);
+      await rebuildQuerySources([reference.id]);
       const plan = await engine.compile(def.steps,0);
       if (plan.error) return {label:def.label,pass:false,reason:`${engine.id}: ${plan.error}`};
       const result = await engine.preview(plan,200);
       const ri=result.columns.findIndex(c=>c.name==='region'), mi=result.columns.findIndex(c=>c.name==='manager');
       if (ri<0 || mi<0 || !result.rows.some(r=>r[ri]==='North' && r[mi]==='Alice') || result.rows.some(r=>r[ri]!=='North' && r[mi]!=null))
         return {label:def.label,pass:false,reason:`${engine.id}: lookup filtering did not flow into the join`};
+      const refPlan=await engine.compile(referenceJoin,0);
+      if (refPlan.error) return {label:def.label,pass:false,reason:`${engine.id}: reference join: ${refPlan.error}`};
+      const refResult=await engine.preview(refPlan,200);
+      const owner=refResult.columns.findIndex(c=>c.name==='owner'), region=refResult.columns.findIndex(c=>c.name==='region');
+      if (owner<0 || region<0 || !refResult.rows.some(r=>r[region]==='North' && r[owner]==='Alice') || refResult.rows.some(r=>r[region]!=='North' && r[owner]!=null))
+        return {label:def.label,pass:false,reason:`${engine.id}: reference did not follow the filtered parent with its own rename`};
     }
     dataState.engine=duckEngine;
     await selectQuery(source.id);
@@ -8815,12 +8935,28 @@ async function runSelfTestQueryGraphCheck(def, duckEngine, expressEngine){
     const sourcePreview=await duckEngine.preview(sourcePlan,200);
     if (sourcePlan.error || sourcePreview.rows.length!==1 || sourcePreview.rows[0][sourcePreview.columns.findIndex(c=>c.name==='manager')]!=='Alice')
       return {label:def.label,pass:false,reason:'Selecting a source query did not show its cleaned rows'};
+    const checkpoint = await duckEngine.checkpoint(source.steps,1);
+    const draftPlan = await duckEngine.compile([{type:'select_columns',data:{columns:['manager']}}],0,checkpoint);
+    const draftPreview = draftPlan.error ? null : await duckEngine.preview(draftPlan,200);
+    if (draftPlan.error || draftPreview.rows.length!==1 || draftPreview.columns[0]?.name!=='manager')
+      return {label:def.label,pass:false,reason:'Source query inspector preview ignored its checkpoint'};
+    await selectQuery(reference.id);
+    const selectedPlan=await duckEngine.compile(dataState.steps,dataState.steps.length-1);
+    const selectedPreview=selectedPlan.error ? null : await duckEngine.preview(selectedPlan,200);
+    if (selectedPlan.error || selectedPreview.rows.length!==1 || selectedPreview.columns.some(c=>c.name==='manager') || !selectedPreview.columns.some(c=>c.name==='owner'))
+      return {label:def.label,pass:false,reason:'Selecting a reference query did not show its independent result'};
+    source.steps=[{type:'join',data:{rightSource:reference.id,leftKey:'region',rightKey:'region',joinType:'left'}}];
+    let rejectedCycle=false;
+    try { await rebuildQuerySources([reference.id]); } catch(e){ rejectedCycle=/cycle/i.test(e.message); }
+    if (!rejectedCycle) return {label:def.label,pass:false,reason:'Reference-parent dependency cycle was not rejected'};
+    source.steps=[{type:'filter',data:{column:'manager',mode:'operator',operator:'=',value:'Alice'}}];
     await selectQuery('main');
     return {label:def.label,pass:true};
   } finally {
     dataState.activeQueryId='main';
     dataState.steps=dataState.mainSteps;
     source.steps=[];
+    dataState.secondarySources=dataState.secondarySources.filter(s=>s!==reference);
     dataState.engine=previous;
     await rebuildQuerySources(['selftest_region']);
   }
@@ -8893,6 +9029,8 @@ results[i] = SELFTEST_CASES[i].kind === 'export'
   ? await runSelfTestDuckOnlyCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
   : SELFTEST_CASES[i].kind === 'query-graph'
   ? await runSelfTestQueryGraphCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
+  : SELFTEST_CASES[i].kind === 'count'
+  ? await runSelfTestCountCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
 : await runSelfTestParityCase(SELFTEST_CASES[i], duckEngine, aqEngine);
 } catch(e){
 results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error — ${e.message || e}` };
