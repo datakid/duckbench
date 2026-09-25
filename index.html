@@ -5413,10 +5413,12 @@ function renderQueriesPanel(){
   const items = [{ id:'main', name:dataState.sourceFileName || 'Main', steps:dataState.mainSteps }, ...dataState.secondarySources];
   items.forEach(item => box.appendChild(el('button',{type:'button',class:'query-button' + (dataState.activeQueryId===item.id ? ' is-active' : ''), 'aria-current':dataState.activeQueryId===item.id ? 'page' : null, onclick:()=>selectQuery(item.id)},
     el('span',{},item.name), el('small',{},`${(item.steps||[]).length} steps`))));
-  box.appendChild(el('button',{type:'button',class:'query-button query-reference-btn',disabled:dataState.activeQueryId==='main',title:dataState.activeQueryId==='main'?'Select an attached query first to create a reference.':'Make a new query that follows this query’s cleaned result.',onclick:createQueryReference}, '+ Reference query'));
+  box.appendChild(el('button',{type:'button',class:'query-button query-reference-btn',title:'Make a new query that follows this query’s cleaned result.',onclick:createQueryReference}, '+ Reference query'));
 }
 function createQueryReference(){
-  const parent=dataState.secondarySources.find(s=>s.id===dataState.activeQueryId);
+  const parent=dataState.activeQueryId==='main'
+    ? {id:'main',name:dataState.sourceFileName || 'Main',columns:dataState.currentColumns,rowCount:null}
+    : dataState.secondarySources.find(s=>s.id===dataState.activeQueryId);
   if (!parent) return;
   syncActiveQuerySteps();
   const id=uid('ref_');
@@ -5426,7 +5428,7 @@ function createQueryReference(){
   renderQueriesPanel();
   renderSourcesPanel();
   queueSessionSnapshot();
-  selectQuery(id);
+  return selectQuery(id);
 }
 async function selectQuery(id){
   if (id === dataState.activeQueryId) return;
@@ -6243,6 +6245,7 @@ status.textContent = '';
 let queryBuildPromise = Promise.resolve();
 async function rebuildQuerySources(targetIds){
   const sources = new Map(dataState.secondarySources.map(s=>[s.id,s]));
+  sources.set('main',{id:'main',name:dataState.sourceFileName || 'Main',steps:dataState.mainSteps});
   const visited = new Set(), visiting = new Set();
   async function build(id){
     if (visited.has(id)) return;
@@ -6258,7 +6261,7 @@ async function rebuildQuerySources(targetIds){
       if (!step.disabled && step.data?.rightSource) await build(step.data.rightSource);
     }
     if (dataState.engine.id === 'duckdb'){
-      const compiled = await compilePipeline(source.steps || [], (source.steps || []).length-1, sourceQueryBaseSql(id), true);
+      const compiled = await compilePipeline(source.steps || [], (source.steps || []).length-1, id==='main' ? undefined : sourceQueryBaseSql(id), true);
       if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
       const ordered = `${compiled.sql}${orderBySQL(compiled.orderBy)}${compiled.orderBy && compiled.hasRid ? `, ${q(RID)}` : ''}`;
       const physicalRid = (await getColumns(compiled.sql)).some(c=>c.name===RID);
@@ -6267,17 +6270,18 @@ async function rebuildQuerySources(targetIds){
       source.columns = compiled.columns;
     } else if (dataState.engine.id === 'arquero'){
       const aq = await loadAq();
-      const raw = sourceQueryBaseAq(id);
+      const raw = id==='main' ? dataState.aqSourceTable : sourceQueryBaseAq(id);
       if (!raw) throw new Error(`Source ${source.name} is not loaded.`);
-      const base = raw.derive({ [RID]:()=>aq.op.row_number() }).relocate(RID, { before:raw.columnNames()[0] });
+      const base = id==='main' ? raw : raw.derive({ [RID]:()=>aq.op.row_number() }).relocate(RID, { before:raw.columnNames()[0] });
       const compiled = await compileAq(source.steps || [], (source.steps || []).length-1, base);
       if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
       dataState.secondaryAqTables[id] = compiled.table.columnNames().includes(RID) ? compiled.table.select(aq.not(RID)) : compiled.table;
       source.columns = compiled.columns;
     } else {
-      const raw = sourceQueryBaseFrame(id);
+      const raw = id==='main' ? dataState.frameSourceFrame : sourceQueryBaseFrame(id);
       if (!raw) throw new Error(`Source ${source.name} is not loaded.`);
-      const compiled = await compileFrame(source.steps || [], (source.steps || []).length-1, FR.derive(raw, { [RID]:(row,i)=>i+1 }), dataState.secondaryFrames);
+      const base = id==='main' ? raw : FR.derive(raw, { [RID]:(row,i)=>i+1 });
+      const compiled = await compileFrame(source.steps || [], (source.steps || []).length-1, base, dataState.secondaryFrames);
       if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
       dataState.secondaryFrames[id] = compiled.frame.names.includes(RID) ? FR.exclude(compiled.frame, [RID]) : compiled.frame;
       source.columns = compiled.columns.filter(c=>c.name!==RID);
@@ -8612,6 +8616,7 @@ return Number(duck.rows[0][i]) === max ? null : `first row unit_price ${duck.row
 { label:'duck-only — date part', kind:'duck-only', steps:[{ type:'date_part', data:{column:'order_date',part:'year',name:'Year'} }] },
 { label:'duck-only — round number', kind:'duck-only', steps:[{ type:'round_number', data:{column:'unit_price',decimals:1,mode:'round'} }] },
 { label:'query graph — clean lookup before join', kind:'query-graph', join:true, steps:[{type:'join',data:{rightSource:'selftest_region',leftKey:'region',rightKey:'region',joinType:'left'}}] },
+{ label:'query graph — reference the main query', kind:'main-reference' },
 { label:'combo — filter contains literal underscore', steps:[
 { type:'replace_values', data:{ column:'status', scope:'value', find:'Pending', replace:'AB_CD' } },
 { type:'replace_values', data:{ column:'status', scope:'value', find:'Shipped', replace:'ABXCD' } },
@@ -8961,6 +8966,65 @@ async function runSelfTestQueryGraphCheck(def, duckEngine, expressEngine){
     await rebuildQuerySources(['selftest_region']);
   }
 }
+async function runSelfTestMainReferenceCheck(def, duckEngine, expressEngine){
+  const previousEngine=dataState.engine;
+  const previousSteps=dataState.mainSteps;
+  const filter={type:'filter',data:{column:'status',mode:'operator',operator:'=',value:'Shipped'}};
+  const expected=SAMPLE_SALES_CSV.split('\n').slice(1).filter(line=>line.endsWith(',Shipped')).length;
+  let reference;
+  try {
+    dataState.engine=duckEngine;
+    dataState.activeQueryId='main';
+    dataState.mainSteps=[filter];
+    dataState.steps=dataState.mainSteps;
+    await refreshPreview();
+    await createQueryReference();
+    reference=dataState.secondarySources.find(s=>s.kind==='reference' && s.parentId==='main');
+    if (!reference) return {label:def.label,pass:false,reason:'The main query could not create a reference'};
+    reference.steps=[{type:'rename_column',data:{column:'status',newName:'stage'}}];
+    dataState.steps=reference.steps;
+    for (const engine of [duckEngine,expressEngine]){
+      dataState.engine=engine;
+      await rebuildQuerySources([reference.id]);
+      const plan=await engine.compile(reference.steps,0);
+      if (plan.error) return {label:def.label,pass:false,reason:`${engine.id}: ${plan.error}`};
+      const preview=await engine.preview(plan,200);
+      const stage=preview.columns.findIndex(c=>c.name==='stage');
+      if (stage<0 || preview.columns.some(c=>c.name==='status') || preview.rows.length!==expected || preview.rows.some(row=>row[stage]!=='Shipped'))
+        return {label:def.label,pass:false,reason:`${engine.id}: reference did not follow the main query filter and rename`};
+    }
+    dataState.mainSteps=[{type:'group_by',data:{groupColumns:['region'],aggregations:[{fn:'count',column:'',name:'n'}]}}];
+    reference.steps=[];
+    dataState.steps=reference.steps;
+    for (const engine of [duckEngine,expressEngine]){
+      dataState.engine=engine;
+      await rebuildQuerySources([reference.id]);
+      const plan=await engine.compile(reference.steps,-1);
+      if (plan.error) return {label:def.label,pass:false,reason:`${engine.id}: grouped main reference: ${plan.error}`};
+      const preview=await engine.preview(plan,200);
+      if (preview.rows.length!==5 || preview.columns.some(c=>c.name===RID) || !preview.columns.some(c=>c.name==='n'))
+        return {label:def.label,pass:false,reason:`${engine.id}: grouped main reference lost its output schema`};
+    }
+    dataState.mainSteps=[{type:'join',data:{rightSource:reference.id,leftKey:'region',rightKey:'region',joinType:'left'}}];
+    let cycle=false;
+    try { await rebuildQuerySources([reference.id]); } catch(e){ cycle=/cycle/i.test(e.message); }
+    if (!cycle) return {label:def.label,pass:false,reason:'A main-to-reference dependency cycle was not rejected'};
+    return {label:def.label,pass:true};
+  } finally {
+    dataState.activeQueryId='main';
+    dataState.mainSteps=previousSteps;
+    dataState.steps=previousSteps;
+    dataState.engine=previousEngine;
+    if (reference){
+      dataState.secondarySources=dataState.secondarySources.filter(s=>s!==reference);
+      await duckEngine.dropSecondarySource(reference.id);
+      await expressEngine.dropSecondarySource(reference.id);
+    }
+    await duckEngine.dropSecondarySource('main');
+    delete dataState.secondaryAqTables.main;
+    delete dataState.secondaryFrames.main;
+  }
+}
 async function runSelfTestDuckOnlyCheck(def, duckEngine, aqEngine){
   if (def.join) await selftestEnsureJoinSource(duckEngine,aqEngine);
   const plan = await duckEngine.compile(def.steps,def.steps.length-1);
@@ -9029,6 +9093,8 @@ results[i] = SELFTEST_CASES[i].kind === 'export'
   ? await runSelfTestDuckOnlyCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
   : SELFTEST_CASES[i].kind === 'query-graph'
   ? await runSelfTestQueryGraphCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
+  : SELFTEST_CASES[i].kind === 'main-reference'
+  ? await runSelfTestMainReferenceCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
   : SELFTEST_CASES[i].kind === 'count'
   ? await runSelfTestCountCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
 : await runSelfTestParityCase(SELFTEST_CASES[i], duckEngine, aqEngine);
