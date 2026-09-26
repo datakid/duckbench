@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://registry.npmjs.org https://extensions.duckdb.org; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Duckbench: a browser-only data-prep workbench. Clean, reshape, join and export CSV, Excel and Parquet files without uploading them anywhere.">
+<meta name="theme-color" content="#151311" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#FAF8F5" media="(prefers-color-scheme: light)">
+<meta name="color-scheme" content="dark light">
 <title>Duckbench</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImR1Y2tiZW5jaCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTUiIGZpbGw9IiNGRTYxNjQiLz4KICA8ZyBmaWxsPSIjRjJGMkYzIj4KICAgIDxyZWN0IHg9IjgiIHk9IjQyIiB3aWR0aD0iOSIgaGVpZ2h0PSIxMiIgcng9IjQuNSIvPgogICAgPHJlY3QgeD0iMjEiIHk9IjM0IiB3aWR0aD0iOSIgaGVpZ2h0PSIyMCIgcng9IjQuNSIvPgogICAgPHBhdGggZD0iTTM0IDQ5LjUKICAgICAgICAgICAgIFYzMC41CiAgICAgICAgICAgICBBMTAuNSAxMC41IDAgMSAxIDQ4LjQgMTcuNAogICAgICAgICAgICAgTDU2IDE4LjYKICAgICAgICAgICAgIFE1OC42IDIxIDU1LjcgMjMuNgogICAgICAgICAgICAgTDQ3LjYgMjYuMwogICAgICAgICAgICAgQTEwLjUgMTAuNSAwIDAgMSA0MyAzMC41CiAgICAgICAgICAgICBWNDkuNQogICAgICAgICAgICAgQTQuNSA0LjUgMCAwIDEgMzQgNDkuNQogICAgICAgICAgICAgWiIvPgogIDwvZz4KICA8Y2lyY2xlIGN4PSI0MyIgY3k9IjE3IiByPSIzIiBmaWxsPSIjRkU2MTY0Ii8+Cjwvc3ZnPgo=">
 
@@ -715,6 +719,9 @@ td.is-editing input{
 }
 td.cell-flash{animation:cellFlash 0.6s ease;}
 @keyframes cellFlash{0%{background:rgba(var(--verdigris-rgb),0.4);}100%{background:transparent;}}
+.grid-more{display:flex;align-items:center;justify-content:center;gap:10px;padding:12px;font-size:12px;color:var(--grid-ink-dim);position:sticky;left:0;}
+.grid-more .btn-ghost{color:var(--grid-ink);}
+.noscript-box{max-width:520px;margin:15vh auto;padding:24px;border:1px solid var(--line);border-radius:var(--radius-m);background:var(--ink-1);color:var(--paper);font-size:14px;line-height:1.6;}
 .preview-empty{
   padding:60px 20px;text-align:center;color:var(--grid-ink-dim);font-size:13px;
   background:var(--grid-surface);margin:10px 10px 0;border:1px solid var(--grid-line);border-bottom:none;
@@ -1101,6 +1108,7 @@ select option{color:var(--paper);}
 </style>
 </head>
 <body>
+<noscript><div class="noscript-box"><strong>Duckbench needs JavaScript.</strong><br>Everything runs locally in your browser, so please enable JavaScript for this page and reload.</div></noscript>
 <script>
   (function(){
     var saved = localStorage.getItem('duckbench-theme');
@@ -1277,8 +1285,8 @@ select option{color:var(--paper);}
                 <button data-format="json"><span>JSON<small>Array of objects</small></span></button>
                 <button data-format="jsonl"><span>JSONL<small>Newline-delimited JSON</small></span></button>
                 <div class="export-menu-divider"></div>
-                <button data-action="copy-insert"><span>Copy as SQL INSERT<small>First 200 rows, to clipboard</small></span></button>
-                <button data-action="copy-markdown"><span>Copy as Markdown table<small>First 200 rows, to clipboard</small></span></button>
+                <button data-action="copy-insert"><span>Copy as SQL INSERT<small>Previewed rows, to clipboard</small></span></button>
+                <button data-action="copy-markdown"><span>Copy as Markdown table<small>Previewed rows, to clipboard</small></span></button>
                 <div class="export-menu-divider"></div>
                 <button data-action="export-options"><span>Export options…<small>Pick columns, row range, NULL text</small></span></button>
               </div>
@@ -1304,6 +1312,7 @@ select option{color:var(--paper);}
                 <thead><tr></tr></thead>
                 <tbody></tbody>
               </table>
+              <div id="gridMore" class="grid-more" hidden></div>
             </div>
           </div>
           <p id="previewEmpty" class="preview-empty" hidden></p>
@@ -5652,6 +5661,7 @@ async function selectQuery(id){
   resetHistory();
   lastPreview = null;
   lastPreviewColKey = null;
+  resetPreviewLimit();
   renderAll();
   await refreshPreview();
 }
@@ -5710,7 +5720,13 @@ let sessionSaveTimer = null;
 let sessionSaveFailed = false;
 function queueSessionSnapshot(){
 clearTimeout(sessionSaveTimer);
-sessionSaveTimer = setTimeout(saveSessionSnapshot, 500);
+sessionSaveTimer = setTimeout(() => { sessionSaveTimer = null; saveSessionSnapshot(); }, 500);
+}
+function flushSessionSnapshot(){
+if (!sessionSaveTimer) return;
+clearTimeout(sessionSaveTimer);
+sessionSaveTimer = null;
+saveSessionSnapshot();
 }
 let lastSavedSourceFile = null;
 let lastSavedSecondaryFiles = new Map();
@@ -6184,7 +6200,7 @@ return `'${String(v).replace(/'/g,"''")}'`;
 };
 const colList = cols.map(c=>q(c.name)).join(', ');
 const lines = lastPreview.rows.map(row => `INSERT INTO ${q(table)} (${colList}) VALUES (${cols.map((c,i)=>lit(row[i],c.type)).join(', ')});`);
-copyTextToClipboard(lines.join('\n'), `Copied ${lines.length} INSERT statement${lines.length===1?'':'s'}${lastPreview.hasMore?' (first 200 rows only)':''}.`);
+copyTextToClipboard(lines.join('\n'), `Copied ${lines.length} INSERT statement${lines.length===1?'':'s'}${lastPreview.hasMore?` (first ${lastPreview.rows.length.toLocaleString()} rows only)`:''}.`);
 }
 function copyAsMarkdownTable(){
 if (!lastPreview || !lastPreview.rows.length){ toast('Nothing to copy — no data loaded.'); return; }
@@ -6193,7 +6209,7 @@ const mdEsc = s => String(s).replace(/\|/g,'\\|').replace(/\n/g,' ');
 const header = `| ${cols.map(c=>mdEsc(c.name)).join(' | ')} |`;
 const sep = `| ${cols.map(()=>'---').join(' | ')} |`;
 const rows = lastPreview.rows.map(row => `| ${cols.map((c,i)=>mdEsc(formatCellValue(row[i], c.type) ?? '')).join(' | ')} |`);
-copyTextToClipboard([header, sep, ...rows].join('\n'), `Copied a ${lastPreview.rows.length}-row Markdown table${lastPreview.hasMore?' (first 200 rows only)':''}.`);
+copyTextToClipboard([header, sep, ...rows].join('\n'), `Copied a ${lastPreview.rows.length.toLocaleString()}-row Markdown table${lastPreview.hasMore?' (previewed rows only)':''}.`);
 }
 function openExportOptionsDialog(){
 if (!dataState.hasSource || !dataState.currentColumns.length){ toast('Import data first.'); return; }
@@ -6399,6 +6415,30 @@ return v.toLocaleString('en-US');
 if (typeof v === 'boolean') return v ? 'true' : 'false';
 return String(v);
 }
+const PREVIEW_LIMIT_STEPS = [200, 1000, 2000];
+let previewLimit = PREVIEW_LIMIT_STEPS[0];
+function resetPreviewLimit(){ previewLimit = PREVIEW_LIMIT_STEPS[0]; }
+function nextPreviewLimit(){ return PREVIEW_LIMIT_STEPS.find(n => n > previewLimit) || null; }
+async function showMorePreviewRows(){
+const next = nextPreviewLimit();
+if (!next) return;
+previewLimit = next;
+const btn = $('#gridMore button');
+if (btn){ btn.disabled = true; btn.textContent = 'Loading…'; }
+if (uiState.inspector && typeof refreshInspectorPreview === 'function') await refreshInspectorPreview();
+else await refreshPreview();
+}
+function renderGridMore(preview){
+const box = $('#gridMore');
+if (!box) return;
+box.innerHTML = '';
+if (!preview || !preview.hasMore){ box.hidden = true; return; }
+const next = nextPreviewLimit();
+box.hidden = false;
+box.appendChild(el('span',{}, `Showing the first ${preview.rows.length.toLocaleString()} rows.`));
+if (next) box.appendChild(el('button',{class:'btn-ghost btn-small', type:'button', onclick:showMorePreviewRows}, `Show up to ${next.toLocaleString()}`));
+else box.appendChild(el('span',{}, 'Export to get every row.'));
+}
 let _debouncedRefreshPreview = null;
 function debouncedRefreshPreview(){
 if (!_debouncedRefreshPreview) _debouncedRefreshPreview = debounce(() => refreshPreview(), 30);
@@ -6408,7 +6448,7 @@ async function renderDataView({ source, plan, token }){
 const tokenField = source === 'inspector' ? 'inspectorToken' : 'pipelineToken';
 let preview;
 try {
-preview = await dataState.engine.preview(plan, 200);
+preview = await dataState.engine.preview(plan, previewLimit);
 } catch(e){
 if (dataState[tokenField] !== token) return null;
 renderGridError({ error: e.message });
@@ -6420,8 +6460,9 @@ dataState.currentRidIndex = preview.ridIndex;
 dataState.currentPlan = plan;
 dataState.currentPipelineHasRid = plan.hasRid;
 dataState.currentRowCountKnown = false;
-dataState.currentRowCountLowerBound = preview.hasMore ? 200 : preview.rows.length;
+dataState.currentRowCountLowerBound = preview.rows.length;
 renderGrid(preview);
+renderGridMore(preview);
 renderRowCountLabel(preview);
 return preview;
 }
@@ -7217,6 +7258,7 @@ dataState.missingSources = [];
 uiState.selectedStepIndex = null;
 lastPreview = null;
 lastPreviewColKey = null;
+resetPreviewLimit();
 await refreshSourceSchema();
 resetHistory();
 $('#importOptions').hidden = true;
@@ -7324,6 +7366,7 @@ uiState.selectedStepIndex = savedSelected;
 await refreshSourceSchema();
 lastPreview = null;
 lastPreviewColKey = null;
+resetPreviewLimit();
 closeInspector();
 resetHistory();
 renderAll();
@@ -9652,12 +9695,34 @@ if (failedRows.length){
 document.body.dataset.selftestDone = 'true';
 }
 
+function wireLifecycleGuards(){
+let lastErrorToastAt = 0;
+const report = (err) => {
+const msg = (err && (err.message || err.reason?.message)) || String(err || 'Unknown error');
+if (/ResizeObserver loop|Script error\.?$/i.test(msg)) return;
+console.error('[duckbench]', err);
+const now = Date.now();
+if (now - lastErrorToastAt < 4000) return;
+lastErrorToastAt = now;
+toast(`Something went wrong: ${msg.length > 160 ? msg.slice(0,157)+'…' : msg}`);
+};
+window.addEventListener('unhandledrejection', (e) => report(e.reason));
+window.addEventListener('error', (e) => { if (e.error || e.message) report(e.error || e.message); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSessionSnapshot(); });
+window.addEventListener('pagehide', flushSessionSnapshot);
+window.addEventListener('beforeunload', (e) => {
+if (!sessionSaveTimer && !sessionSaveFailed) return;
+flushSessionSnapshot();
+if (sessionSaveFailed && dataState.hasSource){ e.preventDefault(); e.returnValue = ''; }
+});
+}
 async function init(){
 const params = new URLSearchParams(location.search);
 if (params.has('selftest')){
 await runSelfTest(params.get('selftest') || params.get('engine'), params.has('verbose'));
 return;
 }
+wireLifecycleGuards();
 wireStaticUI();
 renderRibbon();
 updateVersionUI();
