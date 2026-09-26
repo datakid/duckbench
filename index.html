@@ -932,6 +932,21 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
   border:1px solid rgba(var(--rust-rgb),0.35);color:var(--rust-text);font-size:12px;
 }
 .inspector-hint{font-size:11px;color:var(--muted);line-height:1.5;}
+select.is-unset{color:var(--muted);}
+select.is-unset.is-missing{border-color:rgba(var(--rust-rgb),0.6) !important;}
+select option{color:var(--paper);}
+.checklist-tools{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
+.join-quick-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+.join-suggest-note{margin-top:-8px;color:var(--verdigris-text);}
+.join-match-report{font-size:12px;line-height:1.5;border-radius:var(--radius-s);padding:0;color:var(--paper-dim);}
+.join-match-report:not(:empty){padding:9px 11px;border:1px solid var(--line-soft);background:var(--ink-2);}
+.join-match-report.is-good{border-color:rgba(var(--verdigris-rgb),0.45);color:var(--verdigris-text);}
+.join-match-report.is-warn{border-color:rgba(var(--brass-rgb),0.45);}
+.join-match-report.is-bad{border-color:rgba(var(--rust-rgb),0.45);color:var(--rust-text);}
+.join-match-report div{margin-top:3px;}
+.join-match-report.is-loading{opacity:0.7;}
+.inspector.is-dragover{outline:2px dashed var(--brass);outline-offset:-4px;}
+.preview-table td, .preview-table th{unicode-bidi:plaintext;}
 .inspector-impact{display:flex;flex-direction:column;gap:6px;padding-top:4px;}
 .impact-row{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--paper-dim);}
 .impact-row strong{font-family:var(--font-mono);color:var(--paper);font-weight:500;}
@@ -2764,6 +2779,8 @@ const TRANSFORMS = {
         ] },
       { key:'value', type:'text', label:'Value', default:'',
         visible: d => d.mode!=='values' && !['is_null','is_not_null'].includes(d.operator) },
+      { key:'loose', type:'toggle', label:'Loose text match (ignore case, spaces & Arabic spelling variants)', default:false,
+        visible: d => d.mode!=='values' && isLooseFilterOp(d.operator) },
       { key:'values', type:'valueset', label:'Values', default:()=>({include:true, list:[]}),
         visible: d => d.mode==='values' },
     ],
@@ -2785,6 +2802,7 @@ const TRANSFORMS = {
         cond = parts.length ? `(${parts.join(d.values.include?' OR ':' AND ')})` : '1=1';
         if (!d.values.include && !hasNull) cond = `(${cond} OR ${col} IS NULL)`;
       } else {
+        if (d.loose && isLooseFilterOp(d.operator)) return `SELECT * FROM (${from}) WHERE ${looseFilterSQL(col, d.operator, d.value)}`;
         const lit = sqlLiteralForColumn(d.value, d.column, ctx.columnsMeta);
         const strCol = `CAST(${col} AS VARCHAR)`;
         const map = {
@@ -2822,6 +2840,7 @@ const TRANSFORMS = {
         }));
       }
       const operator = d.operator;
+      if (d.loose && isLooseFilterOp(operator)) return table.filter(aq.escape(row => looseFilterJS(row[col], operator, d.value)));
       const lit = aqOrderKey(coerceForColumn(d.value, colType));
       const strLit = String(d.value ?? '').toLowerCase();
       return table.filter(aq.escape(row => {
@@ -2881,23 +2900,28 @@ const TRANSFORMS = {
     params:[
       { key:'columns', type:'columns', label:'Match on (leave empty for whole row)', default:()=>[] },
       { key:'orderBy', type:'columnOptional', label:'Keep the row with the lowest', default:'' },
+      { key:'matchMode', type:'enum', label:'Treat as duplicates when', default:'exact', legacy:'exact',
+        options:[{value:'exact',label:'Values are identical'},{value:'loose',label:'Same ignoring case & spaces'},{value:'arabic',label:'Same ignoring case, spaces & Arabic spelling variants'}] },
     ],
     toSQL(d, from, ctx){
       const keyCols = d.columns?.length ? d.columns : ctx.columns.filter(c=>c!==RID);
-      const keyList = colList(keyCols);
+      const keyList = (d.matchMode && d.matchMode !== 'exact') ? keyCols.map(c => joinKeySQL(q(c), dedupeModeFor(c, ctx.columnsMeta, d.matchMode))).join(', ') : colList(keyCols);
       const orderExpr = d.orderBy ? q(d.orderBy) : ctx.orderBy ? orderTermsSQL(ctx.orderBy) : (ctx.hasRid ? q(RID) : keyList);
       const tiebreak = (ctx.hasRid && orderExpr !== q(RID)) ? `, ${q(RID)} ASC` : '';
       const select = ctx.hasRid ? `SELECT * EXCLUDE (${q(RID)})` : `SELECT *`;
       return `${select} FROM (${from}) QUALIFY ROW_NUMBER() OVER (PARTITION BY ${keyList} ORDER BY ${orderExpr}${tiebreak}) = 1`;
     },
-    summary(d){ return d.columns?.length ? `match on ${d.columns.join(', ')}` : 'whole row'; },
+    summary(d){ const mm = d.matchMode && d.matchMode !== 'exact' ? ` (${d.matchMode})` : ''; return (d.columns?.length ? `match on ${d.columns.join(', ')}` : 'whole row') + mm; },
     engines: ['duckdb','arquero'],
     toAq(d, table, ctx){
       const { aq } = ctx;
       const keyCols = d.columns?.length ? d.columns : ctx.columns.filter(c=>c!==RID);
       const orderCol = d.orderBy || (ctx.hasRid ? RID : null);
       let t = (!d.orderBy && ctx.orderBy) ? TRANSFORMS.sort.toAq(ctx.orderBy, table, ctx) : (orderCol ? table.orderby(orderCol) : table);
-      t = t.dedupe(...keyCols);
+      if (d.matchMode && d.matchMode !== 'exact'){
+        const DK = '__dedupe_key', meta = ctx.columnsMeta;
+        t = t.derive({ [DK]: aq.escape(r => dedupeKeyJS(keyCols, r, meta, d.matchMode)) }).dedupe(DK).select(aq.not(DK));
+      } else t = t.dedupe(...keyCols);
       return ctx.hasRid ? t.select(aq.not(RID)) : t;
     },
   },
@@ -3763,8 +3787,17 @@ Object.assign(TRANSFORMS, {
         options:()=>[...dataState.secondarySources.filter(s=>s.id!==dataState.activeQueryId).map(s=>({value:s.id,label:`${s.name}${s.rowCount!=null?` (${s.rowCount.toLocaleString()} rows)`:''}`})),...dataState.missingSources.map(s=>({value:s.id,label:`${s.name || s.id} (not attached)`}))] },
       { key:'leftKey', type:'column', label:'Left key (this table)', default:'' },
       { key:'rightKey', type:'rightColumn', label:'Right key (joined table)', default:'' },
-      { key:'joinType', type:'enum', label:'Join type', default:'inner',
+      { key:'matchMode', type:'enum', label:'Key matching', default:'loose', legacy:'exact',
+        options:[{value:'exact',label:'Exact — values must be identical'},{value:'loose',label:'Loose — ignore case, spaces & number/text type'},{value:'arabic',label:'Loose + Arabic (أ/إ/آ=ا, ة=ه, ى=ي, no tashkeel, ٠-٩)'}] },
+      { key:'extraKeys', type:'repeater', label:'More key pairs (all must match)', default:()=>[], addLabel:'+ Add key pair',
+        fields:[
+          { key:'leftKey', type:'column', label:'Left key' },
+          { key:'rightKey', type:'rightColumn', label:'Right key' },
+        ] },
+      { key:'joinType', type:'enum', label:'Join type', default:'inner', reactive:true,
         options:[{value:'inner',label:'Inner — matching rows only'},{value:'left',label:'Left — keep all rows from this table'},{value:'right',label:'Right — keep all rows from the joined table'},{value:'full',label:'Full — keep all rows from both'},{value:'left_anti',label:'Anti — rows with no match (this table’s columns)'},{value:'left_semi',label:'Semi — rows with a match (this table’s columns)'}] },
+      { key:'bring', type:'rightColumns', label:'Columns to bring (none ticked = all)', default:()=>[], visible:d=>!['left_anti','left_semi'].includes(d.joinType) },
+      { key:'prefix', type:'text', label:'Prefix for joined columns (optional)', default:'', placeholder:'e.g. lookup_', visible:d=>!['left_anti','left_semi'].includes(d.joinType) },
     ],
     validate(d){
       if (!dataState.secondarySources.length && !dataState.missingSources.length) return 'Add a source to join with first — use the Sources panel at the top of the rail.';
@@ -3776,65 +3809,54 @@ Object.assign(TRANSFORMS, {
       if (d.rightSource === dataState.activeQueryId) return 'A query cannot join itself.';
       if (!d.leftKey) return 'Pick the key column from this table.';
       if (!d.rightKey) return 'Pick the key column from the joined table.';
+      const rs = dataState.secondarySources.find(s=>s.id===d.rightSource);
+      if (rs && (rs.columns||[]).length && !rs.columns.some(c=>c.name===d.rightKey)) return `“${d.rightKey}” isn’t a column of ${rs.name} anymore — pick the key again.`;
+      for (const [i,k] of (d.extraKeys||[]).entries()){
+        if (!k.leftKey || !k.rightKey) return `Key pair ${i+2} is incomplete — pick both columns or remove it.`;
+        if (rs && (rs.columns||[]).length && !rs.columns.some(c=>c.name===k.rightKey)) return `“${k.rightKey}” isn’t a column of ${rs.name} anymore.`;
+      }
+      if (rs && (d.bring||[]).length && (rs.columns||[]).length){
+        const missing = d.bring.filter(n=>!rs.columns.some(c=>c.name===n));
+        if (missing.length) return `“${missing[0]}” is no longer in ${rs.name} — untick it.`;
+      }
+      if (d.prefix && /["\u0000]/.test(d.prefix)) return 'The prefix can’t contain quotes.';
       return null;
     },
     toSQL(d, from, ctx){
-      const jt = { inner:'INNER', left:'LEFT', right:'RIGHT', full:'FULL' }[d.joinType] || 'INNER';
       const rt = `src_${d.rightSource}`;
       const rightSrc = dataState.secondarySources.find(s=>s.id===d.rightSource);
       if (!rightSrc) throw new Error('Joined source is no longer available.');
+      const pairs = joinKeyPairs(d, ctx.columnsMeta, rightSrc.columns);
+      const on = joinOnSQL(pairs);
+      const jt = { inner:'INNER', left:'LEFT', right:'RIGHT', full:'FULL' }[d.joinType] || 'INNER';
       if (d.joinType === 'left_anti' || d.joinType === 'left_semi'){
-        return `SELECT l.* FROM (${from}) AS l ${d.joinType === 'left_anti' ? 'ANTI' : 'SEMI'} JOIN ${q(rt)} AS r ON l.${q(d.leftKey)} = r.${q(d.rightKey)}`;
+        return `SELECT l.* FROM (${from}) AS l ${d.joinType === 'left_anti' ? 'ANTI' : 'SEMI'} JOIN ${q(rt)} AS r ON ${on}`;
       }
       const leftNames = ctx.hasRid ? [RID, ...ctx.columns] : ctx.columns;
       const rightNames = (rightSrc.columns||[]).map(c=>c.name);
-      const leftSet = new Set(leftNames);
-      const sameKey = d.leftKey === d.rightKey;
-      const leftSelect = leftNames.map(n => (sameKey && n===d.leftKey) ? `COALESCE(l.${q(n)}, r.${q(n)}) AS ${q(n)}` : `l.${q(n)}`);
-      const usedNames = new Set(leftNames);
-      const rightSelect = rightNames.filter(n => !(sameKey && n===d.rightKey)).map(n => {
-        const base = leftSet.has(n) ? `${n}_right` : n;
-        const outName = dedupeName(base, Array.from(usedNames));
-        usedNames.add(outName);
-        return outName === n ? `r.${q(n)}` : `r.${q(n)} AS ${q(outName)}`;
-      });
-      return `SELECT ${[...leftSelect, ...rightSelect].join(', ')} FROM (${from}) AS l ${jt} JOIN ${q(rt)} AS r ON l.${q(d.leftKey)} = r.${q(d.rightKey)}`;
+      const plan = joinPlan(d, leftNames, rightNames, pairs);
+      const leftSelect = leftNames.map(n => plan.coalesce.has(n) ? `COALESCE(l.${q(n)}, r.${q(plan.coalesce.get(n))}) AS ${q(n)}` : `l.${q(n)}`);
+      const rightSelect = plan.rightOut.map(o => o.out === o.src ? `r.${q(o.src)}` : `r.${q(o.src)} AS ${q(o.out)}`);
+      return `SELECT ${[...leftSelect, ...rightSelect].join(', ')} FROM (${from}) AS l ${jt} JOIN ${q(rt)} AS r ON ${on}`;
     },
     summary(d){
       const src = dataState.secondarySources.find(s=>s.id===d.rightSource);
-      return src ? `with ${src.name} on ${d.leftKey||'?'} = ${d.rightKey||'?'} (${d.joinType})` : 'not configured';
+      const mm = d.matchMode && d.matchMode !== 'exact' ? `, ${d.matchMode}` : '';
+      const extra = (d.extraKeys||[]).filter(k=>k.leftKey&&k.rightKey).map(k=>` & ${k.leftKey} = ${k.rightKey}`).join('');
+      return src ? `with ${src.name} on ${d.leftKey||'?'} = ${d.rightKey||'?'}${extra} (${d.joinType}${mm})` : 'not configured';
     },
     engines: ['duckdb','arquero'],
     toAq(d, table, ctx){
       const { aq } = ctx;
       const right0 = dataState.secondaryAqTables[d.rightSource];
       if (!right0) throw new Error('Joined source not loaded.');
-      const LK = '__jk_left', RK = '__jk_right', RV = '__jk_rval';
-      let ln = 0, rn = 0;
-      const keyOf = (v, side) => v == null ? `\u0000${side}${side === 'L' ? ln++ : rn++}` : (v instanceof Date ? v.getTime() : v);
-      const left = table.derive({ [LK]: aq.escape(r => keyOf(r[d.leftKey], 'L')) });
-      const rightKeyed = right0.derive({ [RK]: aq.escape(r => keyOf(r[d.rightKey], 'R')), [RV]: aq.escape(r => r[d.rightKey]) });
-      if (d.joinType === 'left_anti' || d.joinType === 'left_semi'){
-        const rOnly = rightKeyed.select(RK);
-        const out = d.joinType === 'left_anti' ? left.antijoin(rOnly, [LK, RK]) : left.semijoin(rOnly, [LK, RK]);
-        return out.select(aq.not(LK));
-      }
-      const leftNames = table.columnNames();
-      const leftSet = new Set(leftNames);
-      const sameKey = d.leftKey === d.rightKey;
-      const used = new Set(leftNames);
-      const renameMap = {};
-      right0.columnNames().forEach(n => {
-        if (sameKey && n === d.rightKey) return;
-        const base = leftSet.has(n) ? `${n}_right` : n;
-        const out = dedupeName(base, Array.from(used));
-        used.add(out); renameMap[n] = out;
-      });
-      const right = rightKeyed.select({ ...renameMap, [RK]: RK, [RV]: RV });
-      const opts = { left: d.joinType === 'left' || d.joinType === 'full', right: d.joinType === 'right' || d.joinType === 'full' };
-      let out = left.join(right, [LK, RK], undefined, opts);
-      if (sameKey) out = out.derive({ [d.leftKey]: aq.escape(r => r[d.leftKey] == null ? r[RV] : r[d.leftKey]) });
-      return out.select(aq.not(LK, RK, RV));
+      const L = { names: table.columnNames(), nrows: table.numRows(), cols: {} };
+      L.names.forEach(n => { L.cols[n] = table.array(n); });
+      const R = { names: right0.columnNames(), nrows: right0.numRows(), cols: {} };
+      R.names.forEach(n => { R.cols[n] = right0.array(n); });
+      const res = jsJoin(d, L, R, ctx.columnsMeta, columnsMetaOf(right0));
+      const colsObj = {}; res.names.forEach(n => { colsObj[n] = Array.from(res.cols[n]); });
+      return aq.table(colsObj, res.names);
     },
   },
   unpivot: {
@@ -3987,6 +4009,158 @@ Object.assign(TRANSFORMS, {
   },
 });
 
+/* Join-key normalization. SQL and JS versions MUST stay in lock-step (self-test: 'join — loose/arabic'). */
+const AR_DIGITS = '\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9';
+function joinKeySQL(expr, mode){
+  if (!mode || mode === 'exact') return expr;
+  if (mode === 'text') return `CAST(${expr} AS VARCHAR)`;
+  let s = `lower(CAST(${expr} AS VARCHAR))`;
+  if (mode === 'arabic'){
+    s = `regexp_replace(${s}, '[\u0623\u0625\u0622\u0671]', '\u0627', 'g')`;
+    s = `replace(replace(${s}, '\u0629', '\u0647'), '\u0649', '\u064A')`;
+    s = `regexp_replace(${s}, '[\u064B-\u0652\u0640]', '', 'g')`;
+    for (let i = 0; i < AR_DIGITS.length; i++) s = `replace(${s}, '${AR_DIGITS[i]}', '${i % 10}')`;
+  }
+  s = `regexp_replace(${s}, '[\t\n\f\r ]+', ' ', 'g')`;
+  return `NULLIF(trim(${s}), '')`;
+}
+function joinKeyJS(v, mode){
+  if (!mode || mode === 'exact') return v;
+  if (v == null) return null;
+  if (mode === 'text') return v instanceof Date ? aqCellText(v) : String(v);
+  let s = (v instanceof Date ? aqCellText(v) : String(v)).toLowerCase();
+  if (mode === 'arabic'){
+    s = s.replace(/[\u0623\u0625\u0622\u0671]/g, '\u0627').replace(/\u0629/g, '\u0647').replace(/\u0649/g, '\u064A').replace(/[\u064B-\u0652\u0640]/g, '');
+    s = s.replace(/[\u0660-\u0669\u06F0-\u06F9]/g, ch => String(AR_DIGITS.indexOf(ch) % 10));
+  }
+  s = s.replace(/[\t\n\f\r ]+/g, ' ').replace(/^ +| +$/g, '');
+  return s === '' ? null : s;
+}
+/* Decimal/date/bool keys render differently as text in DuckDB vs JS, so they always compare exactly. */
+function isLooseUnsafeType(t){ return /^(DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC|DATE|TIME|TIMESTAMP|INTERVAL|BOOL)/i.test(t || ''); }
+function metaType(meta, name){ return ((meta || []).find(c => c.name === name) || {}).type; }
+/* All key pairs of a join step (primary + complete extra pairs), each with its effective match mode. */
+function joinKeyPairs(d, leftMeta, rightMeta){
+  const raw = [{ l:d.leftKey, r:d.rightKey }, ...(Array.isArray(d.extraKeys) ? d.extraKeys : []).filter(k => k && k.leftKey && k.rightKey).map(k => ({ l:k.leftKey, r:k.rightKey }))];
+  const mode = d.matchMode || 'exact';
+  const fam = t => !t ? '?' : isNumericType(t) ? 'num' : isDateType(t) ? 'date' : isBoolType(t) ? 'bool' : 'text';
+  return raw.map(p => {
+    const lt = metaType(leftMeta, p.l), rt = metaType(rightMeta, p.r);
+    const mismatch = lt && rt && fam(lt) !== fam(rt);
+    if (mode === 'exact') return { ...p, mode: mismatch ? 'text' : 'exact' };
+    return { ...p, mode: (isLooseUnsafeType(lt) || isLooseUnsafeType(rt)) ? (mismatch ? 'text' : 'exact') : mode };
+  });
+}
+function joinOnSQL(pairs){
+  return pairs.map(p => `${joinKeySQL(`l.${q(p.l)}`, p.mode)} = ${joinKeySQL(`r.${q(p.r)}`, p.mode)}`).join(' AND ');
+}
+function joinKeyPart(v){ return v instanceof Date ? 'd:' + v.getTime() : (typeof v)[0] + ':' + String(v); }
+/* Composite JS key; null when any part is null (SQL '=' never matches NULL). */
+function joinCompositeKey(vals, pairs){
+  let out = '';
+  for (let i = 0; i < pairs.length; i++){
+    const v = joinKeyJS(vals[i], pairs[i].mode);
+    if (v == null) return null;
+    out += (i ? '\u0001' : '') + joinKeyPart(v);
+  }
+  return out;
+}
+/* Output-column plan shared by SQL / Arquero / Frame so all engines produce identical schemas. */
+function joinPlan(d, leftNames, rightNames, pairs){
+  const coalesce = new Map();
+  pairs.forEach(p => { if (p.l === p.r) coalesce.set(p.l, p.r); });
+  const skipRight = new Set(coalesce.values());
+  const bring = Array.isArray(d.bring) && d.bring.length ? new Set(d.bring) : null;
+  const prefix = String(d.prefix || '');
+  const leftSet = new Set(leftNames), used = new Set(leftNames);
+  const rightOut = [];
+  rightNames.forEach(n => {
+    if (skipRight.has(n) || (bring && !bring.has(n))) return;
+    const base0 = prefix + n;
+    const base = leftSet.has(base0) ? `${base0}_right` : base0;
+    const out = dedupeName(base, Array.from(used));
+    used.add(out);
+    rightOut.push({ src:n, out });
+  });
+  return { coalesce, rightOut };
+}
+/* Loose text matching for Filter / Remove duplicates (always the Arabic-aware normalizer for filter). */
+function isLooseFilterOp(op){ return ['=','!=','contains','not_contains','starts_with','ends_with'].includes(op); }
+function looseFilterSQL(col, op, value){
+  const lhs = joinKeySQL(col, 'arabic'), lit = esc(joinKeyJS(value, 'arabic') ?? '');
+  switch (op){
+    case '=': return `${lhs} = ${lit}`;
+    case '!=': return `(${lhs} IS NULL OR ${lhs} != ${lit})`;
+    case 'contains': return `contains(${lhs}, ${lit})`;
+    case 'not_contains': return `(${lhs} IS NULL OR NOT contains(${lhs}, ${lit}))`;
+    case 'starts_with': return `starts_with(${lhs}, ${lit})`;
+    case 'ends_with': return `suffix(${lhs}, ${lit})`;
+  }
+  return '1=1';
+}
+function looseFilterJS(raw, op, value){
+  const v = joinKeyJS(raw, 'arabic'), lit = joinKeyJS(value, 'arabic') ?? '';
+  switch (op){
+    case '=': return v === lit;
+    case '!=': return v == null || v !== lit;
+    case 'contains': return v != null && v.includes(lit);
+    case 'not_contains': return v == null || !v.includes(lit);
+    case 'starts_with': return v != null && v.startsWith(lit);
+    case 'ends_with': return v != null && v.endsWith(lit);
+  }
+  return true;
+}
+function dedupeModeFor(col, meta, mode){ return (!mode || mode === 'exact' || isLooseUnsafeType(metaType(meta, col))) ? 'exact' : mode; }
+function dedupeKeyJS(cols, row, meta, mode){
+  return cols.map(c => { const v = joinKeyJS(row[c], dedupeModeFor(c, meta, mode)); return v == null ? '\u0000' : joinKeyPart(v); }).join('\u0001');
+}
+/* Shared JS join for Arquero + Frame. L/R = { names, cols:{name:array}, nrows }. Mirrors TRANSFORMS.join.toSQL. */
+function jsJoin(d, L, R, leftMeta, rightMeta){
+  const pairs = joinKeyPairs(d, leftMeta, rightMeta);
+  const keyAt = (side, i, names) => joinCompositeKey(names.map(n => side.cols[n][i]), pairs);
+  const lk = pairs.map(p=>p.l), rk = pairs.map(p=>p.r);
+  for (const n of lk) if (!L.cols[n]) throw new Error(`Column “${n}” not found in this table.`);
+  for (const n of rk) if (!R.cols[n]) throw new Error(`Column “${n}” not found in the joined table.`);
+  const index = new Map();
+  for (let j = 0; j < R.nrows; j++){
+    const k = keyAt(R, j, rk);
+    if (k == null) continue;
+    let a = index.get(k); if (!a){ a = []; index.set(k, a); } a.push(j);
+  }
+  if (d.joinType === 'left_anti' || d.joinType === 'left_semi'){
+    const want = d.joinType === 'left_semi';
+    const cols = {}; L.names.forEach(n => cols[n] = []);
+    let total = 0;
+    for (let i = 0; i < L.nrows; i++){
+      const k = keyAt(L, i, lk);
+      if ((k != null && index.has(k)) === want){ L.names.forEach(n => cols[n].push(L.cols[n][i])); total++; }
+    }
+    return { names: L.names.slice(), cols, nrows: total };
+  }
+  const plan = joinPlan(d, L.names, R.names, pairs);
+  const names = [...L.names, ...plan.rightOut.map(o=>o.out)];
+  const cols = {}; names.forEach(n => cols[n] = []);
+  const keepL = d.joinType === 'left' || d.joinType === 'full';
+  const keepR = d.joinType === 'right' || d.joinType === 'full';
+  const matchedR = new Uint8Array(R.nrows);
+  let total = 0;
+  const push = (i, j) => {
+    for (const n of L.names){
+      const lv = i == null ? null : L.cols[n][i];
+      cols[n].push(plan.coalesce.has(n) && lv == null ? (j == null ? null : R.cols[plan.coalesce.get(n)][j]) : (lv ?? null));
+    }
+    for (const o of plan.rightOut) cols[o.out].push(j == null ? null : (R.cols[o.src][j] ?? null));
+    total++;
+  };
+  for (let i = 0; i < L.nrows; i++){
+    const k = keyAt(L, i, lk);
+    const m = k == null ? null : index.get(k);
+    if (m && m.length){ for (const j of m){ push(i, j); matchedR[j] = 1; } }
+    else if (keepL) push(i, null);
+  }
+  if (keepR) for (let j = 0; j < R.nrows; j++) if (!matchedR[j]) push(null, j);
+  return { names, cols, nrows: total };
+}
 function makeFrame(names, cols, index, nrows){
   const n = nrows != null ? nrows : (index ? index.length : (names.length ? (cols[names[0]] ? cols[names[0]].length : 0) : 0));
   return { names: names.slice(), cols, index: index || null, nrows: n };
@@ -4265,7 +4439,7 @@ FR.join = function(left, right, leftKey, rightKey, opts){
   outNames.forEach(n => outCols[n] = []);
   const rightIndex = new Map();
   for (let j = 0; j < rd.nrows; j++){
-    const kv = rd.cols[rightKey][j];
+    const kv = opts.keyFn ? opts.keyFn(rd.cols[rightKey][j]) : rd.cols[rightKey][j];
     if (kv == null) continue;
     const key = kv instanceof Date ? kv.getTime() : kv;
     if (!rightIndex.has(key)) rightIndex.set(key, []);
@@ -4287,7 +4461,7 @@ FR.join = function(left, right, leftKey, rightKey, opts){
     total++;
   };
   for (let i = 0; i < ld.nrows; i++){
-    const kv = ld.cols[leftKey][i];
+    const kv = opts.keyFn ? opts.keyFn(ld.cols[leftKey][i]) : ld.cols[leftKey][i];
     const key = kv == null ? null : (kv instanceof Date ? kv.getTime() : kv);
     const matches = key == null ? [] : (rightIndex.get(key) || []);
     if (matches.length){
@@ -4514,6 +4688,7 @@ const FRAME_IMPLS = {
       });
     }
     const operator = d.operator;
+    if (d.loose && isLooseFilterOp(operator)) return FR.filter(f, row => looseFilterJS(row[col], operator, d.value));
     const lit = aqOrderKey(coerceForColumn(d.value, colType));
     const strLit = String(d.value ?? '').toLowerCase();
     return FR.filter(f, row => {
@@ -4543,7 +4718,10 @@ const FRAME_IMPLS = {
     const keyCols = d.columns?.length ? d.columns : ctx.columns.filter(c => c !== RID);
     const orderCol = d.orderBy || (ctx.hasRid ? RID : null);
     let t = (!d.orderBy && ctx.orderBy) ? FR.sort(f, [{ name:ctx.orderBy.column, desc:ctx.orderBy.direction==='desc', nullsLast:!!ctx.orderBy.nullsLast }, ...(ctx.hasRid ? [{ name:RID, desc:false, nullsLast:true }] : [])]) : (orderCol ? FR.sort(f, [{ name: orderCol, desc: false, nullsLast: true }]) : f);
-    t = FR.dedupe(t, keyCols);
+    if (d.matchMode && d.matchMode !== 'exact'){
+      const DK = '__dedupe_key', meta = ctx.columnsMeta;
+      t = FR.exclude(FR.dedupe(FR.derive(t, { [DK]: row => dedupeKeyJS(keyCols, row, meta, d.matchMode) }), [DK]), [DK]);
+    } else t = FR.dedupe(t, keyCols);
     return ctx.hasRid ? FR.exclude(t, [RID]) : t;
   },
   remove_blank_rows(d, f, ctx){
@@ -4759,22 +4937,9 @@ const FRAME_IMPLS = {
   join(d, f, ctx){
     const right = (ctx.secondaryFrames || {})[d.rightSource];
     if (!right) throw new Error('Joined source not loaded.');
-    if (d.joinType === 'left_anti' || d.joinType === 'left_semi'){
-      const ld = materializeFrame(f), rd = materializeFrame(right);
-      const keys = new Set();
-      for (let j=0;j<rd.nrows;j++){ const v=rd.cols[d.rightKey][j]; if (v!=null) keys.add(v instanceof Date ? v.getTime() : v); }
-      const want = d.joinType === 'left_semi';
-      const outCols = {}; ld.names.forEach(n=>outCols[n]=[]);
-      let total = 0;
-      for (let i=0;i<ld.nrows;i++){
-        const v = ld.cols[d.leftKey][i];
-        const hit = v!=null && keys.has(v instanceof Date ? v.getTime() : v);
-        if (hit===want){ ld.names.forEach(n=>outCols[n].push(ld.cols[n][i])); total++; }
-      }
-      return makeFrame(ld.names,outCols,null,total);
-    }
-    const opts = { left: d.joinType === 'left' || d.joinType === 'full', right: d.joinType === 'right' || d.joinType === 'full' };
-    return FR.join(f, right, d.leftKey, d.rightKey, opts);
+    const ld = materializeFrame(f), rd = materializeFrame(right);
+    const res = jsJoin(d, ld, rd, ctx.columnsMeta, frameColumnsMeta(rd));
+    return makeFrame(res.names, res.cols, null, res.nrows);
   },
   unpivot(d, f){
     return FR.fold(f, d.columns, d.nameColumn, d.valueColumn);
@@ -7230,6 +7395,7 @@ switchPane('preview');
 $('#columnProfile').hidden = true;
 dataState.inspectorToken++;
 uiState.inspector = { forIndex:null, isNew:true, type, data:draft, checkpoint:null, error:null, failNote:null };
+normalizeDraft(uiState.inspector);
 renderInspector();
 primeInspectorCheckpoint();
 }
@@ -7241,6 +7407,7 @@ const step = dataState.steps[index];
 const data = JSON.parse(JSON.stringify(step.data));
 delete data.__resolved;
 uiState.inspector = { forIndex:index, isNew:false, type:step.type, data, checkpoint:null, error:null, failNote:null };
+normalizeDraft(uiState.inspector);
 renderInspector();
 primeInspectorCheckpoint();
 }
@@ -7257,15 +7424,72 @@ async function primeInspectorCheckpoint(){
 const insp = uiState.inspector; if (!insp) return;
 try { await queryBuildPromise; } catch(e){}
 insp.insertPosition = insp.isNew ? (uiState.selectedStepIndex!==null ? uiState.selectedStepIndex+1 : dataState.steps.length) : insp.forIndex;
-try { insp.checkpoint = await dataState.engine.checkpoint(dataState.steps, insp.insertPosition); }
+insp.checkpointFailed = false;
+try {
+  if (insp.type === 'join' || insp.type === 'append') await ensureJoinSourcesFresh();
+  insp.checkpoint = await dataState.engine.checkpoint(dataState.steps, insp.insertPosition);
+}
 catch(e){
 if (uiState.inspector !== insp) return;
-insp.checkpoint = null; insp.error = e.message; renderInspectorError();
+insp.checkpoint = null; insp.checkpointFailed = true; insp.error = `Couldn’t read the columns at this point: ${e.message}`;
+renderInspector();
 return;
 }
 if (uiState.inspector !== insp) return;
+normalizeDraft(insp);
 renderInspector();
+if (insp.type === 'join') suggestJoinKeysByValues(insp);
 await refreshInspectorPreview();
+}
+/* When no column names match, score column pairs by overlap of (normalized) distinct values. */
+async function suggestJoinKeysByValues(insp){
+  const d = insp.data;
+  if (d.leftKey || d.rightKey || dataState.engine.id !== 'duckdb' || !insp.checkpoint) return;
+  const src = dataState.secondarySources.find(s=>s.id===d.rightSource);
+  if (!src || !(src.columns||[]).length) return;
+  const usable = c => !isLooseUnsafeType(c.type) && !/^(LIST|STRUCT|MAP|BLOB|UNION)/i.test(c.type||'') && c.name !== RID;
+  const L = insp.checkpoint.columns.filter(usable).slice(0, 30), R = src.columns.filter(usable).slice(0, 30);
+  if (!L.length || !R.length) return;
+  const from = checkpointFrom(insp.checkpoint);
+  const side = (cols, tbl) => cols.map((c,i)=>`(SELECT ${i} AS c, k FROM (SELECT DISTINCT ${joinKeySQL(q(c.name),'arabic')} AS k FROM ${tbl} LIMIT 2000) WHERE k IS NOT NULL)`).join(' UNION ALL ');
+  insp.suggesting = true; rerenderInspectorForm();
+  try {
+    const row = await queryOneRaw(`WITH lv AS (${side(L, from)}), rv AS (${side(R, q('src_'+src.id))})
+      SELECT lv.c AS lc, rv.c AS rc, count(*) AS n FROM lv JOIN rv ON lv.k = rv.k GROUP BY 1,2 ORDER BY n DESC LIMIT 1`);
+    if (uiState.inspector !== insp || d.leftKey || d.rightKey) return;
+    if (row && Number(row.n) >= 2){
+      d.leftKey = L[Number(row.lc)].name; d.rightKey = R[Number(row.rc)].name;
+      insp.suggestedKeys = true;
+      insp.error = inspectorValidation(insp);
+    }
+  } catch(e){ /* suggestion is best-effort */ }
+  finally {
+    if (uiState.inspector === insp){ insp.suggesting = false; rerenderInspectorForm(); if (d.leftKey && d.rightKey) debouncedInspectorPreview(); }
+  }
+}
+/* Rebuild reference/cleaned queries so the right-hand column list reflects their CURRENT steps. */
+async function ensureJoinSourcesFresh(){
+  const ids = dataState.secondarySources.filter(s=>s.id!==dataState.activeQueryId).map(s=>s.id);
+  if (!ids.length) return;
+  const run = async () => { for (const id of ids){ try { await rebuildQuerySources([id]); } catch(e){ /* a broken/cyclic query must not block this inspector */ } } };
+  queryBuildPromise = queryBuildPromise.catch(()=>{}).then(run);
+  try { await queryBuildPromise; } catch(e){}
+}
+function inspectorValidation(insp){
+  if (!insp || !insp.checkpoint) return null;
+  const t = TRANSFORMS[insp.type];
+  try { return t.validate ? t.validate(insp.data, inspectorDraftCtx(insp)) : null; } catch(e){ return e.message; }
+}
+function syncInspectorCommitState(){
+  const insp = uiState.inspector; if (!insp) return;
+  const btn = $('#inspectorCommitBtn'); if (!btn) return;
+  const t = TRANSFORMS[insp.type];
+  const engineIncompatible = dataState.engine.id !== 'duckdb' && !t.engines?.includes(dataState.engine.id);
+  const err = inspectorValidation(insp);
+  const blocked = !insp.checkpoint || engineIncompatible || !!err;
+  btn.disabled = blocked;
+  btn.title = !insp.checkpoint ? (insp.checkpointFailed ? 'Column info failed to load — press Retry' : 'Waiting on column info…') : engineIncompatible ? 'Needs Full engine' : (err || 'Ctrl+Enter');
+  $$('#inspector select.is-unset').forEach(s => s.classList.toggle('is-missing', !!err));
 }
 let _debouncedInspectorPreview = null;
 function debouncedInspectorPreview(){
@@ -7283,6 +7507,8 @@ const err = t.validate ? t.validate(insp.data, ctx) : null;
 insp.error = err;
 renderInspectorError();
 renderInspectorIdentityWarning();
+syncInspectorCommitState();
+if (insp.type === 'join') refreshJoinMatchReport(insp);
 if (err) return;
 let plan, data = insp.data;
 try {
@@ -7384,12 +7610,26 @@ retryBox.appendChild(el('br'));
 retryBox.appendChild(el('button',{class:'btn-solid btn-small', style:'margin-top:8px;', onclick:()=>switchToFullAndRetry(()=>{ if (insp.isNew) openInspectorForAdd(insp.type, insp.data); else openInspectorForEdit(insp.forIndex); })}, 'Switch to Full and retry'));
 body.appendChild(retryBox);
 } else {
+if (insp.checkpointFailed){
+body.appendChild(el('button',{class:'btn-solid btn-small', onclick:()=>{ insp.error=null; insp.checkpointFailed=false; renderInspector(); primeInspectorCheckpoint(); }}, 'Retry loading columns'));
+}
+if (insp.type === 'join') body.appendChild(renderJoinQuickBar(insp));
 (t.params||[]).forEach(p => {
 const field = renderField(p, insp.data, insp.checkpoint, (opts={}) => {
-if (opts.rerender) rerenderInspectorForm();
+if (p.key === 'leftKey' || p.key === 'rightKey') insp.suggestedKeys = false;
+if (p.key === 'rightSource' && insp.type === 'join'){ insp.data.rightKey = ''; insp.data.bring = []; (insp.data.extraKeys||[]).forEach(k=>{ k.rightKey=''; }); if (!insp.data.leftKey || insp.suggestedKeys) insp.data.leftKey = ''; }
+const before = JSON.stringify(insp.data);
+normalizeDraft(insp);
+if (opts.rerender || before !== JSON.stringify(insp.data)) rerenderInspectorForm();
+insp.error = inspectorValidation(insp); renderInspectorError(); syncInspectorCommitState();
 debouncedInspectorPreview();
 });
 if (field) body.appendChild(field);
+if (p.key === 'rightKey' && insp.type === 'join'){
+  if (insp.suggesting) body.appendChild(el('div',{class:'inspector-hint'}, 'Looking for columns whose values match…'));
+  if (insp.suggestedKeys && insp.data.leftKey && insp.data.rightKey) body.appendChild(el('div',{class:'inspector-hint join-suggest-note'}, `Keys suggested automatically (${insp.data.leftKey} ↔ ${insp.data.rightKey}) — change them if needed.`));
+  body.appendChild(el('div',{id:'joinMatchReport', class:'join-match-report', 'aria-live':'polite'}));
+}
 });
 if (insp.type === 'change_type' || insp.type === 'replace_values') body.appendChild(failBox);
 if (!insp.isNew && insp.checkpoint){
@@ -7404,12 +7644,64 @@ const engineIncompatible = dataState.engine.id !== 'duckdb' && !t.engines?.inclu
 const notReady = !insp.checkpoint || engineIncompatible;
 panel.appendChild(el('div',{class:'inspector-foot'},
 el('button',{class:'btn-ghost', onclick:closeInspector}, 'Cancel'),
-el('button',{class:'btn-solid', onclick:commitInspector, disabled: notReady||null, title: notReady?(engineIncompatible?'Needs Full engine':'Waiting on column info…'):null}, insp.isNew?'Add step':'Save changes'),
+el('button',{id:'inspectorCommitBtn', class:'btn-solid', onclick:commitInspector, disabled: notReady||null}, insp.isNew?'Add step':'Save changes'),
 ));
+if (insp.checkpoint && !insp.error) insp.error = inspectorValidation(insp);
 renderInspectorError();
 renderInspectorFailNote();
 renderInspectorIdentityWarning();
+syncInspectorCommitState();
+if (insp.type === 'join') refreshJoinMatchReport(insp);
 }
+/* ---------- Join helpers: quick attach + live match report ---------- */
+function renderJoinQuickBar(insp){
+  const bar = el('div',{class:'join-quick-bar'});
+  const n = dataState.secondarySources.filter(s=>s.id!==dataState.activeQueryId).length;
+  bar.appendChild(el('button',{class:'btn-ghost btn-small', type:'button', onclick:()=>{ pendingMissingSourceId=null; pendingJoinAttach=true; $('#secondarySourceInput').click(); }}, n ? '+ Attach another file' : '+ Attach a file to join with'));
+  bar.appendChild(el('span',{class:'inspector-hint'}, n ? 'or drop a file anywhere on this panel' : 'You can also drop a CSV / Excel / Parquet file here.'));
+  return bar;
+}
+let joinReportToken = 0;
+const refreshJoinMatchReport = debounce(async (insp) => {
+  const box = $('#joinMatchReport');
+  if (!box || uiState.inspector !== insp) return;
+  const d = insp.data;
+  const src = dataState.secondarySources.find(s=>s.id===d.rightSource);
+  if (!insp.checkpoint || !src || !d.leftKey || !d.rightKey || dataState.engine.id !== 'duckdb'){
+    box.textContent = (insp.checkpoint && src && d.leftKey && d.rightKey && dataState.engine.id !== 'duckdb') ? 'Match report needs the Full engine.' : '';
+    box.className = 'join-match-report'; return;
+  }
+  const my = ++joinReportToken;
+  box.className = 'join-match-report is-loading'; box.textContent = 'Checking matches…';
+  const from = checkpointFrom(insp.checkpoint);
+  const pairs = joinKeyPairs(d, insp.checkpoint.columns, src.columns);
+  const on = joinOnSQL(pairs);
+  const exactOn = pairs.map(p => `CAST(l.${q(p.l)} AS VARCHAR) = CAST(r.${q(p.r)} AS VARCHAR)`).join(' AND ');
+  const rkList = pairs.map(p => joinKeySQL(q(p.r), p.mode));
+  const R = q('src_'+src.id);
+  const loose = pairs.some(p => p.mode !== 'exact');
+  try {
+    const row = await queryOneRaw(`SELECT
+      (SELECT count(*) FROM ${from} AS l) AS left_rows,
+      (SELECT count(*) FROM ${from} AS l SEMI JOIN ${R} AS r ON ${on}) AS matched,
+      (SELECT count(*) FROM (SELECT ${rkList.map((_,i)=>`k${i}`).join(', ')} FROM (SELECT ${rkList.map((k,i)=>`${k} AS k${i}`).join(', ')} FROM ${R}) WHERE ${rkList.map((_,i)=>`k${i} IS NOT NULL`).join(' AND ')} GROUP BY ALL HAVING count(*) > 1)) AS dup_keys,
+      ${loose ? `(SELECT count(*) FROM ${from} AS l SEMI JOIN ${R} AS r ON ${exactOn})` : 'NULL'} AS exact_matched`);
+    if (my !== joinReportToken || uiState.inspector !== insp) return;
+    const num = v => v == null ? null : Number(v);
+    const total = num(row.left_rows), matched = num(row.matched), dups = num(row.dup_keys), exact = num(row.exact_matched);
+    const pct = total ? Math.round(matched * 100 / total) : 0;
+    box.innerHTML = '';
+    box.className = 'join-match-report ' + (matched === 0 ? 'is-bad' : pct < 50 ? 'is-warn' : 'is-good');
+    box.appendChild(el('strong',{}, `${matched.toLocaleString()} of ${total.toLocaleString()} rows match (${pct}%)`));
+    if (exact != null && matched > exact) box.appendChild(el('div',{}, `Loose matching found ${(matched-exact).toLocaleString()} extra matches that exact matching would miss.`));
+    if (dups > 0) box.appendChild(el('div',{}, `⚠ ${dups.toLocaleString()} key${dups===1?'':'s'} repeat in ${src.name}, so matching rows will be multiplied.`));
+    if (matched === 0) box.appendChild(el('div',{}, d.matchMode === 'arabic' ? 'Nothing matches — check that these are really the same kind of key.' : 'Nothing matches — try “Loose + Arabic” matching, or pick other keys.'));
+  } catch(e){
+    if (my !== joinReportToken) return;
+    box.className = 'join-match-report is-bad'; box.textContent = `Couldn’t check matches: ${e.message}`;
+  }
+}, 250);
+let pendingJoinAttach = false;
 function rerenderInspectorForm(){
 const panel = $('#inspector');
 const active = panel.contains(document.activeElement) ? document.activeElement : null;
@@ -7474,7 +7766,8 @@ box.appendChild(el('div',{class:'inspector-hint'}, `Couldn’t compute impact: $
 }
 async function commitInspector(){
 const insp = uiState.inspector;
-if (!insp) return;
+if (!insp || !insp.checkpoint) return;
+normalizeDraft(insp);
 const t = TRANSFORMS[insp.type];
 if (t.resolve && !insp.data.__resolved && dataState.engine.id === 'duckdb'){
 try {
@@ -7564,6 +7857,86 @@ el('div',{class:'formula-assist-bar'}, colSel, opSel, fnSel),
 doc,
 );
 }
+/* ---------- Dropdown integrity: what a <select> shows must always equal what the draft stores ---------- */
+function renderSelect({ id, key, cls, ariaLabel, options, value, placeholder, disabled, onPick }){
+  const has = value !== '' && value != null && options.some(o => o.value === value);
+  const sel = el('select',{ id: id||null, class: cls||null, 'data-field-key': key, 'aria-label': ariaLabel||null, disabled: disabled?true:null });
+  if (!has) sel.appendChild(el('option',{ value:'', disabled:true, selected:true }, placeholder || 'Choose…'));
+  options.forEach(o => sel.appendChild(el('option',{ value:o.value, selected: (has && o.value === value) ? true : null }, o.label)));
+  if (!has) sel.classList.add('is-unset');
+  sel.addEventListener('change', e => onPick(e.target.value));
+  return sel;
+}
+function selectOptionsFor(p, data, checkpoint){
+  if (p.type === 'column') return checkpoint ? checkpoint.columns.map(c=>c.name) : null;
+  if (p.type === 'columnOptional') return checkpoint ? ['', ...checkpoint.columns.map(c=>c.name)] : null;
+  if (p.type === 'rightColumn'){
+    const src = dataState.secondarySources.find(s=>s.id===data.rightSource);
+    return src && (src.columns||[]).length ? src.columns.map(c=>c.name) : null;
+  }
+  if (p.type === 'enum'){
+    const o = typeof p.options === 'function' ? p.options(data) : p.options;
+    return (o||[]).map(x=>x.value);
+  }
+  return undefined;
+}
+function suggestJoinKeys(d, checkpoint){
+  const src = dataState.secondarySources.find(s=>s.id===d.rightSource);
+  if (!src || !checkpoint || !(src.columns||[]).length) return false;
+  const L = checkpoint.columns.map(c=>c.name), R = src.columns.map(c=>c.name);
+  const norm = s => String(s).trim().toLowerCase();
+  if (d.leftKey && !d.rightKey){ const m = R.find(r=>norm(r)===norm(d.leftKey)); if (m){ d.rightKey = m; return true; } return false; }
+  if (!d.leftKey && d.rightKey){ const m = L.find(l=>norm(l)===norm(d.rightKey)); if (m){ d.leftKey = m; return true; } return false; }
+  if (d.leftKey || d.rightKey) return false;
+  const rmap = new Map(R.map(r=>[norm(r), r]));
+  const cands = L.filter(l=>rmap.has(norm(l)));
+  if (!cands.length) return false;
+  const idLike = n => /(^|[_\s-])(id|key|code|no|number|رقم|كود|الرقم)($|[_\s-])/i.test(n) ? 0 : 1;
+  cands.sort((a,b)=>idLike(a)-idLike(b));
+  d.leftKey = cands[0]; d.rightKey = rmap.get(norm(cands[0]));
+  return true;
+}
+/* Repairs a draft so every select-type value is valid or '' (placeholder). Auto-picks the only option. */
+function normalizeDraft(insp){
+  const t = TRANSFORMS[insp.type], data = insp.data, checkpoint = insp.checkpoint;
+  if (!t || !data) return false;
+  const cols = checkpoint ? checkpoint.columns.map(c=>c.name) : [];
+  const ctx = { columns: cols, firstColumn: cols[0]||null, hasRid: !!checkpoint?.hasRid, q, esc, lit: sqlLiteral };
+  for (const p of (t.params||[])){
+    if (p.visible && !p.visible(data)) continue;
+    const opts = selectOptionsFor(p, data, checkpoint);
+    if (opts == null) continue;
+    if (!insp.isNew && p.legacy !== undefined && data[p.key] === undefined){ data[p.key] = p.legacy; continue; }
+    const v = data[p.key];
+    if ((v === '' && p.type === 'columnOptional') || (v !== '' && v != null && opts.includes(v))) continue;
+    const pickable = p.key === 'rightSource' ? opts.filter(id=>dataState.secondarySources.some(s=>s.id===id)) : opts.filter(x=>x!=='');
+    let next = '';
+    const def = typeof p.default === 'function' ? p.default({}, ctx) : p.default;
+    const columnLike = p.type === 'column' || p.type === 'rightColumn';
+    if (!(columnLike && !insp.isNew)){
+      if (def !== '' && def != null && opts.includes(def)) next = def;
+      else if (pickable.length === 1) next = pickable[0];
+    }
+    data[p.key] = next;
+  }
+  for (const p of (t.params||[])){
+    if (p.type !== 'repeater' || !Array.isArray(data[p.key])) continue;
+    data[p.key].forEach(row => (p.fields||[]).forEach(f => {
+      if (f.type === 'column' && checkpoint && row[f.key] && !cols.includes(row[f.key])) row[f.key] = '';
+      if (f.type === 'rightColumn'){
+        const rs = dataState.secondarySources.find(s=>s.id===data.rightSource);
+        if (rs && (rs.columns||[]).length && row[f.key] && !rs.columns.some(c=>c.name===row[f.key])) row[f.key] = '';
+        if (f.key === 'rightKey' && !row.rightKey && row.leftKey && rs){ const m = (rs.columns||[]).find(c=>c.name.trim().toLowerCase()===row.leftKey.trim().toLowerCase()); if (m) row.rightKey = m.name; }
+      }
+      if (f.type === 'enum'){
+        const o = (typeof f.options === 'function' ? f.options(row) : f.options).map(x=>x.value);
+        if (!o.includes(row[f.key])) row[f.key] = o[0] ?? '';
+      }
+    }));
+  }
+  if (insp.type === 'join' && suggestJoinKeys(data, checkpoint)) insp.suggestedKeys = true;
+  return true;
+}
 function renderField(p, data, checkpoint, onChange){
 if (p.visible && !p.visible(data)) return null;
 const resolving = !checkpoint;
@@ -7578,8 +7951,7 @@ return el('div',{class:'field'}, lbl, control);
 const fire = () => onChange({ rerender: !!p.reactive });
 if (p.type === 'column'){
 if (resolving) return wrap(el('div',{class:'field-skeleton', 'data-field-key':p.key}));
-const sel = el('select',{ id:fieldId, 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.target.value; fire(); } },
-...cols.map(c=>el('option',{value:c.name, selected: data[p.key]===c.name?true:null}, c.name)));
+const sel = renderSelect({ id:fieldId, key:p.key, options: cols.map(c=>({value:c.name, label:c.name})), value: data[p.key], placeholder: cols.length ? 'Choose a column…' : 'No columns available', onPick: v => { data[p.key]=v; fire(); } });
 return wrap(sel, fieldId);
 }
 if (p.type === 'columnOptional'){
@@ -7591,12 +7963,29 @@ return wrap(sel, fieldId);
 }
 if (p.type === 'rightColumn'){
 const src = dataState.secondarySources.find(s=>s.id===data.rightSource);
-const rightCols = src ? src.columns : [];
-if (!src) return wrap(el('div',{class:'inspector-hint'}, 'Pick a source first.'));
-const sel = el('select',{ id:fieldId, 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.target.value; fire(); } },
-el('option',{value:''}, 'Choose…'),
-...rightCols.map(c=>el('option',{value:c.name, selected: data[p.key]===c.name?true:null}, c.name)));
+const rightCols = src ? (src.columns||[]) : [];
+if (!src) return wrap(el('div',{class:'inspector-hint'}, data.rightSource ? 'That source isn’t attached yet.' : 'Pick a source first.'));
+if (!rightCols.length) return wrap(el('div',{class:'field-skeleton', 'data-field-key':p.key, title:'Loading columns…'}));
+const sel = renderSelect({ id:fieldId, key:p.key, options: rightCols.map(c=>({value:c.name, label:c.name})), value: data[p.key], placeholder:'Choose a column…', onPick: v => { data[p.key]=v; fire(); } });
 return wrap(sel, fieldId);
+}
+if (p.type === 'rightColumns'){
+const src = dataState.secondarySources.find(s=>s.id===data.rightSource);
+if (!src) return null;
+const rcols = src.columns || [];
+if (!rcols.length) return wrap(el('div',{class:'field-skeleton', style:'height:76px;'}));
+const box = el('div',{class:'checkbox-list', role:'group', 'aria-label':label});
+const chosen = new Set(data[p.key]||[]);
+const tools = el('div',{class:'checklist-tools'},
+  el('button',{type:'button', class:'btn-ghost btn-small', onclick:()=>{ data[p.key]=[]; fire(); rerenderInspectorForm(); }}, 'All'),
+  el('button',{type:'button', class:'btn-ghost btn-small', onclick:()=>{ const keys=new Set([data.rightKey, ...(data.extraKeys||[]).map(k=>k.rightKey)].filter(Boolean)); const pick=rcols.map(c=>c.name).filter(n=>!keys.has(n)).slice(0,1); data[p.key]=pick.length?pick:rcols.slice(0,1).map(c=>c.name); fire(); rerenderInspectorForm(); }}, 'Only one'),
+  el('span',{class:'inspector-hint'}, chosen.size ? `${chosen.size} of ${rcols.length} selected` : `all ${rcols.length} columns`));
+rcols.forEach(c => {
+  const cb = el('input',{type:'checkbox', checked: chosen.has(c.name)?true:null});
+  cb.addEventListener('change', () => { const s = new Set(data[p.key]||[]); if (cb.checked) s.add(c.name); else s.delete(c.name); data[p.key] = rcols.map(x=>x.name).filter(n=>s.has(n)); fire(); });
+  box.appendChild(el('label',{class:'checkbox-row'}, cb, c.name));
+});
+return wrap(el('div',{}, tools, box));
 }
 if (p.type === 'columns'){
 if (resolving) return wrap(el('div',{class:'field-skeleton', style:'height:76px;', 'data-field-key':p.key}));
@@ -7626,8 +8015,7 @@ return field;
 }
 if (p.type === 'enum'){
 const opts = typeof p.options === 'function' ? p.options(data) : p.options;
-const sel = el('select',{ id:fieldId, 'data-field-key':p.key, onchange:e=>{ data[p.key]=e.target.value; fire(); } },
-...opts.map(o=>el('option',{value:o.value, selected:data[p.key]===o.value?true:null}, o.label)));
+const sel = renderSelect({ id:fieldId, key:p.key, options: opts||[], value: data[p.key], placeholder: (opts||[]).length ? 'Choose…' : 'Nothing to choose yet', onPick: v => { data[p.key]=v; fire(); } });
 return wrap(sel, fieldId);
 }
 if (p.type === 'toggle'){
@@ -7686,13 +8074,13 @@ const fireField = () => onChange({ rerender: !!f.reactive });
 const subLabel = (typeof f.label === 'function' ? f.label(row) : f.label) || f.key;
 if (f.type === 'enum'){
 const opts = typeof f.options==='function' ? f.options(row) : f.options;
-const sel = el('select',{class:'rep-field', 'aria-label':subLabel, 'data-field-key':fieldKey, onchange:e=>{ row[f.key]=e.target.value; fireField(); }},
-...opts.map(o=>el('option',{value:o.value, selected:row[f.key]===o.value?true:null}, o.label)));
-rowEl.appendChild(sel);
+rowEl.appendChild(renderSelect({ cls:'rep-field', key:fieldKey, ariaLabel:subLabel, options:opts||[], value:row[f.key], onPick: v => { row[f.key]=v; fireField(); } }));
+} else if (f.type === 'rightColumn'){
+const rsrc = dataState.secondarySources.find(s=>s.id===data.rightSource);
+const rc = rsrc ? (rsrc.columns||[]) : [];
+rowEl.appendChild(renderSelect({ cls:'rep-field', key:fieldKey, ariaLabel:subLabel, disabled:!rc.length, options: rc.map(c=>({value:c.name, label:c.name})), value:row[f.key], placeholder: rc.length ? 'Right column…' : 'Pick a source first', onPick: v => { row[f.key]=v; fireField(); } }));
 } else if (f.type === 'column'){
-const sel = el('select',{class:'rep-field', 'aria-label':subLabel, 'data-field-key':fieldKey, disabled: resolving?true:null, onchange:e=>{ row[f.key]=e.target.value; fireField(); }},
-el('option',{value:''}, resolving?'Resolving…':'—'), ...cols.map(c=>el('option',{value:c.name, selected:row[f.key]===c.name?true:null}, c.name)));
-rowEl.appendChild(sel);
+rowEl.appendChild(renderSelect({ cls:'rep-field', key:fieldKey, ariaLabel:subLabel, disabled:resolving, options: cols.map(c=>({value:c.name, label:c.name})), value:row[f.key], placeholder: resolving ? 'Resolving…' : 'Column…', onPick: v => { row[f.key]=v; fireField(); } }));
 } else {
 const inp = el('input',{class:'rep-field', 'aria-label':subLabel, 'data-field-key':fieldKey, type:'text', placeholder:f.placeholder||'', value:row[f.key]??''});
 inp.addEventListener('input', ()=>{ row[f.key]=inp.value; fireField(); });
@@ -7709,7 +8097,7 @@ box.appendChild(rowsBox);
 box.appendChild(el('button',{class:'btn-ghost btn-small', style:'margin-top:6px;', onclick:()=>{
 const blank = {}; (p.fields||[]).forEach(f=>blank[f.key]=f.type==='enum'?(typeof f.options==='function'?f.options({})[0]?.value:f.options[0]?.value):'');
 rows.push(blank); data[p.key]=rows; onChange(); drawRows();
-}}, '+ Add calculation'));
+}}, p.addLabel || '+ Add calculation'));
 return box;
 }
 return null;
@@ -7878,9 +8266,16 @@ refreshPreview();
 renderQueriesPanel();
 toast(`${file.name} ready to join. Choose its query to clean it before joining.`);
 queueSessionSnapshot();
+const ji = uiState.inspector;
+if (ji && (ji.type === 'join' || ji.type === 'append') && (pendingJoinAttach || !ji.data.rightSource)){
+  ji.data.rightSource = id; ji.data.rightKey = ''; if (ji.suggestedKeys) ji.data.leftKey = '';
+  normalizeDraft(ji); ji.error = inspectorValidation(ji); renderInspector(); debouncedInspectorPreview();
+}
+pendingJoinAttach = false;
 } catch(e){
 dataState.secondarySources = dataState.secondarySources.filter(s=>s.id!==id);
 if (existing) dataState.secondarySources.push(existing);
+pendingJoinAttach = false;
 renderSourcesPanel();
 renderQueriesPanel();
 toast(`Couldn’t load ${file.name}: ${e.message}`);
@@ -8249,6 +8644,7 @@ pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>run('trim_clean'
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInspectorForAdd('change_case', buildDefaultDraft('change_case',{columns:[colName]})); }}, htmlIcon('case'),'Change case…'));
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInspectorForAdd('replace_values', buildDefaultDraft('replace_values',{column:colName})); }}, htmlIcon('replace'),'Replace values…'));
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInspectorForAdd('split_column', buildDefaultDraft('split_column',{column:colName})); }}, htmlIcon('split'),'Split column…'));
+pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openInspectorForAdd('join', buildDefaultDraft('join',{leftKey:colName})); }}, htmlIcon('merge'),'Join on this column…'));
 pop.appendChild(el('div',{class:'ctx-menu-divider'}));
 pop.appendChild(el('button',{class:'ctx-menu-item', onclick:()=>{ ModalStack.pop(entry); openColumnProfile(colName); }}, htmlIcon('trending-up'), 'Column profile'));
 pop.appendChild(el('div',{class:'ctx-menu-divider'}));
@@ -8517,8 +8913,19 @@ handleFileSelected(files[0]);
 if (files.length > 1) toast(`Only used ${files[0].name} — add the other files as join sources from the Sources panel after import.`);
 });
 const sourcesPanelEl = $('#sourcesPanel');
-window.addEventListener('dragover', e => { if (!dropZone.contains(e.target) && !sourcesPanelEl.contains(e.target)){ e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; } });
-window.addEventListener('drop', e => { if (!dropZone.contains(e.target) && !sourcesPanelEl.contains(e.target)) e.preventDefault(); });
+const inspectorEl = $('#inspector');
+const inJoinInspector = (t) => inspectorEl.contains(t) && uiState.inspector && ['join','append'].includes(uiState.inspector.type) && dataState.hasSource;
+window.addEventListener('dragover', e => { if (!dropZone.contains(e.target) && !sourcesPanelEl.contains(e.target) && !inJoinInspector(e.target)){ e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; } });
+window.addEventListener('drop', e => { if (!dropZone.contains(e.target) && !sourcesPanelEl.contains(e.target) && !inJoinInspector(e.target)) e.preventDefault(); });
+inspectorEl.addEventListener('dragover', e => { if (inJoinInspector(e.target)){ e.preventDefault(); inspectorEl.classList.add('is-dragover'); } });
+inspectorEl.addEventListener('dragleave', e => { if (!inspectorEl.contains(e.relatedTarget)) inspectorEl.classList.remove('is-dragover'); });
+inspectorEl.addEventListener('drop', async e => {
+  inspectorEl.classList.remove('is-dragover');
+  if (!inJoinInspector(e.target)) return;
+  e.preventDefault();
+  const f = (e.dataTransfer && e.dataTransfer.files || [])[0];
+  if (f){ pendingJoinAttach = true; await handleSecondarySourceFile(f); }
+});
 sourcesPanelEl.addEventListener('dragover', e => { if (dataState.hasSource){ e.preventDefault(); sourcesPanelEl.classList.add('is-dragover'); } });
 sourcesPanelEl.addEventListener('dragleave', () => sourcesPanelEl.classList.remove('is-dragover'));
 sourcesPanelEl.addEventListener('drop', async e => {
@@ -8542,6 +8949,13 @@ if (mod && e.key.toLowerCase()==='k' && !isTypingTarget()){ e.preventDefault(); 
 if (mod && e.key.toLowerCase()==='z' && !e.shiftKey && !isTypingTarget()){ e.preventDefault(); undo(); return; }
 if (mod && (e.key.toLowerCase()==='y' || (e.key.toLowerCase()==='z' && e.shiftKey)) && !isTypingTarget()){ e.preventDefault(); redo(); return; }
 if (mod && e.key.toLowerCase()==='s' && dataState.hasSource){ e.preventDefault(); saveRecipe(); return; }
+if (mod && e.key === 'Enter' && uiState.inspector && !ModalStack.top()){
+  const btn = $('#inspectorCommitBtn');
+  if (btn && !btn.disabled){ e.preventDefault(); commitInspector(); }
+  else if (btn){ e.preventDefault(); const u = $('#inspector select.is-unset'); if (u) u.focus(); toast(uiState.inspector.error || btn.title); }
+  return;
+}
+if (e.key === 'Escape' && uiState.inspector && !ModalStack.top() && !e.defaultPrevented && !(document.activeElement && (document.activeElement.isContentEditable || (document.activeElement.closest && document.activeElement.closest('.is-editing'))))){ e.preventDefault(); closeInspector(); return; }
 if (e.key === 'F2' && !mod && !isTypingTarget() && !ModalStack.top() && dataState.hasSource && uiState.selectedStepIndex !== null){
   const node = document.querySelectorAll('.steps-list .step-title')[uiState.selectedStepIndex];
   if (node){ e.preventDefault(); startRenameStep(uiState.selectedStepIndex, node); }
@@ -8671,6 +9085,24 @@ return Number(duck.rows[0][i]) === max ? null : `first row unit_price ${duck.row
 { label:'join — full', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'full' } }] },
 { label:'join — anti', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left_anti' } }] },
 { label:'join — semi', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left_semi' } }] },
+{ label:'join — loose matching (parity)', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left', matchMode:'loose' } }] },
+{ label:'join — arabic matching anti (parity)', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', joinType:'left_anti', matchMode:'arabic' } }] },
+{ label:'join key normalizer — SQL and JS agree', kind:'norm-parity' },
+{ label:'join — multi-key + bring + prefix (parity)', join:true, steps:[
+{ type:'join', data:{ rightSource:'selftest_region', leftKey:'region', rightKey:'region', extraKeys:[{leftKey:'status', rightKey:'status'}], joinType:'left', matchMode:'loose', bring:['manager'], prefix:'r_' } },
+] },
+{ label:'join — full, different key names, prefix (parity)', join:true, steps:[
+{ type:'rename_column', data:{ column:'region', newName:'area' } },
+{ type:'join', data:{ rightSource:'selftest_region', leftKey:'area', rightKey:'region', joinType:'full', matchMode:'arabic', prefix:'lk_' } },
+] },
+{ label:'join — numeric key stays exact under loose (parity)', join:true, steps:[{ type:'join', data:{ rightSource:'selftest_region', leftKey:'unit_price', rightKey:'region', joinType:'left_anti', matchMode:'loose' } }] },
+{ label:'filter — loose contains (parity)', steps:[{ type:'filter', data:{ column:'customer', mode:'operator', operator:'contains', value:'  SAM ', loose:true } }] },
+{ label:'filter — loose not-equal keeps nulls (parity)', steps:[{ type:'filter', data:{ column:'status', mode:'operator', operator:'!=', value:'shipped', loose:true } }] },
+{ label:'remove_duplicates — loose (parity)', steps:[
+{ type:'change_case', data:{ columns:['category'], mode:'upper' } },
+{ type:'remove_duplicates', data:{ columns:['category','region'], matchMode:'loose' } },
+] },
+{ label:'inspector — every dropdown shows its stored value', kind:'draft-registry', join:true },
 { label:'duck-only — append query', kind:'duck-only', join:true, steps:[{ type:'append', data:{rightSource:'selftest_region'} }] },
 { label:'duck-only — date part', kind:'duck-only', steps:[{ type:'date_part', data:{column:'order_date',part:'year',name:'Year'} }] },
 { label:'duck-only — round number', kind:'duck-only', steps:[{ type:'round_number', data:{column:'unit_price',decimals:1,mode:'round'} }] },
@@ -9084,6 +9516,48 @@ async function runSelfTestMainReferenceCheck(def, duckEngine, expressEngine){
     delete dataState.secondaryFrames.main;
   }
 }
+async function runSelfTestNormParityCheck(def){
+  const samples = ['  أحمد  ', 'إيمان', 'آمنة', 'فاطمة', 'مصطفى', 'مُحَمَّد', 'عــلي', '١٢٣', '۴۵', 'North ', 'NORTH', 'a\t  b', '', '   ', 'x\ny', 'O\'Brien'];
+  for (const mode of ['loose','arabic']){
+    const sql = `SELECT ${samples.map((s,i)=>`${joinKeySQL(esc(s), mode)} AS c${i}`).join(', ')}`;
+    const row = await queryOneRaw(sql);
+    for (let i=0;i<samples.length;i++){
+      const a = row[`c${i}`] ?? null, b = joinKeyJS(samples[i], mode);
+      if (a !== b) return { label:def.label, pass:false, reason:`${mode}: ${JSON.stringify(samples[i])} → SQL ${JSON.stringify(a)} vs JS ${JSON.stringify(b)}` };
+    }
+  }
+  if (joinKeyJS(42, 'loose') !== '42') return { label:def.label, pass:false, reason:'number keys should normalise to text' };
+  return { label:def.label, pass:true };
+}
+async function runSelfTestDraftRegistryCheck(def, duckEngine, aqEngine){
+  await selftestEnsureJoinSource(duckEngine, aqEngine);
+  const cols = (await duckEngine.getColumns(await duckEngine.compile([], -1))).map(c=>({name:c.name,type:c.type}));
+  const checkpoint = { materialized:false, sql:'SELECT 1', hasRid:true, columns:cols };
+  const problems = [];
+  const savedCols = dataState.currentColumns;
+  dataState.currentColumns = [];
+  try {
+    for (const [type, t] of Object.entries(TRANSFORMS)){
+      for (const withCp of [false, true]){
+        const insp = { isNew:true, type, data: buildDefaultDraft(type), checkpoint: withCp ? checkpoint : null };
+        normalizeDraft(insp);
+        for (const p of (t.params||[])){
+          if (p.visible && !p.visible(insp.data)) continue;
+          const opts = selectOptionsFor(p, insp.data, insp.checkpoint);
+          if (opts == null) continue;
+          const v = insp.data[p.key];
+          if (!(v === '' || opts.includes(v))) problems.push(`${type}.${p.key}=${JSON.stringify(v)} (${withCp?'loaded':'loading'})`);
+        }
+      }
+    }
+    const j = { isNew:true, type:'join', data: buildDefaultDraft('join'), checkpoint };
+    const onlyOne = dataState.secondarySources.filter(s=>s.id!==dataState.activeQueryId).length === 1;
+    normalizeDraft(j);
+    if (onlyOne && j.data.rightSource !== 'selftest_region') problems.push('join did not auto-pick the only source');
+    if (onlyOne && (j.data.leftKey !== 'region' || j.data.rightKey !== 'region')) problems.push(`join keys not suggested (got ${j.data.leftKey} / ${j.data.rightKey})`);
+  } finally { dataState.currentColumns = savedCols; }
+  return problems.length ? { label:def.label, pass:false, reason: problems.slice(0,6).join('; ') } : { label:def.label, pass:true };
+}
 async function runSelfTestDuckOnlyCheck(def, duckEngine, aqEngine){
   if (def.join) await selftestEnsureJoinSource(duckEngine,aqEngine);
   const plan = await duckEngine.compile(def.steps,def.steps.length-1);
@@ -9156,6 +9630,10 @@ results[i] = SELFTEST_CASES[i].kind === 'export'
   ? await runSelfTestMainReferenceCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
   : SELFTEST_CASES[i].kind === 'count'
   ? await runSelfTestCountCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
+  : SELFTEST_CASES[i].kind === 'norm-parity'
+  ? await runSelfTestNormParityCheck(SELFTEST_CASES[i])
+  : SELFTEST_CASES[i].kind === 'draft-registry'
+  ? await runSelfTestDraftRegistryCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
 : await runSelfTestParityCase(SELFTEST_CASES[i], duckEngine, aqEngine);
 } catch(e){
 results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error — ${e.message || e}` };
@@ -9165,6 +9643,12 @@ const passed = results.filter(r => r.pass).length;
 renderSelfTestResults(results, `${passed} / ${results.length} passing (DuckDB vs ${expressLabel})`, verbose);
 window.__duckbenchSelftest = { passed, total: results.length, failed: results.filter(r=>!r.pass).map(r=>({ label:r.label, reason:r.reason })) };
 document.title = `${passed===results.length?'PASS':'FAIL'} ${passed}/${results.length}`;
+const failedRows = results.filter(r=>!r.pass);
+console.log(`[selftest] ${passed}/${results.length} passing (DuckDB vs ${expressLabel})` + failedRows.map(r=>`\n  FAIL ${r.label}: ${r.reason}`).join(''));
+if (failedRows.length){
+  const summary = el('pre',{id:'selftestFailSummary', style:'position:fixed;top:0;left:0;right:0;z-index:10000;margin:0;padding:10px;background:#400;color:#fff;font-size:12px;white-space:pre-wrap;'}, failedRows.map(r=>`FAIL ${r.label}: ${r.reason}${r.firstDiffRow?'\n'+JSON.stringify(r.firstDiffRow):''}`).join('\n'));
+  document.body.appendChild(summary);
+}
 document.body.dataset.selftestDone = 'true';
 }
 
