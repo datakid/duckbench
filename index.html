@@ -350,6 +350,7 @@ input,select,textarea{font-family:inherit;}
 .source-card-meta{color:var(--muted);font-family:var(--font-mono);font-size:10px;display:flex;align-items:center;flex-wrap:wrap;gap:3px;}
 .source-card-remove{background:none;border:none;color:var(--muted);cursor:pointer;padding:3px;flex-shrink:0;font-size:14px;line-height:1;}
 .source-card-remove:hover{color:var(--rust-text);}
+.source-card.is-missing{border-color:rgba(var(--rust-rgb),0.45);background:rgba(var(--rust-rgb),0.08);}
 .source-card.is-unused{opacity:0.62;}
 .source-card-badge{margin-left:6px;padding:0 5px;border-radius:4px;border:1px solid var(--line);color:var(--muted);font-size:9.5px;}
 .source-add-btn{
@@ -1385,6 +1386,8 @@ td.cell-flash{animation:cellFlash 0.6s ease;}
         <div class="help-row"><span>Add a step</span><kbd>⌘K</kbd></div>
         <div class="help-row"><span>Undo</span><kbd>⌘Z</kbd></div>
         <div class="help-row"><span>Redo</span><kbd>⌘⇧Z</kbd></div>
+        <div class="help-row"><span>Save recipe</span><kbd>⌘S</kbd></div>
+        <div class="help-row"><span>Rename selected step</span><kbd>F2</kbd></div>
         <div class="help-row"><span>Close menu / panel</span><kbd>Esc</kbd></div>
         <div class="help-row"><span>Rename column</span><kbd>dbl-click header</kbd></div>
         <div class="help-row"><span>Filter column</span><kbd>click header</kbd></div>
@@ -1972,9 +1975,20 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
   return { sql: from, hasRid, columns: richColumns, error: null, errorIndex: -1, orderBy: pendingOrderBy };
 }
 
+function querySourcesFingerprint(){
+  const fileKey = f => f ? `${f.name}|${f.size}|${f.lastModified}` : null;
+  return JSON.stringify({
+    main: fileKey(dataState.sourceFile),
+    sources: dataState.secondarySources.map(s => ({
+      id: s.id, kind: s.kind || 'file', parentId: s.parentId || null,
+      file: fileKey(s.file), opts: s.importOptions || {},
+      steps: (s.steps || []).map(x => ({ t:x.type, d:x.data, x:!!x.disabled })),
+    })),
+  });
+}
 async function ensureCheckpoint(steps, uptoIndex){
   const prefix = steps.slice(0, uptoIndex);
-  const sig = JSON.stringify(prefix.map(s=>({t:s.type,d:s.data,x:!!s.disabled})));
+  const sig = JSON.stringify({ steps: prefix.map(s=>({t:s.type,d:s.data,x:!!s.disabled})), deps: querySourcesFingerprint() });
   const cached = dataState.checkpointCache.get(sig);
   if (cached && cached.materialized) return cached;
   if (cached && !cached.materialized){
@@ -3691,7 +3705,7 @@ Object.assign(TRANSFORMS, {
         const name = a.name?.trim() || (a.fn==='count' ? 'Count' : `${a.fn}_${a.column}`);
         const col = a.column;
         if (a.fn === 'count') rollupSpec[name] = aq.op.count();
-        else if (a.fn === 'count_distinct') rollupSpec[name] = aq.op.distinct(col);
+        else if (a.fn === 'count_distinct'){ const ref = `d[${JSON.stringify(col)}]`; rollupSpec[name] = `d => op.distinct(${ref}) - (op.invalid(${ref}) > 0 ? 1 : 0)`; }
         else if (a.fn === 'sum') rollupSpec[name] = aq.op.sum(col);
         else if (a.fn === 'avg') rollupSpec[name] = aq.op.mean(col);
         else if (a.fn === 'min') rollupSpec[name] = aq.op.min(col);
@@ -3859,11 +3873,14 @@ Object.assign(TRANSFORMS, {
     params:[
       { key:'sql', type:'sql', label:'SQL — use {{prev}} for the pipeline so far', default:'SELECT *\nFROM {{prev}}', big:true },
     ],
-    validate(d){
+    validate(d, ctx){
       if (!d.sql?.trim()) return 'Write a query.';
       if (hasMultipleStatements(d.sql)) return 'Only one statement per step — split this into multiple Custom SQL steps.';
       if (!normalizeUserSql(d.sql)) return 'This query is only comments.';
       if (!d.sql.includes('{{prev}}')) return 'Reference {{prev}} somewhere so this step still consumes the pipeline above it.';
+      if (ctx && ctx.orderBy && /\b(limit|offset|qualify|row_number|first_value|last_value|lag|lead)\b/i.test(d.sql) && !/\border\s+by\b/i.test(d.sql)){
+        return `A Sort step above only takes effect at the end of the pipeline, so this query sees rows in file order. Add ORDER BY ${ctx.orderBy.column} ${ctx.orderBy.direction === 'desc' ? 'DESC' : 'ASC'} inside this query.`;
+      }
       return null;
     },
     toSQL(d, from){
@@ -3912,7 +3929,10 @@ Object.assign(TRANSFORMS, {
     validate(d){
       if (!d.rightSource) return 'Pick a query to append.';
       if (d.rightSource===dataState.activeQueryId) return 'A query cannot append itself.';
-      if (!dataState.secondarySources.some(s=>s.id===d.rightSource)) return 'Attach the missing query from the Sources panel first.';
+      if (!dataState.secondarySources.some(s=>s.id===d.rightSource)){
+        const missing = dataState.missingSources.find(s=>s.id===d.rightSource);
+        return missing?.name ? `Attach “${missing.name}” from the Sources panel to run this step.` : 'This query is not attached — attach it from the Sources panel.';
+      }
       return null;
     },
     toSQL(d, from, ctx){
@@ -4393,6 +4413,20 @@ function inferFrameColumnKind(values){
   if (sawDate) return 'date';
   return 'string';
 }
+function sniffDelimiter(text){
+  const cands = [',', ';', '\t', '|'];
+  const lines = splitCsvLines(String(text || '')).filter(l => l.trim() !== '').slice(0, 20);
+  if (!lines.length) return ',';
+  const countOutside = (line, ch) => { let n = 0, inQ = false; for (let i = 0; i < line.length; i++){ const c = line[i]; if (c === '"') inQ = !inQ; else if (!inQ && c === ch) n++; } return n; };
+  let best = ',', bestScore = 0;
+  for (const ch of cands){
+    const counts = lines.map(l => countOutside(l, ch));
+    if (!counts[0]) continue;
+    const score = counts.filter(c => c === counts[0]).length * 1000 + counts[0];
+    if (score > bestScore){ best = ch; bestScore = score; }
+  }
+  return best;
+}
 function frameFromCsv(csvText, opts){
   const { delimiter = ',', header = true, withRid = true } = opts || {};
   const rawLines = splitCsvLines(csvText).filter((l, i, arr) => !(i === arr.length - 1 && l === ''));
@@ -4698,6 +4732,12 @@ const FRAME_IMPLS = {
     });
   },
   running_total(d, f, ctx){
+    if (!d.orderBy && ctx.orderBy){
+      const sorted = FR.sort(f, [{ name:ctx.orderBy.column, desc:ctx.orderBy.direction==='desc', nullsLast:!!ctx.orderBy.nullsLast }, ...(ctx.hasRid ? [{ name:RID, desc:false, nullsLast:true }] : [])]);
+      const withPos = FR.derive(sorted, { __rtpos: (row, i) => i });
+      const out = FR.runningTotal(withPos, { col:d.column, orderCol:'__rtpos', partitionCols: d.partitionBy?.length ? d.partitionBy : [], outName:d.name });
+      return FR.exclude(out, ['__rtpos']);
+    }
     const orderCol = d.orderBy || (ctx.hasRid ? RID : d.column);
     return FR.runningTotal(f, {
       col: d.column, orderCol,
@@ -4902,7 +4942,7 @@ function createArqueroEngine(){
         if (skipRows > 0){
           text = splitCsvLines(text).slice(skipRows).join('\n');
         }
-        const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+        const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : sniffDelimiter(text);
         table = aq.fromCSV(text, { parse: 'auto', delimiter, header: firstRowHeader !== false });
       }
       table = table.derive({ [RID]: () => aq.op.row_number() }).relocate(RID, { before: table.columnNames()[0] });
@@ -4949,7 +4989,7 @@ function createArqueroEngine(){
       if (format === 'parquet') throw new Error('Parquet secondary sources need Full mode (DuckDB).');
       let text = fileSpec.rows ? '' : (csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer));
       if (skipRows > 0 && !fileSpec.rows) text = splitCsvLines(text).slice(skipRows).join('\n');
-      const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+      const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : sniffDelimiter(text);
       const table = fileSpec.rows ? aq.from(fileSpec.rows) : aq.fromCSV(text, { parse:'auto', delimiter, header: firstRowHeader !== false });
       dataState.rawAqTables[id] = table;
       dataState.secondaryAqTables[id] = table;
@@ -5137,7 +5177,7 @@ function createFrameEngine(){
         if (skipRows > 0){
           text = splitCsvLines(text).slice(skipRows).join('\n');
         }
-        const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+        const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : sniffDelimiter(text);
         dataState.frameSourceFrame = frameFromCsv(text, { delimiter, header: firstRowHeader !== false });
       }
       dataState.rejectCount = 0;
@@ -5181,7 +5221,7 @@ function createFrameEngine(){
       if (format === 'parquet') throw new Error('Parquet secondary sources need Full mode (DuckDB).');
       let text = rows ? '' : (csvText != null ? csvText : new TextDecoder('utf-8').decode(buffer));
       if (skipRows > 0 && !rows) text = splitCsvLines(text).slice(skipRows).join('\n');
-      const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+      const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : sniffDelimiter(text);
       const frame = rows ? frameFromRows(rows) : frameFromCsv(text, { delimiter, header: firstRowHeader !== false, withRid: false });
       dataState.rawFrames[id] = frame;
       dataState.secondaryFrames[id] = frame;
@@ -5689,7 +5729,7 @@ await refreshPreview();
 saveSessionSnapshot();
 const missingJoins = dataState.missingSources.length;
 toast(missingJoins
-? `Recipe applied — ${recipe.steps.length} step${recipe.steps.length===1?'':'s'}, but ${missingJoins} join step${missingJoins===1?'':'s'} reference${missingJoins===1?'s':''} a file not included in the recipe. Re-attach it from the Sources panel.`
+? `Recipe applied — ${recipe.steps.length} step${recipe.steps.length===1?'':'s'}, but ${missingJoins} source${missingJoins===1?' is':'s are'} not attached: ${dataState.missingSources.map(m=>m.name ? `“${m.name}”` : 'an unnamed query').join(', ')}. Attach ${missingJoins===1?'it':'them'} from the Sources panel.`
 : `Recipe applied — ${recipe.steps.length} step${recipe.steps.length===1?'':'s'}.`);
 } else {
 dataState.pendingRecipe = recipe;
@@ -7040,7 +7080,7 @@ renderAll();
 await refreshPreview();
 const missingJoins = dataState.missingSources.length;
 toast(missingJoins
-? `Recipe applied — ${dataState.steps.length} step${dataState.steps.length===1?'':'s'}, but ${missingJoins} join step${missingJoins===1?'':'s'} reference${missingJoins===1?'s':''} a file not included in the recipe. Re-attach it from the Sources panel.`
+? `Recipe applied — ${dataState.steps.length} step${dataState.steps.length===1?'':'s'}, but ${missingJoins} source${missingJoins===1?' is':'s are'} not attached: ${dataState.missingSources.map(m=>m.name ? `“${m.name}”` : 'an unnamed query').join(', ')}. Attach ${missingJoins===1?'it':'them'} from the Sources panel.`
 : `Recipe applied — ${dataState.steps.length} step${dataState.steps.length===1?'':'s'}.`);
 }
 await saveSessionSnapshot();
@@ -7709,7 +7749,7 @@ unused ? el('span',{class:'source-card-badge', title:'No step uses this source.'
 el('button',{class:'source-card-remove', 'aria-label':`Remove ${s.name}`, title:'Remove source', onclick:()=>removeSecondarySource(s.id)}, '×'),
 ));
 });
-dataState.missingSources.forEach(m=>box.appendChild(el('div',{class:'source-card'},
+dataState.missingSources.forEach(m=>box.appendChild(el('div',{class:'source-card is-missing'},
   el('div',{class:'source-card-body'},el('div',{class:'source-card-name'},m.name || 'Unattached query'),el('div',{class:'source-card-meta'},'Needed by a step — not attached')),
   el('button',{class:'btn-ghost btn-small',type:'button',onclick:()=>{ pendingMissingSourceId=m.id; $('#secondarySourceInput').click(); }},'Attach…'))));
 box.appendChild(el('button',{class:'source-add-btn', type:'button', onclick:()=>{ pendingMissingSourceId=null; $('#secondarySourceInput').click(); }}, '+ Add source'));
@@ -8501,6 +8541,12 @@ const mod = e.metaKey || e.ctrlKey;
 if (mod && e.key.toLowerCase()==='k' && !isTypingTarget()){ e.preventDefault(); if (dataState.hasSource) openPalette(); return; }
 if (mod && e.key.toLowerCase()==='z' && !e.shiftKey && !isTypingTarget()){ e.preventDefault(); undo(); return; }
 if (mod && (e.key.toLowerCase()==='y' || (e.key.toLowerCase()==='z' && e.shiftKey)) && !isTypingTarget()){ e.preventDefault(); redo(); return; }
+if (mod && e.key.toLowerCase()==='s' && dataState.hasSource){ e.preventDefault(); saveRecipe(); return; }
+if (e.key === 'F2' && !mod && !isTypingTarget() && !ModalStack.top() && dataState.hasSource && uiState.selectedStepIndex !== null){
+  const node = document.querySelectorAll('.steps-list .step-title')[uiState.selectedStepIndex];
+  if (node){ e.preventDefault(); startRenameStep(uiState.selectedStepIndex, node); }
+  return;
+}
 if (e.key === '?' && !ModalStack.top() && !isTypingTarget()){
 ModalStack.push($('#helpOverlay'));
 }
@@ -8573,6 +8619,18 @@ return Number(duck.rows[0][i]) === max ? null : `first row unit_price ${duck.row
 { type:'sort', data:{ column:'discount', direction:'asc', nullsLast:true } },
 { type:'fill', data:{ columns:['discount'], direction:'down' } },
 ] },
+{ label:'order — sort then running total', ordered:true, steps:[
+{ type:'sort', data:{ column:'unit_price', direction:'desc', nullsLast:true } },
+{ type:'running_total', data:{ column:'quantity', orderBy:'', name:'running_qty', partitionBy:[] } },
+] },
+{ label:'order — sort then index column', ordered:true, steps:[
+{ type:'sort', data:{ column:'unit_price', direction:'desc', nullsLast:true } },
+{ type:'index_column', data:{ name:'idx', start:1 } },
+] },
+{ label:'order — sort then remove duplicates keeps top row per group', steps:[
+{ type:'sort', data:{ column:'unit_price', direction:'desc', nullsLast:true } },
+{ type:'remove_duplicates', data:{ columns:['region'] } },
+] },
 { label:'select_columns', steps:[{ type:'select_columns', data:{ columns:['order_id','customer','quantity'] } }] },
 { label:'remove_columns', steps:[{ type:'remove_columns', data:{ columns:['discount'] } }] },
 { label:'duplicate_column', steps:[{ type:'duplicate_column', data:{ column:'quantity' } }] },
@@ -8590,6 +8648,7 @@ return Number(duck.rows[0][i]) === max ? null : `first row unit_price ${duck.row
 { label:'rank', steps:[{ type:'rank', data:{ column:'unit_price', direction:'desc', mode:'rank', name:'price_rank', partitionBy:[] } }] },
 { label:'running_total', steps:[{ type:'running_total', data:{ column:'quantity', orderBy:'order_id', name:'running_qty', partitionBy:[] } }] },
 { label:'group_by', steps:[{ type:'group_by', data:{ groupColumns:['region'], aggregations:[{fn:'sum',column:'quantity',name:'total_qty'},{fn:'count',column:'',name:'n'}] } }] },
+{ label:'group_by — count_distinct ignores empty values', steps:[{ type:'group_by', data:{ groupColumns:['region'], aggregations:[{fn:'count_distinct',column:'customer',name:'n_customers'}] } }] },
 { label:'pivot — no keep-as-rows', steps:[{ type:'pivot', data:{ onColumn:'region', valueColumn:'quantity', fn:'sum', groupColumns:[] } }] },
 { label:'unpivot', steps:[{ type:'unpivot', data:{ columns:['quantity','unit_price'], nameColumn:'Attribute', valueColumn:'Value' } }] },
 { label:'delete_rows', steps:[{ type:'delete_rows', data:{ rids:['1','2'] } }] },
