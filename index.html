@@ -706,10 +706,16 @@ td.is-active-cell{box-shadow:inset 0 0 0 2px var(--brass);position:relative;z-in
   padding:6px 10px;font-size:12.5px;color:var(--grid-ink);cursor:cell;
   max-width:320px;overflow:hidden;text-overflow:ellipsis;position:relative;
 }
-.preview-table tbody tr:nth-child(even) td, .preview-table tbody tr:nth-child(even) .row-gutter{
+.preview-table tbody tr.is-alt td, .preview-table tbody tr.is-alt .row-gutter{
   background:var(--grid-surface-alt);
 }
-tr.is-row-selected:nth-child(even) td{background:rgba(var(--brass-rgb),0.06);}
+tr.is-row-selected.is-alt td{background:rgba(var(--brass-rgb),0.06);}
+.preview-table tbody tr.grid-spacer td, .preview-table tbody tr.grid-spacer:hover td{padding:0;border:0;background:transparent;max-width:none;}
+.job-bar{position:fixed;left:50%;bottom:calc(var(--statusbar-h) + 14px);transform:translateX(-50%);z-index:210;display:flex;align-items:center;gap:10px;padding:7px 8px 7px 14px;border-radius:20px;background:var(--ink-1);border:1px solid var(--line);box-shadow:var(--shadow-panel);font-size:12px;color:var(--paper-dim);animation:riseIn .2s var(--ease-smooth);}
+.job-bar-dot{width:7px;height:7px;border-radius:50%;background:var(--brass);animation:dotBreathe 1.2s ease-in-out infinite;}
+.job-bar-time{font-family:var(--font-mono);font-size:11px;color:var(--muted);min-width:38px;}
+.job-bar kbd{font-family:var(--font-mono);font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:1px 5px;}
+.step-card.is-cached .step-num::after{content:' · cached';color:var(--verdigris-text);letter-spacing:0.02em;}
 .preview-table tbody tr:hover td{background:rgba(var(--brass-rgb),0.06);}
 .null-cell{color:var(--grid-ink-dim);opacity:0.55;font-style:italic;}
 td.is-editing{padding:0;cursor:text;}
@@ -1809,6 +1815,188 @@ function sqlLiteralForColumn(value, colName, columns){
 }
 function denylistReason(version){ return DUCKDB_DENYLIST[String(version).trim()] || null; }
 
+let jobEpoch = 0;
+let jobLabel = 'Working';
+class JobCancelled extends Error { constructor(){ super('Cancelled'); this.cancelled = true; } }
+function isCancelError(e){
+  if (!e) return false;
+  if (e.cancelled) return true;
+  return /query was canceled|^Cancelled$/i.test(String(e.message || e));
+}
+let jobBusy = 0, jobBarTimer = null, jobBarTick = null, jobStartedAt = 0;
+function jobBarVisible(){ const b = $('#jobBar'); return !!b && !b.hidden; }
+function jobBusyStart(){
+  if (jobBusy++ === 0 && !jobBarVisible() && !jobBarTimer){
+    jobStartedAt = performance.now();
+    jobBarTimer = setTimeout(() => { jobBarTimer = null; showJobBar(); }, 700);
+  }
+}
+function jobYield(epoch){
+  return new Promise(r => setTimeout(r, 0)).then(() => { if (epoch !== jobEpoch) throw new JobCancelled(); });
+}
+function jobBusyEnd(){
+  jobBusy = Math.max(0, jobBusy - 1);
+  if (jobBusy === 0) setTimeout(() => { if (jobBusy === 0) hideJobBar(); }, 80);
+}
+function showJobBar(){
+  if (jobBusy === 0) return;
+  let bar = $('#jobBar');
+  if (!bar){
+    bar = el('div',{id:'jobBar', class:'job-bar', role:'status', 'aria-live':'polite'},
+      el('span',{class:'job-bar-dot'}),
+      el('span',{class:'job-bar-label'}),
+      el('span',{class:'job-bar-time'}),
+      el('button',{class:'btn-ghost btn-small', type:'button', onclick:()=>cancelJobs()}, 'Cancel'),
+      el('kbd',{}, 'Esc'),
+    );
+    document.body.appendChild(bar);
+  }
+  bar.hidden = false;
+  const tick = () => {
+    bar.querySelector('.job-bar-label').textContent = `${jobLabel}…`;
+    bar.querySelector('.job-bar-time').textContent = `${((performance.now() - jobStartedAt) / 1000).toFixed(1)}s`;
+  };
+  tick();
+  clearInterval(jobBarTick);
+  jobBarTick = setInterval(tick, 200);
+}
+function hideJobBar(){
+  clearTimeout(jobBarTimer); jobBarTimer = null;
+  clearInterval(jobBarTick); jobBarTick = null;
+  const bar = $('#jobBar');
+  if (bar) bar.hidden = true;
+}
+function installConnQueue(conn){
+  const raw = conn.query.bind(conn);
+  const send = typeof conn.send === 'function' ? conn.send.bind(conn) : null;
+  let TableCtor = null;
+  let tail = Promise.resolve();
+  conn.query = (sql) => {
+    const epoch = jobEpoch;
+    const run = async () => {
+      if (epoch !== jobEpoch) throw new JobCancelled();
+      jobBusyStart();
+      try {
+        if (!send) return await raw(sql);
+        if (!TableCtor) TableCtor = (await raw('SELECT 1')).constructor;
+        const reader = await send(sql);
+        const batches = [];
+        for await (const b of reader) batches.push(b);
+        return batches.length ? new TableCtor(batches) : await raw('SELECT 1 WHERE false');
+      } catch(e){
+        if (epoch !== jobEpoch || isCancelError(e)) throw new JobCancelled();
+        throw e;
+      } finally {
+        jobBusyEnd();
+      }
+    };
+    const p = tail.then(run, run);
+    tail = p.catch(() => {});
+    return p;
+  };
+}
+function cancelJobs(opts = {}){
+  jobEpoch++;
+  dataState.pipelineToken++;
+  dataState.inspectorToken++;
+  dataState.statsGenToken++;
+  rowCountFetchToken++;
+  try { dataState.conn?.cancelSent?.(); } catch {}
+  hideJobBar();
+  if (opts.silent) return;
+  if (lastPreview) renderRowCountLabel(lastPreview);
+  const cp = $('#columnProfile .column-profile-body');
+  if (cp && /Loading/.test(cp.textContent)) cp.textContent = 'Cancelled.';
+  if (dataState.hasSource && previewInFlight > 0) renderGridStopped();
+}
+function renderGridStopped(){
+  $('#gridSkeleton').hidden = true;
+  const retry = () => {
+    if (uiState.inspector){ if (uiState.inspector.checkpoint) refreshInspectorPreview(); else primeInspectorCheckpoint(); }
+    else refreshPreview();
+  };
+  const fill = (box) => {
+    box.innerHTML = '';
+    box.appendChild(el('strong',{}, 'Stopped'));
+    box.appendChild(el('span',{}, 'The running query was cancelled. ', el('button',{class:'btn-ghost btn-small', type:'button', onclick:retry}, 'Run again')));
+  };
+  const banner = $('#gridErrorBanner');
+  banner.hidden = false;
+  fill(banner);
+  if (!lastPreview){
+    $('.grid-shell')?.setAttribute('hidden','');
+    const box = $('#previewEmpty');
+    box.hidden = false;
+    fill(box);
+  }
+}
+
+const EXPENSIVE_STEPS = new Set(['join','append','group_by','pivot','unpivot','remove_duplicates','rank','running_total','raw_sql','fill','split_column']);
+const STEP_CACHE_CAP = 6;
+const duckStepCache = new Map();
+const expressStepCache = new Map();
+function stepCacheBaseKey(engineId){ return `${engineId}|${dataState.sourceGen || 0}|${querySourcesFingerprint()}`; }
+function stepPrefixKeys(steps, end, baseKey){
+  const keys = new Array(Math.max(0, end + 1));
+  let k = baseKey;
+  for (let i = 0; i <= end; i++){
+    const s = steps[i];
+    k += '\u0001' + (s ? JSON.stringify([s.type, s.data, !!s.disabled]) : '-');
+    keys[i] = k;
+  }
+  return keys;
+}
+function stepCacheGet(map, key){
+  const v = map.get(key);
+  if (v){ map.delete(key); map.set(key, v); }
+  return v;
+}
+const deferredCacheDrops = [];
+function stepCachePut(map, key, value, onEvict){
+  map.set(key, value);
+  while (map.size > STEP_CACHE_CAP){
+    const [k, v] = map.entries().next().value;
+    map.delete(k);
+    if (onEvict) deferredCacheDrops.push(v);
+  }
+}
+function flushDeferredCacheDrops(keepSql){
+  if (uiState.inspector || dataState.checkpointCache.size) return;
+  for (let i = deferredCacheDrops.length - 1; i >= 0; i--){
+    const t = deferredCacheDrops[i].table;
+    if (keepSql && keepSql.includes(t)) continue;
+    deferredCacheDrops.splice(i, 1);
+    dropDuckTempTable(t);
+  }
+}
+async function dropDuckTempTable(name){
+  try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q(name)}`); } catch {}
+}
+function clearStepCaches(){
+  const tables = [...duckStepCache.values(), ...deferredCacheDrops.splice(0)].map(v => v.table);
+  duckStepCache.clear();
+  expressStepCache.clear();
+  if (dataState.conn) tables.forEach(dropDuckTempTable);
+}
+function bumpSourceGen(){
+  dataState.sourceGen = (dataState.sourceGen || 0) + 1;
+  clearStepCaches();
+}
+function renderStepCacheFlags(){
+  const cards = $$('.step-card');
+  if (!cards.length) return;
+  const onMain = dataState.activeQueryId === 'main' && dataState.hasSource;
+  const map = dataState.engine.id === 'duckdb' ? duckStepCache : expressStepCache;
+  const keys = onMain ? stepPrefixKeys(dataState.steps, dataState.steps.length - 1, stepCacheBaseKey(dataState.engine.id)) : [];
+  cards.forEach(card => {
+    const i = Number(card.dataset.stepIndex);
+    const cached = onMain && map.has(keys[i]);
+    card.classList.toggle('is-cached', cached);
+    if (cached) card.title = 'Output cached: later steps start from here instead of recomputing it';
+    else card.removeAttribute('title');
+  });
+}
+
 async function loadDuckDB(version){
   if (dataState.conn && dataState.hasSource) { const e = new Error('A dataset is loaded — reload the page to start a new session on a different version.'); e.locked = true; throw e; }
   const bad = denylistReason(version);
@@ -1847,6 +2035,8 @@ async function loadDuckDB(version){
   URL.revokeObjectURL(workerUrl);
   await db.open({ query: { castTimestampToDate: true } });
   const conn = await db.connect();
+  installConnQueue(conn);
+  duckStepCache.clear();
   if (dataState.conn) { try { await dataState.conn.close(); } catch {} }
   if (dataState.db && dataState.db !== db) { try { await dataState.db.terminate(); } catch {} }
   dataState.db = db; dataState.conn = conn; dataState.duckdbVersion = version;
@@ -1947,13 +2137,31 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
   let hasRid = baseHasRid ?? true;
   let richColumns;
   let pendingOrderBy = baseOrderBy ?? null;
-  try {
-    richColumns = baseColumns ? baseColumns.slice() : (await getColumns(from)).filter(c=>c.name!==RID);
-  } catch(e){
-    return { sql: from, hasRid, columns: [], error: e.message || String(e), errorIndex: -1, orderBy: pendingOrderBy };
-  }
   const end = uptoIndex ?? steps.length - 1;
-  for (let i=0; i<=end; i++){
+  const cacheable = !baseFrom && dataState.hasSource && !!dataState.conn;
+  const keys = cacheable ? stepPrefixKeys(steps, end, stepCacheBaseKey('duckdb')) : null;
+  let startAt = 0, hitIndex = -1;
+  if (cacheable){
+    for (let i = end; i >= 0; i--){
+      const hit = stepCacheGet(duckStepCache, keys[i]);
+      if (hit){
+        from = `SELECT * FROM ${q(hit.table)}`;
+        hasRid = hit.hasRid; richColumns = hit.columns.slice(); pendingOrderBy = hit.orderBy;
+        startAt = i + 1; hitIndex = i;
+        break;
+      }
+    }
+  }
+  if (!richColumns){
+    try {
+      richColumns = baseColumns ? baseColumns.slice() : (await getColumns(from)).filter(c=>c.name!==RID);
+    } catch(e){
+      if (isCancelError(e)) throw e;
+      return { sql: from, hasRid, columns: [], error: e.message || String(e), errorIndex: -1, orderBy: pendingOrderBy };
+    }
+  }
+  let materializeAt = -1, materializeSnap = null;
+  for (let i=startAt; i<=end; i++){
     const step = steps[i];
     if (!step || step.disabled) continue;
     const t = TRANSFORMS[step.type];
@@ -1978,6 +2186,7 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
         }
       }
     } catch(e){
+      if (isCancelError(e)) throw e;
       return { sql: from, hasRid, columns: richColumns, error: e.message || String(e), errorIndex: i, orderBy: pendingOrderBy };
     }
     const preservesRowsHere = typeof t.preservesIdentity === 'function' ? t.preservesIdentity(data) : !!t.preservesIdentity;
@@ -1995,8 +2204,29 @@ async function compilePipeline(steps, uptoIndex, baseFrom, baseHasRid, baseColum
     }
     const declared = hasRid && preservesRowsHere;
     hasRid = t.columnsUnchanged ? declared : (declared && physicalCols.some(c=>c.name===RID));
+    if (cacheable && i < end && EXPENSIVE_STEPS.has(step.type) && !duckStepCache.has(keys[i])){
+      materializeAt = i;
+      materializeSnap = { sql: from, hasRid, columns: richColumns.slice(), orderBy: pendingOrderBy };
+    }
   }
+  if (materializeSnap && materializeAt > hitIndex) await materializeStepCache(keys[materializeAt], materializeAt, materializeSnap);
   return { sql: from, hasRid, columns: richColumns, error: null, errorIndex: -1, orderBy: pendingOrderBy };
+}
+async function materializeStepCache(key, stepIndex, snap){
+  const table = uid('stepc_');
+  const prevLabel = jobLabel;
+  jobLabel = `Caching step ${stepIndex + 1}`;
+  try {
+    await dataState.conn.query(`CREATE OR REPLACE TEMP TABLE ${q(table)} AS SELECT * FROM (${snap.sql})`);
+  } catch(e){
+    if (isCancelError(e)) throw e;
+    return;
+  } finally {
+    jobLabel = prevLabel;
+  }
+  stepCachePut(duckStepCache, key, { table, hasRid: snap.hasRid, columns: snap.columns, orderBy: snap.orderBy, stepIndex }, v => dropDuckTempTable(v.table));
+  clearColumnsCache();
+  queueMicrotask(renderStepCacheFlags);
 }
 
 function querySourcesFingerprint(){
@@ -2038,6 +2268,7 @@ async function dropAllCheckpoints(){
     if (entry.materialized){ try { await dataState.conn.query(`DROP TABLE IF EXISTS ${q(entry.table)}`); } catch {} }
   }
   dataState.checkpointCache.clear();
+  flushDeferredCacheDrops(currentPlanSql());
 }
 function checkpointFrom(checkpoint){
   return checkpoint.materialized ? `(SELECT * FROM ${q(checkpoint.table)})` : `(${checkpoint.sql})`;
@@ -2064,6 +2295,9 @@ function extractRows(result){
 }
 
 async function runPreview(sql, limit=200, orderBy=null){
+  return runPage(sql, 0, limit, orderBy, 'natural', null);
+}
+async function runPage(sql, offset, limit, orderBy, mode, matTable){
   const t0 = performance.now();
   const colTypes = await getColumns(sql);
   const nonRid = colTypes.filter(c=>c.name!==RID);
@@ -2071,8 +2305,12 @@ async function runPreview(sql, limit=200, orderBy=null){
   const selectList = nonRid.map(c => isRiskyDisplayType(c.type) ? `CAST(${q(c.name)} AS VARCHAR) AS ${q(c.name)}` : q(c.name));
   const parts = selectList.slice();
   if (hasRid) parts.push(q(RID));
-  const tie = (orderBy && hasRid) ? `, ${q(RID)}` : '';
-  const wrapped = `SELECT ${parts.join(', ') || 'NULL'} FROM (${sql})${orderBySQL(orderBy)}${tie} LIMIT ${limit+1}`;
+  let source = `(${sql})`, order;
+  if (mode === 'materialized' && matTable){ source = q(matTable); order = ` ORDER BY ${q('__gpos')}`; }
+  else if (mode === 'ordered') order = orderBy ? `${orderBySQL(orderBy)}${hasRid ? `, ${q(RID)}` : ''}` : (hasRid ? ` ORDER BY ${q(RID)}` : '');
+  else order = `${orderBySQL(orderBy)}${orderBy && hasRid ? `, ${q(RID)}` : ''}`;
+  const lim = Number.isFinite(limit) ? ` LIMIT ${limit+1}` : '';
+  const wrapped = `SELECT ${parts.join(', ') || 'NULL'} FROM ${source}${order}${lim}${offset ? `${lim ? '' : ' LIMIT ALL'} OFFSET ${offset}` : ''}`;
   const result = await dataState.conn.query(wrapped);
   const { rows } = extractRows(result);
   const hasMore = rows.length > limit;
@@ -2165,6 +2403,7 @@ async function refreshSourceSchema(){
 }
 
 async function loadFileImpl({ format, fileName, buffer, csvText, rows, firstRowHeader, skipRows, delim }){
+  bumpSourceGen();
   if (rows){
     await ensureDuckExtension('json');
     const jsonName = `${fileName}.json`;
@@ -2529,6 +2768,12 @@ function createDuckDBEngine(){
     async loadSecondarySourceCleared(){ clearColumnsCache(); },
     async preview(plan, limit=200){
       return runPreview(sqlOf(plan), limit, plan.orderBy);
+    },
+    async page(plan, offset, limit, mode, matTable){
+      return runPage(sqlOf(plan), offset, limit, plan.orderBy, mode, matTable);
+    },
+    async materializeForPaging(plan, table){
+      await dataState.conn.query(`CREATE OR REPLACE TEMP TABLE ${q(table)} AS SELECT *, ROW_NUMBER() OVER () AS ${q('__gpos')} FROM (${sqlOf(plan)})`);
     },
     async count(plan){
       return fetchExactCount(sqlOf(plan), plan.orderBy);
@@ -4018,7 +4263,6 @@ Object.assign(TRANSFORMS, {
   },
 });
 
-/* Join-key normalization. SQL and JS versions MUST stay in lock-step (self-test: 'join — loose/arabic'). */
 const AR_DIGITS = '\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9';
 function joinKeySQL(expr, mode){
   if (!mode || mode === 'exact') return expr;
@@ -4045,10 +4289,8 @@ function joinKeyJS(v, mode){
   s = s.replace(/[\t\n\f\r ]+/g, ' ').replace(/^ +| +$/g, '');
   return s === '' ? null : s;
 }
-/* Decimal/date/bool keys render differently as text in DuckDB vs JS, so they always compare exactly. */
 function isLooseUnsafeType(t){ return /^(DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC|DATE|TIME|TIMESTAMP|INTERVAL|BOOL)/i.test(t || ''); }
 function metaType(meta, name){ return ((meta || []).find(c => c.name === name) || {}).type; }
-/* All key pairs of a join step (primary + complete extra pairs), each with its effective match mode. */
 function joinKeyPairs(d, leftMeta, rightMeta){
   const raw = [{ l:d.leftKey, r:d.rightKey }, ...(Array.isArray(d.extraKeys) ? d.extraKeys : []).filter(k => k && k.leftKey && k.rightKey).map(k => ({ l:k.leftKey, r:k.rightKey }))];
   const mode = d.matchMode || 'exact';
@@ -4064,7 +4306,6 @@ function joinOnSQL(pairs){
   return pairs.map(p => `${joinKeySQL(`l.${q(p.l)}`, p.mode)} = ${joinKeySQL(`r.${q(p.r)}`, p.mode)}`).join(' AND ');
 }
 function joinKeyPart(v){ return v instanceof Date ? 'd:' + v.getTime() : (typeof v)[0] + ':' + String(v); }
-/* Composite JS key; null when any part is null (SQL '=' never matches NULL). */
 function joinCompositeKey(vals, pairs){
   let out = '';
   for (let i = 0; i < pairs.length; i++){
@@ -4074,7 +4315,6 @@ function joinCompositeKey(vals, pairs){
   }
   return out;
 }
-/* Output-column plan shared by SQL / Arquero / Frame so all engines produce identical schemas. */
 function joinPlan(d, leftNames, rightNames, pairs){
   const coalesce = new Map();
   pairs.forEach(p => { if (p.l === p.r) coalesce.set(p.l, p.r); });
@@ -4093,7 +4333,6 @@ function joinPlan(d, leftNames, rightNames, pairs){
   });
   return { coalesce, rightOut };
 }
-/* Loose text matching for Filter / Remove duplicates (always the Arabic-aware normalizer for filter). */
 function isLooseFilterOp(op){ return ['=','!=','contains','not_contains','starts_with','ends_with'].includes(op); }
 function looseFilterSQL(col, op, value){
   const lhs = joinKeySQL(col, 'arabic'), lit = esc(joinKeyJS(value, 'arabic') ?? '');
@@ -4123,7 +4362,6 @@ function dedupeModeFor(col, meta, mode){ return (!mode || mode === 'exact' || is
 function dedupeKeyJS(cols, row, meta, mode){
   return cols.map(c => { const v = joinKeyJS(row[c], dedupeModeFor(c, meta, mode)); return v == null ? '\u0000' : joinKeyPart(v); }).join('\u0001');
 }
-/* Shared JS join for Arquero + Frame. L/R = { names, cols:{name:array}, nrows }. Mirrors TRANSFORMS.join.toSQL. */
 function jsJoin(d, L, R, leftMeta, rightMeta){
   const pairs = joinKeyPairs(d, leftMeta, rightMeta);
   const keyAt = (side, i, names) => joinCompositeKey(names.map(n => side.cols[n][i]), pairs);
@@ -4971,7 +5209,17 @@ async function compileFrame(steps, uptoIndex, baseFrame, secondaryFrames){
   let columns = frameColumnsMeta(frame);
   const end = uptoIndex ?? steps.length - 1;
   let pendingOrderBy = null;
-  for (let i = 0; i <= end; i++){
+  const cacheable = baseFrame === dataState.frameSourceFrame;
+  const epoch = jobEpoch;
+  const keys = cacheable ? stepPrefixKeys(steps, end, stepCacheBaseKey('frame')) : null;
+  let startAt = 0;
+  if (cacheable){
+    for (let i = end; i >= 0; i--){
+      const hit = stepCacheGet(expressStepCache, keys[i]);
+      if (hit){ frame = hit.frame; hasRid = hit.hasRid; columns = hit.columns; pendingOrderBy = hit.orderBy; startAt = i + 1; break; }
+    }
+  }
+  for (let i = startAt; i <= end; i++){
     const step = steps[i];
     if (!step || step.disabled) continue;
     const t = TRANSFORMS[step.type];
@@ -4993,6 +5241,8 @@ async function compileFrame(steps, uptoIndex, baseFrame, secondaryFrames){
     if (t.isOrdering) pendingOrderBy = t.orderSpec(step.data);
     else if (!(typeof t.preservesIdentity==='function' ? t.preservesIdentity(step.data) : !!t.preservesIdentity)) pendingOrderBy = null;
     else if (pendingOrderBy && !columns.some(c=>c.name===pendingOrderBy.column)) pendingOrderBy = step.type==='rename_column' && step.data.column===pendingOrderBy.column && columns.some(c=>c.name===step.data.newName) ? { ...pendingOrderBy, column:step.data.newName } : null;
+    if (cacheable && i < end && EXPENSIVE_STEPS.has(step.type)) stepCachePut(expressStepCache, keys[i], { frame, hasRid, columns, orderBy: pendingOrderBy });
+    if (frame.nrows > 20000 && i < end) await jobYield(epoch);
   }
   if (pendingOrderBy) frame = FR.sort(frame, [{ name:pendingOrderBy.column, desc:pendingOrderBy.direction==='desc', nullsLast:!!pendingOrderBy.nullsLast }, ...(hasRid ? [{ name:RID, desc:false, nullsLast:true }] : [])]);
   return { frame, hasRid, columns, error: null, errorIndex: -1 };
@@ -5067,7 +5317,17 @@ async function compileAq(steps, uptoIndex, baseTable){
   let columns = columnsMetaOf(table).filter(c=>c.name!==RID);
   const end = uptoIndex ?? steps.length - 1;
   let pendingOrderBy = null;
-  for (let i=0; i<=end; i++){
+  const cacheable = !baseTable || baseTable === dataState.aqSourceTable;
+  const epoch = jobEpoch;
+  const keys = cacheable ? stepPrefixKeys(steps, end, stepCacheBaseKey('arquero')) : null;
+  let startAt = 0;
+  if (cacheable){
+    for (let i = end; i >= 0; i--){
+      const hit = stepCacheGet(expressStepCache, keys[i]);
+      if (hit){ table = hit.table; hasRid = hit.hasRid; columns = hit.columns; pendingOrderBy = hit.orderBy; startAt = i + 1; break; }
+    }
+  }
+  for (let i=startAt; i<=end; i++){
     const step = steps[i];
     if (!step || step.disabled) continue;
     const t = TRANSFORMS[step.type];
@@ -5089,6 +5349,12 @@ async function compileAq(steps, uptoIndex, baseTable){
     if (t.isOrdering) pendingOrderBy = t.orderSpec(step.data);
     else if (!(typeof t.preservesIdentity==='function' ? t.preservesIdentity(step.data) : !!t.preservesIdentity)) pendingOrderBy = null;
     else if (pendingOrderBy && !columns.some(c=>c.name===pendingOrderBy.column)) pendingOrderBy = step.type==='rename_column' && step.data.column===pendingOrderBy.column && columns.some(c=>c.name===step.data.newName) ? { ...pendingOrderBy, column:step.data.newName } : null;
+    if (cacheable && i < end && EXPENSIVE_STEPS.has(step.type)){
+      const reified = typeof table.reify === 'function' ? table.reify() : table;
+      table = reified;
+      stepCachePut(expressStepCache, keys[i], { table: reified, hasRid, columns, orderBy: pendingOrderBy });
+    }
+    if (table.numRows() > 20000 && i < end) await jobYield(epoch);
   }
   if (pendingOrderBy) table = TRANSFORMS.sort.toAq(pendingOrderBy, table, { aq, hasRid });
   return { table, hasRid, columns, error: null, errorIndex: -1 };
@@ -5120,6 +5386,7 @@ function createArqueroEngine(){
         table = aq.fromCSV(text, { parse: 'auto', delimiter, header: firstRowHeader !== false });
       }
       table = table.derive({ [RID]: () => aq.op.row_number() }).relocate(RID, { before: table.columnNames()[0] });
+      bumpSourceGen();
       dataState.aqSourceTable = table;
       dataState.rejectCount = 0;
       dataState.rejectCountUnknown = false;
@@ -5130,23 +5397,27 @@ function createArqueroEngine(){
       return columnsMetaOf(table).filter(c=>c.name!==RID);
     },
     async preview(plan, limit=200){
+      return this.page(plan, 0, limit);
+    },
+    async page(plan, offset, limit){
       const t0 = performance.now();
       const table = tableOf(plan);
       if (!table) return { columns: [], rows: [], hasMore: false, ridIndex: -1, ms: 0 };
       const cols = columnsMetaOf(table).filter(c=>c.name!==RID);
       const hasRidCol = table.columnNames().includes(RID);
       const total = table.numRows();
-      const hasMore = total > limit;
-      const n = Math.min(limit, total);
+      const start = Math.min(offset || 0, total);
+      const stop = Math.min(start + limit, total);
+      const hasMore = total > stop;
       const names = cols.map(c=>c.name);
       const colArrays = names.map(name => table.array(name));
       const ridArray = hasRidCol ? table.array(RID) : null;
-      const rows = new Array(n);
-      for (let i=0;i<n;i++){
+      const rows = new Array(stop - start);
+      for (let i=start;i<stop;i++){
         const row = new Array(colArrays.length);
         for (let c=0;c<colArrays.length;c++){ const v = colArrays[c][i]; row[c] = v === undefined ? null : v; }
         if (hasRidCol) row.push(ridArray[i]);
-        rows[i] = row;
+        rows[i-start] = row;
       }
       return { columns: cols, rows, hasMore, ridIndex: hasRidCol ? cols.length : -1, ms: performance.now()-t0 };
     },
@@ -5354,6 +5625,7 @@ function createFrameEngine(){
         const delimiter = fileName.toLowerCase().endsWith('.tsv') ? '\t' : sniffDelimiter(text);
         dataState.frameSourceFrame = frameFromCsv(text, { delimiter, header: firstRowHeader !== false });
       }
+      bumpSourceGen();
       dataState.rejectCount = 0;
       dataState.rejectCountUnknown = false;
     },
@@ -5363,23 +5635,26 @@ function createFrameEngine(){
       return frameColumnsMeta(frame);
     },
     async preview(plan, limit=200){
+      return this.page(plan, 0, limit);
+    },
+    async page(plan, offset, limit){
       const t0 = performance.now();
       const frame = frameOf(plan);
       if (!frame) return { columns: [], rows: [], hasMore: false, ridIndex: -1, ms: 0 };
       const cols = frameColumnsMeta(frame);
       const hasRidCol = frame.names.includes(RID);
       const total = frame.nrows;
-      const hasMore = total > limit;
-      const n = Math.min(limit, total);
+      const start = Math.min(offset || 0, total);
+      const stop = Math.min(start + limit, total);
+      const hasMore = total > stop;
+      const at = (name, i) => { const src = frame.cols[name]; const v = src[frame.index ? frame.index[i] : i]; return v === undefined ? null : v; };
       const names = cols.map(c=>c.name);
-      const colArrays = names.map(name => frameColumnArray(frame, name));
-      const ridArray = hasRidCol ? frameColumnArray(frame, RID) : null;
-      const rows = new Array(n);
-      for (let i=0;i<n;i++){
-        const row = new Array(colArrays.length);
-        for (let c=0;c<colArrays.length;c++){ const v = colArrays[c][i]; row[c] = v === undefined ? null : v; }
-        if (hasRidCol) row.push(ridArray[i]);
-        rows[i] = row;
+      const rows = new Array(stop - start);
+      for (let i=start;i<stop;i++){
+        const row = new Array(names.length);
+        for (let c=0;c<names.length;c++) row[c] = at(names[c], i);
+        if (hasRidCol) row.push(at(RID, i));
+        rows[i-start] = row;
       }
       return { columns: cols, rows, hasMore, ridIndex: hasRidCol ? cols.length : -1, ms: performance.now()-t0 };
     },
@@ -6178,7 +6453,7 @@ else if (format === 'json') toast(`JSON file downloaded${stepNote}.`);
 else if (format === 'jsonl') toast(`JSONL file downloaded${stepNote}.`);
 else toast(blob.truncated ? `Excel file downloaded${stepNote} — truncated to 1,048,575 rows (Excel's limit). Use CSV or Parquet for the full data.` : `Excel file downloaded${stepNote}.`);
 } catch(e){
-toast(`Export failed: ${e.message}`);
+toast(isCancelError(e) ? 'Export cancelled.' : `Export failed: ${e.message}`);
 } finally {
 setExportBusy(false);
 }
@@ -6262,7 +6537,7 @@ const baseName = (dataState.sourceFileName||'duckbench').replace(/\.[^.]+$/,'');
 downloadBlob(blob, `${baseName}.csv`);
 toast('CSV file downloaded.');
 } catch(e){
-toast(`Export failed: ${e.message}`);
+toast(isCancelError(e) ? 'Export cancelled.' : `Export failed: ${e.message}`);
 } finally {
 setExportBusy(false);
 }
@@ -6415,29 +6690,161 @@ return v.toLocaleString('en-US');
 if (typeof v === 'boolean') return v ? 'true' : 'false';
 return String(v);
 }
-const PREVIEW_LIMIT_STEPS = [200, 1000, 2000];
-let previewLimit = PREVIEW_LIMIT_STEPS[0];
-function resetPreviewLimit(){ previewLimit = PREVIEW_LIMIT_STEPS[0]; }
-function nextPreviewLimit(){ return PREVIEW_LIMIT_STEPS.find(n => n > previewLimit) || null; }
-async function showMorePreviewRows(){
-const next = nextPreviewLimit();
-if (!next) return;
-previewLimit = next;
-const btn = $('#gridMore button');
-if (btn){ btn.disabled = true; btn.textContent = 'Loading…'; }
-if (uiState.inspector && typeof refreshInspectorPreview === 'function') await refreshInspectorPreview();
-else await refreshPreview();
+const GRID_PAGE = 200, GRID_OVERSCAN = 14, GRID_MAX_ROWS = 500000;
+let gridModel = null, gridRowH = 29, gridRowHMeasured = false, gridGen = 0, gridWindowRaf = 0;
+function resetPreviewLimit(){ const s = $('#gridScroll'); if (s){ s.scrollTop = 0; s.scrollLeft = 0; } }
+function gridRow(i){
+  if (!gridModel || i < 0) return undefined;
+  const p = gridModel.pages.get(Math.floor(i / GRID_PAGE));
+  return p ? p[i % GRID_PAGE] : undefined;
 }
-function renderGridMore(preview){
-const box = $('#gridMore');
-if (!box) return;
-box.innerHTML = '';
-if (!preview || !preview.hasMore){ box.hidden = true; return; }
-const next = nextPreviewLimit();
-box.hidden = false;
-box.appendChild(el('span',{}, `Showing the first ${preview.rows.length.toLocaleString()} rows.`));
-if (next) box.appendChild(el('button',{class:'btn-ghost btn-small', type:'button', onclick:showMorePreviewRows}, `Show up to ${next.toLocaleString()}`));
-else box.appendChild(el('span',{}, 'Export to get every row.'));
+function gridRowCount(){
+  if (!gridModel) return 0;
+  const n = gridModel.total ?? (gridModel.known + GRID_PAGE);
+  return Math.min(n, GRID_MAX_ROWS);
+}
+function gridLoadedRows(){
+  if (!gridModel) return [];
+  const out = [];
+  [...gridModel.pages.keys()].sort((a,b)=>a-b).forEach(p => gridModel.pages.get(p).forEach((row, k) => out.push({ index: p*GRID_PAGE + k, row })));
+  return out;
+}
+function scheduleGridWindow(){
+  if (gridWindowRaf) return;
+  gridWindowRaf = requestAnimationFrame(() => { gridWindowRaf = 0; renderGridWindow(); });
+}
+function gridSpacer(height, span){
+  const tr = el('tr',{class:'grid-spacer', 'aria-hidden':'true'});
+  tr.appendChild(el('td',{colspan:String(span), style:`height:${Math.max(0, Math.round(height))}px`}));
+  return tr;
+}
+function buildPlaceholderRow(i, columns){
+  const tr = el('tr',{'data-row-index':i, 'data-placeholder':'1', 'data-rid':''});
+  tr.appendChild(el('td',{class:'row-gutter'}, el('div',{class:'row-gutter-cell'}, el('span',{class:'row-gutter-num'}, String(i+1)))));
+  columns.forEach(() => tr.appendChild(el('td',{}, el('span',{class:'null-cell'}, '·'))));
+  return tr;
+}
+function markActiveCellIn(tr, i){
+  if (!uiState.activeCell || uiState.activeCell.rowIndex !== i) return;
+  const td = tr.querySelector(`td[data-col="${CSS.escape(uiState.activeCell.colName)}"]`);
+  if (td) td.classList.add('is-active-cell');
+}
+function renderGridWindow(){
+  const model = gridModel;
+  const tbody = $('#previewTable tbody');
+  const scroller = $('#gridScroll');
+  if (!model || !tbody || !scroller) return;
+  if (tbody.querySelector('.is-editing')) return;
+  const total = gridRowCount();
+  const theadH = $('#previewTable thead')?.offsetHeight || 0;
+  const viewH = scroller.clientHeight || 600;
+  const top = Math.max(0, scroller.scrollTop - theadH);
+  let start = Math.max(0, Math.floor(top / gridRowH) - GRID_OVERSCAN);
+  const end = Math.min(total, Math.ceil((top + viewH) / gridRowH) + GRID_OVERSCAN);
+  if (start >= end) start = Math.max(0, end - Math.ceil(viewH / gridRowH) - GRID_OVERSCAN);
+  const existing = new Map();
+  tbody.querySelectorAll('tr[data-row-index]').forEach(tr => existing.set(Number(tr.dataset.rowIndex), tr));
+  const span = model.columns.length + 1;
+  const nodes = [gridSpacer(start * gridRowH, span)];
+  for (let i = start; i < end; i++){
+    const row = gridRow(i);
+    let tr = existing.get(i);
+    const rid = row && model.ridIndex >= 0 ? row[model.ridIndex] : null;
+    const fresh = tr && tr.dataset.placeholder !== '1' && tr.dataset.gen === String(model.gen);
+    if (row === undefined){
+      if (!tr || tr.dataset.placeholder !== '1') tr = buildPlaceholderRow(i, model.columns);
+    } else if (fresh){
+      tr.classList.toggle('is-row-selected', model.hasRid && rid != null && uiState.rowSelection.has(String(rid)));
+    } else if (tr && tr.dataset.placeholder !== '1' && tr.children.length === span){
+      updateBodyRowInPlace(tr, row, i, model.columns, rid, model.hasRid);
+      tr.dataset.gen = String(model.gen);
+    } else {
+      tr = buildBodyRow(row, i, model.columns, rid, model.hasRid);
+      tr.dataset.gen = String(model.gen);
+      markActiveCellIn(tr, i);
+    }
+    tr.classList.toggle('is-alt', i % 2 === 1);
+    nodes.push(tr);
+  }
+  nodes.push(gridSpacer((total - end) * gridRowH, span));
+  tbody.replaceChildren(...nodes);
+  if (!gridRowHMeasured){
+    const real = tbody.querySelector('tr[data-row-index]:not([data-placeholder])');
+    if (real && real.offsetHeight > 10){ gridRowHMeasured = true; if (Math.abs(real.offsetHeight - gridRowH) > 0.5){ gridRowH = real.offsetHeight; scheduleGridWindow(); } }
+  }
+  if (!model.halted && end > start){
+    for (let p = Math.floor(start / GRID_PAGE); p <= Math.floor((end - 1) / GRID_PAGE); p++) gridFetchPage(model, p);
+  }
+  renderGridMore();
+}
+async function gridPrepareScrollMode(model){
+  if (model.mode !== 'natural') return;
+  if (!model.preparing){
+    model.preparing = (async () => {
+      if (model.hasRid || model.plan.orderBy){ model.mode = 'ordered'; }
+      else {
+        const table = uid('gridv_');
+        const prev = jobLabel; jobLabel = 'Preparing the scroll view';
+        try { await dataState.engine.materializeForPaging(model.plan, table); }
+        finally { jobLabel = prev; }
+        if (gridModel !== model){ dropDuckTempTable(table); return; }
+        model.matTable = table;
+        model.mode = 'materialized';
+      }
+      model.pages.clear();
+      model.known = 0;
+      model.gen = ++gridGen;
+    })();
+  }
+  try { await model.preparing; } catch(e){ model.preparing = null; throw e; }
+}
+async function gridFetchPage(model, p){
+  if (model.pages.has(p) || model.inflight.has(p) || model.halted) return;
+  if (model.total != null && p * GRID_PAGE >= model.total) return;
+  model.inflight.add(p);
+  try {
+    if (model.engineId === 'duckdb' && p > 0 && model.mode === 'natural') await gridPrepareScrollMode(model);
+    if (gridModel !== model || model.pages.has(p)) return;
+    const prev = jobLabel; jobLabel = 'Loading rows';
+    let res;
+    try { res = await dataState.engine.page(model.plan, p * GRID_PAGE, GRID_PAGE, model.mode, model.matTable); }
+    finally { jobLabel = prev; }
+    if (gridModel !== model) return;
+    model.pages.set(p, res.rows);
+    model.known = Math.max(model.known, p * GRID_PAGE + res.rows.length);
+    if (!res.hasMore){
+      model.total = p * GRID_PAGE + res.rows.length;
+      syncGridTotalToRowCount(model);
+    }
+  } catch(e){
+    if (gridModel !== model) return;
+    model.halted = isCancelError(e) ? 'Row loading was cancelled.' : `Couldn’t load more rows: ${e.message || e}`;
+  } finally {
+    model.inflight.delete(p);
+  }
+  if (gridModel === model) scheduleGridWindow();
+}
+function syncGridTotalToRowCount(model){
+  if (model !== gridModel || model.total == null || dataState.currentPlan !== model.plan) return;
+  dataState.currentRowCountKnown = true;
+  dataState.currentRowCountExact = model.total;
+  renderRowCountLabel({ hasMore:false, rows:[] });
+  setStatusBar({ rows: model.total.toLocaleString() });
+}
+function renderGridMore(){
+  const box = $('#gridMore');
+  if (!box) return;
+  box.innerHTML = '';
+  const model = gridModel;
+  const capped = model && (model.total ?? model.known) > GRID_MAX_ROWS;
+  if (!model || (!model.halted && !capped)){ box.hidden = true; return; }
+  box.hidden = false;
+  if (model.halted){
+    box.appendChild(el('span',{}, model.halted));
+    box.appendChild(el('button',{class:'btn-ghost btn-small', type:'button', onclick:()=>{ model.halted = null; model.preparing = null; scheduleGridWindow(); }}, 'Retry'));
+    return;
+  }
+  box.appendChild(el('span',{}, `Scrolling stops at row ${GRID_MAX_ROWS.toLocaleString()}${model.total != null ? ` of ${model.total.toLocaleString()}` : ''}. Export to get every row.`));
 }
 let _debouncedRefreshPreview = null;
 function debouncedRefreshPreview(){
@@ -6448,9 +6855,11 @@ async function renderDataView({ source, plan, token }){
 const tokenField = source === 'inspector' ? 'inspectorToken' : 'pipelineToken';
 let preview;
 try {
-preview = await dataState.engine.preview(plan, previewLimit);
+preview = await dataState.engine.preview(plan, GRID_PAGE);
+if (preview && preview.hasMore && dataState.engine.id !== 'duckdb') preview.total = await dataState.engine.count(plan);
 } catch(e){
 if (dataState[tokenField] !== token) return null;
+if (isCancelError(e)){ renderGridStopped(); return null; }
 renderGridError({ error: e.message });
 return null;
 }
@@ -6461,9 +6870,13 @@ dataState.currentPlan = plan;
 dataState.currentPipelineHasRid = plan.hasRid;
 dataState.currentRowCountKnown = false;
 dataState.currentRowCountLowerBound = preview.rows.length;
-renderGrid(preview);
-renderGridMore(preview);
+renderGrid(preview, plan);
+if (preview.total != null){ dataState.currentRowCountKnown = true; dataState.currentRowCountExact = preview.total; }
 renderRowCountLabel(preview);
+if (preview.total != null) setStatusBar({ rows: preview.total.toLocaleString() });
+flushDeferredCacheDrops(currentPlanSql());
+renderStepCacheFlags();
+if (source === 'pipeline' && preview.hasMore && preview.total == null && preview.ms < 1500) setTimeout(() => { if (dataState.currentPlan === plan) fetchExactRowCount(); }, 0);
 return preview;
 }
 async function computeAndRenderPreview(source, plan, token, stepLabel){
@@ -6507,7 +6920,7 @@ async function rebuildQuerySources(targetIds){
       if (!step.disabled && step.data?.rightSource) await build(step.data.rightSource);
     }
     if (dataState.engine.id === 'duckdb'){
-      const compiled = await compilePipeline(source.steps || [], (source.steps || []).length-1, id==='main' ? undefined : sourceQueryBaseSql(id), true);
+      const compiled = await compilePipeline(source.steps || [], (source.steps || []).length-1, id==='main' ? `SELECT * FROM ${q(SOURCE_TABLE)}` : sourceQueryBaseSql(id), true);
       if (compiled.error) throw new Error(`${source.name}, step ${compiled.errorIndex+1}: ${compiled.error}`);
       const ordered = `${compiled.sql}${orderBySQL(compiled.orderBy)}${compiled.orderBy && compiled.hasRid ? `, ${q(RID)}` : ''}`;
       const physicalRid = (await getColumns(compiled.sql)).some(c=>c.name===RID);
@@ -6541,7 +6954,12 @@ async function rebuildQuerySources(targetIds){
   ])];
   for (const id of roots) await build(id);
 }
+let previewInFlight = 0;
 async function refreshPreview(){
+previewInFlight++;
+try { return await refreshPreviewInner(); } finally { previewInFlight--; }
+}
+async function refreshPreviewInner(){
 if (!dataState.hasSource) return;
 if (!lastPreview) $('#gridSkeleton').hidden = false;
 const upto = uiState.selectedStepIndex !== null ? uiState.selectedStepIndex : dataState.steps.length - 1;
@@ -6559,6 +6977,7 @@ if (dataState.pipelineToken !== myToken) return;
 plan = await dataState.engine.compile(dataState.steps, upto);
 } catch(e){
 if (dataState.pipelineToken !== myToken) return;
+if (isCancelError(e)){ renderGridStopped(); return; }
 plan = { sql: null, hasRid: true, columns: [], error: e.message || String(e), errorIndex: upto };
 }
 if (dataState.pipelineToken !== myToken) return;
@@ -6596,7 +7015,7 @@ return set;
 let lastPreview = null;
 let lastPreviewColKey = null;
 const columnsKey = (columns) => columns.map(c=>c.name+'\u0000'+c.type).join('\u0001');
-function renderGrid(preview){
+function renderGrid(preview, plan){
 $('#gridSkeleton').hidden = true;
 $('#previewEmpty').hidden = true;
 $('#gridErrorBanner').hidden = true;
@@ -6606,7 +7025,8 @@ const filteredCols = activeFilterColumns();
 const nullCounts = new Map(preview.columns.map(c=>[c.name,0]));
 preview.rows.forEach(row => preview.columns.forEach((c,i) => { if (row[i]===null || row[i]===undefined) nullCounts.set(c.name, nullCounts.get(c.name)+1); }));
 const newColKey = columnsKey(preview.columns);
-const sameColumns = newColKey === lastPreviewColKey && table.querySelector('tbody').dataset.wired === '1';
+const tbody = table.querySelector('tbody');
+const sameColumns = newColKey === lastPreviewColKey && tbody.dataset.wired === '1';
 const thead = table.querySelector('thead tr');
 if (!sameColumns){
 thead.innerHTML = '';
@@ -6616,33 +7036,29 @@ preview.columns.forEach(col => thead.appendChild(buildHeaderCell(col, filteredCo
 const ths = [...thead.querySelectorAll('th.th-cell')];
 preview.columns.forEach((col, i) => updateHeaderCellStats(ths[i], filteredCols.has(col.name), nullCounts.get(col.name), preview.rows.length));
 }
-const tbody = table.querySelector('tbody');
-if (!sameColumns){
-tbody.innerHTML = '';
-const frag = document.createDocumentFragment();
-preview.rows.forEach((row, rowIndex) => {
-const rid = preview.ridIndex>=0 ? row[preview.ridIndex] : null;
-frag.appendChild(buildBodyRow(row, rowIndex, preview.columns, rid, dataState.currentPipelineHasRid));
-});
-tbody.appendChild(frag);
+if (!sameColumns) tbody.replaceChildren();
 if (tbody.dataset.wired !== '1'){
 wireDelegatedGridEvents(tbody);
 tbody.dataset.wired = '1';
 }
-} else {
-const existingRows = [...tbody.children];
-preview.rows.forEach((row, rowIndex) => {
-const rid = preview.ridIndex>=0 ? row[preview.ridIndex] : null;
-if (existingRows[rowIndex]){
-updateBodyRowInPlace(existingRows[rowIndex], row, rowIndex, preview.columns, rid, dataState.currentPipelineHasRid);
-} else {
-tbody.appendChild(buildBodyRow(row, rowIndex, preview.columns, rid, dataState.currentPipelineHasRid));
+const scroller = $('#gridScroll');
+if (scroller && scroller.dataset.virtual !== '1'){
+scroller.dataset.virtual = '1';
+scroller.addEventListener('scroll', scheduleGridWindow, { passive:true });
+if (window.ResizeObserver) new ResizeObserver(scheduleGridWindow).observe(scroller);
 }
-});
-for (let i = preview.rows.length; i < existingRows.length; i++) existingRows[i].remove();
-}
-lastPreview = preview;
+if (gridModel && gridModel.matTable) dropDuckTempTable(gridModel.matTable);
+gridModel = {
+gen: ++gridGen, plan: plan || dataState.currentPlan, engineId: dataState.engine.id,
+columns: preview.columns, ridIndex: preview.ridIndex, hasRid: dataState.currentPipelineHasRid,
+pages: new Map([[0, preview.rows]]), inflight: new Set(), known: preview.rows.length,
+total: preview.hasMore ? (preview.total ?? null) : preview.rows.length,
+mode: 'natural', matTable: null, preparing: null, halted: null,
+};
+if (!sameColumns && scroller) scroller.scrollTop = 0;
+lastPreview = { columns: preview.columns, ridIndex: preview.ridIndex, hasMore: preview.hasMore, ms: preview.ms, get rows(){ return gridLoadedRows().map(x => x.row); } };
 lastPreviewColKey = newColKey;
+renderGridWindow();
 table.classList.toggle('has-selection', uiState.rowSelection.size>0);
 renderSelectionBar();
 }
@@ -6692,16 +7108,25 @@ const tbody = $('#previewTable tbody');
 if (!tbody) return;
 const prev = tbody.querySelector('td.is-active-cell');
 if (prev) prev.classList.remove('is-active-cell');
-const tr = tbody.querySelector(`tr[data-row-index="${rowIndex}"]`);
+let tr = tbody.querySelector(`tr[data-row-index="${rowIndex}"]`);
+if (!tr && opts.scroll !== false && gridModel && rowIndex >= 0 && rowIndex < gridRowCount()){
+const scroller = $('#gridScroll');
+const theadH = $('#previewTable thead')?.offsetHeight || 0;
+const y = rowIndex * gridRowH;
+if (y < scroller.scrollTop - theadH) scroller.scrollTop = y;
+else scroller.scrollTop = Math.max(0, y + gridRowH + theadH - scroller.clientHeight);
+renderGridWindow();
+tr = tbody.querySelector(`tr[data-row-index="${rowIndex}"]`);
+}
 const td = tr ? tr.querySelector(`td[data-col="${CSS.escape(colName)}"]`) : null;
-if (!td){ uiState.activeCell = null; return; }
-td.classList.add('is-active-cell');
 uiState.activeCell = { rowIndex, colName };
+if (!td) return;
+td.classList.add('is-active-cell');
 if (opts.scroll !== false) td.scrollIntoView({ block:'nearest', inline:'nearest' });
 }
 function selectAllVisibleRows(){
 if (!dataState.currentPipelineHasRid || !lastPreview){ toast("Row selection isn’t available here — an earlier step reshaped the rows."); return; }
-lastPreview.rows.forEach((row, i) => {
+gridLoadedRows().forEach(({ row }) => {
 const rid = lastPreview.ridIndex>=0 ? row[lastPreview.ridIndex] : null;
 if (rid!=null) uiState.rowSelection.add(String(rid));
 });
@@ -6710,8 +7135,21 @@ $('#previewTable').classList.toggle('has-selection', uiState.rowSelection.size>0
 renderSelectionBar();
 }
 function handleGridKeydown(e){
-if (!lastPreview || !lastPreview.rows.length) return;
+if (!lastPreview || !gridRowCount()) return;
 const cols = lastPreview.columns;
+const lastRow = gridRowCount() - 1;
+if (uiState.activeCell && (e.key === 'PageDown' || e.key === 'PageUp')){
+e.preventDefault();
+const stepRows = Math.max(1, Math.floor(($('#gridScroll').clientHeight || 400) / gridRowH) - 2);
+const r = uiState.activeCell.rowIndex + (e.key === 'PageDown' ? stepRows : -stepRows);
+setActiveCell(Math.max(0, Math.min(lastRow, r)), uiState.activeCell.colName);
+return;
+}
+if (uiState.activeCell && (e.metaKey || e.ctrlKey) && (e.key === 'Home' || e.key === 'End')){
+e.preventDefault();
+setActiveCell(e.key === 'Home' ? 0 : lastRow, uiState.activeCell.colName);
+return;
+}
 const mod = e.metaKey || e.ctrlKey;
 if (mod && e.key.toLowerCase()==='a'){ e.preventDefault(); selectAllVisibleRows(); return; }
 if (mod && e.key.toLowerCase()==='f'){
@@ -6729,7 +7167,7 @@ return;
 const { rowIndex, colName } = uiState.activeCell;
 const colIdx = cols.findIndex(c=>c.name===colName);
 if (e.key === 'ArrowUp'){ e.preventDefault(); setActiveCell(Math.max(0, rowIndex-1), colName); }
-else if (e.key === 'ArrowDown'){ e.preventDefault(); setActiveCell(Math.min(lastPreview.rows.length-1, rowIndex+1), colName); }
+else if (e.key === 'ArrowDown'){ e.preventDefault(); setActiveCell(Math.min(lastRow, rowIndex+1), colName); }
 else if (e.key === 'ArrowLeft'){ e.preventDefault(); if (colIdx>0) setActiveCell(rowIndex, cols[colIdx-1].name); }
 else if (e.key === 'ArrowRight'){ e.preventDefault(); if (colIdx<cols.length-1) setActiveCell(rowIndex, cols[colIdx+1].name); }
 else if (e.key === 'Enter'){
@@ -6745,7 +7183,8 @@ const colName = td.dataset.col;
 const rowIndex = Number(tr.dataset.rowIndex);
 const rid = tr.dataset.rid === '' ? null : tr.dataset.rid;
 const colIdx = lastPreview ? lastPreview.columns.findIndex(c=>c.name===colName) : -1;
-const raw = (lastPreview && colIdx>=0 && lastPreview.rows[rowIndex]) ? lastPreview.rows[rowIndex][colIdx] : null;
+const row = gridRow(rowIndex);
+const raw = (colIdx>=0 && row) ? row[colIdx] : null;
 return { colName, rid, raw };
 }
 function qualityTitle(validPct, totalRows){
@@ -6904,8 +7343,11 @@ const n = await dataState.engine.count(planAtStart);
 if (token !== rowCountFetchToken || dataState.currentPlan !== planAtStart) return;
 dataState.currentRowCountKnown = true;
 dataState.currentRowCountExact = n;
+if (gridModel && gridModel.plan === planAtStart && gridModel.total == null){ gridModel.total = n; scheduleGridWindow(); }
 renderRowCountLabel(lastPreview || { hasMore:false, rows:[] });
+setStatusBar({ rows: n.toLocaleString() });
 } catch(e){
+if (isCancelError(e)){ renderRowCountLabel(lastPreview || { hasMore:true, rows:[] }); return; }
 if (token !== rowCountFetchToken || dataState.currentPlan !== planAtStart) return;
 toast(`Couldn’t get exact count: ${e.message}`);
 renderRowCountLabel(lastPreview || { hasMore:true, rows:[] });
@@ -6948,12 +7390,13 @@ function toggleRowSelection(rid, rowIndex, shiftKey){
 if (rid == null) return;
 const key = String(rid);
 if (shiftKey && uiState.selectionAnchorRowIndex != null){
-const rows = $$('#previewTable tbody tr');
 const lo = Math.min(uiState.selectionAnchorRowIndex, rowIndex);
 const hi = Math.max(uiState.selectionAnchorRowIndex, rowIndex);
+const ri = lastPreview ? lastPreview.ridIndex : -1;
 for (let i=lo; i<=hi; i++){
-const r = rows[i];
-if (r && r.dataset.rid) uiState.rowSelection.add(r.dataset.rid);
+const r = gridRow(i);
+const v = r && ri >= 0 ? r[ri] : null;
+if (v != null) uiState.rowSelection.add(String(v));
 }
 } else {
 if (uiState.rowSelection.has(key)) uiState.rowSelection.delete(key); else uiState.rowSelection.add(key);
@@ -6962,7 +7405,7 @@ uiState.selectionAnchorRowIndex = rowIndex;
 syncRowSelectionDom();
 }
 function syncRowSelectionDom(){
-$$('#previewTable tbody tr').forEach(tr => {
+$$('#previewTable tbody tr[data-row-index]').forEach(tr => {
 const selected = tr.dataset.rid && uiState.rowSelection.has(tr.dataset.rid);
 tr.classList.toggle('is-row-selected', !!selected);
 const cb = tr.querySelector('.row-check');
@@ -7008,9 +7451,9 @@ let stats;
 try {
 stats = await dataState.engine.stats(dataState.currentPlan, colName);
 } catch(e){
-if (token !== dataState.statsGenToken) return;
+if (token !== dataState.statsGenToken && !isCancelError(e)) return;
 body.innerHTML = '';
-body.appendChild(el('div',{class:'cp-section-label'}, 'Couldn’t compute stats.'));
+body.appendChild(el('div',{class:'cp-section-label'}, isCancelError(e) ? 'Cancelled.' : 'Couldn’t compute stats.'));
 return;
 }
 if (token !== dataState.statsGenToken) return;
@@ -7474,7 +7917,7 @@ try {
 }
 catch(e){
 if (uiState.inspector !== insp) return;
-insp.checkpoint = null; insp.checkpointFailed = true; insp.error = `Couldn’t read the columns at this point: ${e.message}`;
+insp.checkpoint = null; insp.checkpointFailed = true; insp.error = isCancelError(e) ? 'Loading columns was cancelled.' : `Couldn’t read the columns at this point: ${e.message}`;
 renderInspector();
 return;
 }
@@ -7484,7 +7927,6 @@ renderInspector();
 if (insp.type === 'join') suggestJoinKeysByValues(insp);
 await refreshInspectorPreview();
 }
-/* When no column names match, score column pairs by overlap of (normalized) distinct values. */
 async function suggestJoinKeysByValues(insp){
   const d = insp.data;
   if (d.leftKey || d.rightKey || dataState.engine.id !== 'duckdb' || !insp.checkpoint) return;
@@ -7505,12 +7947,11 @@ async function suggestJoinKeysByValues(insp){
       insp.suggestedKeys = true;
       insp.error = inspectorValidation(insp);
     }
-  } catch(e){ /* suggestion is best-effort */ }
+  } catch(e){}
   finally {
     if (uiState.inspector === insp){ insp.suggesting = false; rerenderInspectorForm(); if (d.leftKey && d.rightKey) debouncedInspectorPreview(); }
   }
 }
-/* Rebuild reference/cleaned queries so the right-hand column list reflects their CURRENT steps. */
 async function ensureJoinSourcesFresh(){
   const ids = dataState.secondarySources.filter(s=>s.id!==dataState.activeQueryId).map(s=>s.id);
   if (!ids.length) return;
@@ -7540,6 +7981,10 @@ if (!_debouncedInspectorPreview) _debouncedInspectorPreview = debounce(()=>refre
 return _debouncedInspectorPreview();
 }
 async function refreshInspectorPreview(){
+previewInFlight++;
+try { return await refreshInspectorPreviewInner(); } finally { previewInFlight--; }
+}
+async function refreshInspectorPreviewInner(){
 const insp = uiState.inspector;
 if (!insp || !insp.checkpoint) return;
 const myToken = ++dataState.inspectorToken;
@@ -7570,6 +8015,7 @@ plan = await dataState.engine.compile(testSteps, testSteps.length-1);
 }
 } catch(e){
 if (dataState.inspectorToken !== myToken) return;
+if (isCancelError(e)){ renderGridStopped(); return; }
 insp.error = e.message; renderInspectorError();
 return;
 }
@@ -8932,7 +9378,7 @@ if (b.dataset.format){
 if (b.dataset.format === 'parquet' && dataState.engine.id !== 'duckdb'){
 await switchToFullAndRetry(() => exportData('parquet'));
 } else {
-try { await exportData(b.dataset.format); } catch(e){ toast(`Export failed: ${e.message}`); }
+try { await exportData(b.dataset.format); } catch(e){ toast(isCancelError(e) ? 'Export cancelled.' : `Export failed: ${e.message}`); }
 }
 } else if (b.dataset.action === 'copy-insert'){
 copyAsSqlInsert();
@@ -8988,6 +9434,8 @@ b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
 });
 document.addEventListener('keydown', (e) => {
 const mod = e.metaKey || e.ctrlKey;
+if (e.key === 'Escape' && jobBarVisible() && !ModalStack.top()){ e.preventDefault(); cancelJobs(); return; }
+if (mod && e.key === '.' && jobBusy > 0){ e.preventDefault(); cancelJobs(); return; }
 if (mod && e.key.toLowerCase()==='k' && !isTypingTarget()){ e.preventDefault(); if (dataState.hasSource) openPalette(); return; }
 if (mod && e.key.toLowerCase()==='z' && !e.shiftKey && !isTypingTarget()){ e.preventDefault(); undo(); return; }
 if (mod && (e.key.toLowerCase()==='y' || (e.key.toLowerCase()==='z' && e.shiftKey)) && !isTypingTarget()){ e.preventDefault(); redo(); return; }
@@ -9166,6 +9614,13 @@ return Number(duck.rows[0][i]) === max ? null : `first row unit_price ${duck.row
 { label:'export — DuckDB Parquet export has bytes', kind:'parquet-export', steps:[] },
 { label:'export — DuckDB JSONL export parses', kind:'jsonl-export', steps:[] },
 { label:'count — independent plans return exact rows', kind:'count', steps:[{type:'filter',data:{column:'status',mode:'operator',operator:'=',value:'Shipped'}}] },
+{ label:'paging — pages stitch to the full ordered result', kind:'paging', steps:[{ type:'sort', data:{ column:'unit_price', direction:'desc', nullsLast:true } }] },
+{ label:'paging — reshaped result pages consistently', kind:'paging', steps:[{ type:'group_by', data:{ groupColumns:['customer'], aggregations:[{fn:'count',column:'',name:'n'}] } }] },
+{ label:'step cache — expensive step reused with identical output', kind:'step-cache', steps:[
+{ type:'group_by', data:{ groupColumns:['region','status'], aggregations:[{fn:'sum',column:'quantity',name:'q'}] } },
+{ type:'filter', data:{ column:'q', mode:'operator', operator:'>', value:'0' } },
+] },
+{ label:'jobs — cancel interrupts a running query and the engine recovers', kind:'cancel' },
 { label:'export — at selected step returns prefix row count', kind:'export-prefix', exportAtStep:0, steps:[
 { type:'filter', data:{ column:'status', mode:'values', values:{ include:true, list:['Completed','Shipped'] } } },
 { type:'group_by', data:{ groupColumns:['region'], aggregations:[{fn:'sum',column:'quantity',name:'total_qty'},{fn:'count',column:'',name:'n'}] } },
@@ -9608,6 +10063,83 @@ async function runSelfTestDuckOnlyCheck(def, duckEngine, aqEngine){
   const preview = await duckEngine.preview(plan,200);
   return preview.rows.length ? {label:def.label,pass:true} : {label:def.label,pass:false,reason:'Query returned no rows'};
 }
+async function runSelfTestPagingCheck(def, duckEngine, expressEngine){
+  const n = def.steps.length - 1;
+  for (const engine of [duckEngine, expressEngine]){
+    const plan = await engine.compile(def.steps, n);
+    if (plan.error) return { label:def.label, pass:false, reason:`${engine.id}: ${plan.error}` };
+    const full = await engine.preview(plan, Infinity);
+    const total = full.rows.length;
+    const size = 7;
+    let mode = 'natural', mat = null;
+    if (engine.id === 'duckdb'){
+      if (plan.hasRid || plan.orderBy) mode = 'ordered';
+      else { mat = uid('gridv_'); await engine.materializeForPaging(plan, mat); mode = 'materialized'; }
+    }
+    const stitched = [];
+    try {
+      for (let off = 0; off < total + size; off += size){
+        const pg = await engine.page(plan, off, size, mode, mat);
+        stitched.push(...pg.rows);
+        if (!pg.hasMore) break;
+      }
+    } finally { if (mat) await dropDuckTempTable(mat); }
+    if (stitched.length !== total) return { label:def.label, pass:false, reason:`${engine.id}: pages returned ${stitched.length} rows, expected ${total}` };
+    const key = r => JSON.stringify(r.slice(0, full.columns.length).map(v => selfTestNormalizeCell(v)));
+    if (def.steps[0].type === 'sort'){
+      for (let i = 0; i < total; i++) if (key(stitched[i]) !== key(full.rows[i])) return { label:def.label, pass:false, reason:`${engine.id}: row ${i+1} differs between paged and full result` };
+    } else {
+      const a = stitched.map(key).sort(), b = full.rows.map(key).sort();
+      if (a.some((x,i)=>x!==b[i])) return { label:def.label, pass:false, reason:`${engine.id}: paged rows are not the same set as the full result` };
+      if (new Set(a).size !== a.length) return { label:def.label, pass:false, reason:`${engine.id}: a row appeared on two pages` };
+    }
+  }
+  return { label:def.label, pass:true };
+}
+async function runSelfTestStepCacheCheck(def, duckEngine, expressEngine){
+  const prevEngine = dataState.engine;
+  try {
+    for (const engine of [duckEngine, expressEngine]){
+      dataState.engine = engine;
+      clearStepCaches();
+      const map = engine.id === 'duckdb' ? duckStepCache : expressStepCache;
+      const cold = await engine.preview(await engine.compile(def.steps, def.steps.length - 1), Infinity);
+      if (!map.size) return { label:def.label, pass:false, reason:`${engine.id}: expensive step was not cached` };
+      const warmPlan = await engine.compile(def.steps, def.steps.length - 1);
+      if (engine.id === 'duckdb' && !/stepc_/.test(sqlOf(warmPlan))) return { label:def.label, pass:false, reason:'duckdb: second compile did not start from the cached table' };
+      const warm = await engine.preview(warmPlan, Infinity);
+      const k = p => p.rows.map(r => JSON.stringify(r.slice(0, p.columns.length).map(v => selfTestNormalizeCell(v)))).sort().join('\n');
+      if (k(cold) !== k(warm)) return { label:def.label, pass:false, reason:`${engine.id}: cached output differs from a fresh run` };
+      const edited = [def.steps[0], { ...def.steps[1], data:{ ...def.steps[1].data, value:'1000000' } }];
+      const changed = await engine.preview(await engine.compile(edited, 1), Infinity);
+      if (changed.rows.length >= cold.rows.length) return { label:def.label, pass:false, reason:`${engine.id}: editing a later step reused a stale result` };
+      const before = map.size;
+      bumpSourceGen();
+      if (map.size !== 0 || before === 0) return { label:def.label, pass:false, reason:`${engine.id}: reloading the source did not invalidate the cache` };
+    }
+    return { label:def.label, pass:true };
+  } finally {
+    dataState.engine = prevEngine;
+    clearStepCaches();
+  }
+}
+async function runSelfTestCancelCheck(def){
+  const t0 = performance.now();
+  const running = dataState.conn.query('SELECT SUM(HASH(i)) FROM range(4000000000) t(i)');
+  const queued = dataState.conn.query('SELECT 1 AS queued');
+  await new Promise(r => setTimeout(r, 300));
+  cancelJobs({ silent:true });
+  let first = null, second = null;
+  try { await running; first = 'finished'; } catch(e){ first = isCancelError(e) ? 'cancelled' : `error: ${e.message}`; }
+  try { await queued; second = 'ran'; } catch(e){ second = isCancelError(e) ? 'cancelled' : `error: ${e.message}`; }
+  const ms = performance.now() - t0;
+  if (first !== 'cancelled') return { label:def.label, pass:false, reason:`running query: ${first}` };
+  if (second !== 'cancelled') return { label:def.label, pass:false, reason:`queued query: ${second}` };
+  if (ms > 5000) return { label:def.label, pass:false, reason:`cancel took ${Math.round(ms)} ms` };
+  const after = await queryOneRaw('SELECT COUNT(*) AS n FROM source');
+  if (!after || Number(after.n) <= 0) return { label:def.label, pass:false, reason:'engine did not recover after cancel' };
+  return { label:def.label, pass:true };
+}
 async function runSelfTestXlsxFidelityCheck(def, duckEngine){
   const steps = def.steps || [];
   const plan = await duckEngine.compile(steps, steps.length - 1);
@@ -9677,6 +10209,12 @@ results[i] = SELFTEST_CASES[i].kind === 'export'
   ? await runSelfTestNormParityCheck(SELFTEST_CASES[i])
   : SELFTEST_CASES[i].kind === 'draft-registry'
   ? await runSelfTestDraftRegistryCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
+  : SELFTEST_CASES[i].kind === 'paging'
+  ? await runSelfTestPagingCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
+  : SELFTEST_CASES[i].kind === 'step-cache'
+  ? await runSelfTestStepCacheCheck(SELFTEST_CASES[i],duckEngine,aqEngine)
+  : SELFTEST_CASES[i].kind === 'cancel'
+  ? await runSelfTestCancelCheck(SELFTEST_CASES[i])
 : await runSelfTestParityCase(SELFTEST_CASES[i], duckEngine, aqEngine);
 } catch(e){
 results[i] = { label: SELFTEST_CASES[i].label, pass:false, reason:`Harness error — ${e.message || e}` };
@@ -9698,6 +10236,7 @@ document.body.dataset.selftestDone = 'true';
 function wireLifecycleGuards(){
 let lastErrorToastAt = 0;
 const report = (err) => {
+if (isCancelError(err)) return;
 const msg = (err && (err.message || err.reason?.message)) || String(err || 'Unknown error');
 if (/ResizeObserver loop|Script error\.?$/i.test(msg)) return;
 console.error('[duckbench]', err);
