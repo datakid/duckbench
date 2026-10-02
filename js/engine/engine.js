@@ -14,6 +14,38 @@ export class Engine {
     this.cache = new Map();
     this.results = new Map();
     this.resultSeq = 0;
+    this.sqlResults = new Map();
+  }
+
+  putSqlResult({ key, fields, columns, error, note }) {
+    this.sqlResults.set(key, error ? { error } : { fields, columns, note });
+    for (const k of [...this.cache.keys()]) if (k.startsWith(key)) this.cache.delete(k);
+    while (this.sqlResults.size > 24) this.sqlResults.delete(this.sqlResults.keys().next().value);
+    return true;
+  }
+
+  sqlInput({ queryId, index }) {
+    const q = this.queries.get(queryId);
+    if (!q) throw new Error('No such query.');
+    const step = q.steps[index];
+    const leading = q.source?.kind === 'duck' && step?.type === 'sql' && q.steps.slice(0, index).every(s => s.disabled);
+    let r = null;
+    if (!leading) {
+      r = this._run(q, index - 1, null);
+      if (r.needsSql) return { pending: r.needsSql };
+      if (r.error) throw new Error(r.error);
+    }
+    const tables = [];
+    for (const id of step.data?.tables || []) {
+      const dq = this.queries.get(id);
+      if (!dq) throw new Error('A query used by this SQL step no longer exists.');
+      const dr = this._run(dq, dq.steps.length - 1, null);
+      if (dr.needsSql) return { pending: dr.needsSql };
+      if (dr.error) throw new Error(`“${dq.name}” has an error: ${dr.error}`);
+      tables.push({ id, name: dq.name, fields: dr.frame.fields, columns: dr.frame.columns });
+    }
+    if (leading) return { pushdown: q.source.sql, limit: q.source.limit, fields: [], columns: [], sql: step.data?.sql || '', tables };
+    return { fields: r.frame.fields, columns: r.frame.columns, sql: step.data?.sql || '', tables };
   }
 
   ping() { return { ok: true, at: Date.now() }; }
@@ -72,11 +104,20 @@ export class Engine {
   removeSource({ id }) { this.sources.delete(id); this.invalidate(); return true; }
 
   setQueries({ queries }) {
-    this.queries = new Map(queries.map(q => [q.id, { ...q, steps: (q.steps || []).map(s => (s.unsupported ? s : s)) }]));
+    const keep = [...this.queries.values()].filter(q => String(q.id).startsWith('batchq_'));
+    this.queries = new Map(queries.map(q => [q.id, { ...q, steps: q.steps || [] }]));
+    for (const q of keep) if (!this.queries.has(q.id)) this.queries.set(q.id, q);
     return true;
   }
 
-  invalidate() { this.cache.clear(); this.results.clear(); }
+  invalidate() { this.cache.clear(); this.results.clear(); this.sqlResults.clear(); return true; }
+
+  pendingSql({ queryId }) {
+    const q = this.queries.get(queryId);
+    if (!q) return null;
+    const r = this._run(q, q.steps.length - 1, null);
+    return r.needsSql || null;
+  }
 
   sourceInfo() { return [...this.sources.values()].map(s => ({ id: s.id, name: s.name, format: s.format, rowCount: s.frame.rowCount, fields: s.frame.fields })); }
 
@@ -86,12 +127,21 @@ export class Engine {
       const parent = this.queries.get(src.parentId);
       if (!parent) throw new Error('The query this one references no longer exists.');
       const r = this._run(parent, parent.steps.length - 1, null, stack);
+      if (r.needsSql) throw Object.assign(new Error(r.error), { needsSql: r.needsSql });
       if (r.error) throw new Error(`The referenced query “${parent.name}” has an error: ${r.error}`);
       return { frame: r.frame, key: r.key };
     }
     if (src.kind === 'blank') {
       const f = Frame.fromText(src.names || ['Column1'], (src.names || ['Column1']).map(() => []), { infer: false });
       return { frame: f.withRid(), key: 'blank:' + hashString(JSON.stringify(src.names || [])) };
+    }
+    if (src.kind === 'duck') {
+      const key = `duck:${src.table}:${hashString(JSON.stringify([src.sql, src.limit]))}`;
+      const hit = this.sqlResults.get(key);
+      if (!hit) throw Object.assign(new Error('Waiting for DuckDB…'), { needsSql: { key, queryId: q.id, source: { table: src.table, sql: src.sql, limit: src.limit } } });
+      if (hit.error) throw new Error(hit.error);
+      if (!hit.frame) hit.frame = new Frame(hit.fields.map(f => ({ ...f })), hit.columns, hit.columns[0]?.length ?? 0).withRid();
+      return { frame: hit.frame, key, note: hit.note || null };
     }
     const s = this.sources.get(src.sourceId);
     if (!s) throw new Error('This query’s data file is not loaded. Use “Locate file…” to reconnect it.');
@@ -103,7 +153,12 @@ export class Engine {
     stack = [...stack, q.id];
     const diag = [];
     let base;
-    try { base = this._baseFor(q, stack); } catch (e) { return { error: e.message, errorIndex: -1, diag, frame: null, key: null }; }
+    const firstActive = q.steps.findIndex(s => !s.disabled);
+    const pushdown = q.source?.kind === 'duck' && firstActive >= 0 && q.steps[firstActive].type === 'sql' && upto >= firstActive && !override;
+    if (pushdown) base = { frame: Frame.empty([]).withRid(), key: `duckpd:${q.source.table}:${hashString(q.source.sql)}` };
+    else {
+      try { base = this._baseFor(q, stack); } catch (e) { return { error: e.message, errorIndex: -1, diag, frame: null, key: null, needsSql: e.needsSql || null }; }
+    }
     let frame = base.frame;
     let key = base.key;
     const steps = q.steps;
@@ -123,7 +178,14 @@ export class Engine {
       if (error) { diag.push({ blocked: true }); continue; }
       const r = this._applyStep(q, step, frame, key, stack);
       diag.push(r.diag);
-      if (r.error) { error = r.error; errorIndex = i; continue; }
+      if (r.error) {
+        error = r.error; errorIndex = i;
+        if (r.needsSql) {
+          for (let j = i + 1; j < steps.length; j++) diag.push({ blocked: true });
+          return { frame, key, diag, error, errorIndex, needsSql: r.needsSql.queryId ? r.needsSql : { ...r.needsSql, queryId: q.id, index: i } };
+        }
+        continue;
+      }
       frame = r.frame; key = r.key;
     }
     if (override && override.insertAt === last + 1 && !error) {
@@ -132,7 +194,7 @@ export class Engine {
       if (r.error) return { error: r.error, errorIndex: last + 1, diag, frame, key, draftError: true };
       frame = r.frame; key = r.key;
     }
-    return { frame, key, diag, error, errorIndex };
+    return { frame, key, diag, error, errorIndex, note: base.note || null };
   }
 
   _applyStep(q, step, frame, prevKey, stack) {
@@ -145,6 +207,7 @@ export class Engine {
         if (dep === q.id) return { error: 'A query can’t combine with itself — reference it first.', diag: { error: 'Self reference' } };
         try {
           const r = this._run(dq, dq.steps.length - 1, null, stack);
+          if (r.needsSql) return { error: r.error, needsSql: r.needsSql, diag: { error: r.error, pending: true } };
           if (r.error) return { error: `“${dq.name}” has an error: ${r.error}`, diag: { error: r.error } };
           depKeys.push(r.key);
         } catch (e) { return { error: e.message, diag: { error: e.message } }; }
@@ -166,9 +229,10 @@ export class Engine {
       const ctx = {
         info: (m) => messages.info.push(m),
         warn: (m) => { if (messages.warn.length < 8) messages.warn.push(m); },
-        query: (id) => { const dq = this.queries.get(id); const r = this._run(dq, dq.steps.length - 1, null, stack); if (r.error) throw new Error(r.error); return r.frame; },
+        query: (id) => { const dq = this.queries.get(id); if (!dq) throw new Error('The query this step uses no longer exists.'); const r = this._run(dq, dq.steps.length - 1, null, stack); if (r.error) throw new Error(r.error); return r.frame; },
         queryName: (id) => this.queries.get(id)?.name || id,
         selfName: q.name,
+        sqlResult: () => this.sqlResults.get(key) || null,
       };
       if ((step.type === 'delete_rows' || step.type === 'edit_cells') && !frame.rid) throw new Error('Row edits need the original rows — move this step before any grouping, pivot or join.');
       const out = t.apply(frame, step.data || {}, ctx);
@@ -179,6 +243,7 @@ export class Engine {
       this._cachePut(key, { frame: out, diag });
       return { frame: out, key, diag };
     } catch (e) {
+      if (e.needsSql) return { error: e.message, needsSql: { key }, diag: { error: e.message, pending: true } };
       return { error: e.message || String(e), diag: { error: e.message || String(e), ms: now() - t0 } };
     }
   }
@@ -201,6 +266,8 @@ export class Engine {
     let viewError = null;
     const failedAtView = view.error && (view.errorIndex <= target || view.draftError);
     if (failedAtView) viewError = { message: view.error, index: view.errorIndex, draft: !!view.draftError };
+    const needsSql = view.needsSql || full.needsSql || null;
+    if (needsSql) return { needsSql, diag: full.diag };
     if (!frame) return { error: view.error, errorIndex: view.errorIndex, diag: full.diag, sourceError: view.errorIndex === -1 };
     const id = `r${++this.resultSeq}`;
     this.results.set(id, frame);
@@ -218,6 +285,7 @@ export class Engine {
       viewDiag: override ? viewDiag : null,
       viewError,
       fullError: full.error ? { message: full.error, index: full.errorIndex } : null,
+      sourceNote: view.note || null,
       changed,
       bytes: frame.estimateBytes(),
       ms: now() - t0,
@@ -278,8 +346,9 @@ export class Engine {
     let f = resultId ? this.results.get(resultId) : null;
     if (!f) {
       const q = this.queries.get(queryId);
+      if (!q) throw new Error('No such query.');
       const r = this._run(q, stepIndex ?? q.steps.length - 1, null);
-      if (r.error && !r.frame) throw new Error(r.error);
+      if (r.error) throw new Error(r.errorIndex >= 0 ? `Step ${r.errorIndex + 1}: ${r.error}` : r.error);
       f = r.frame;
     }
     if (columns?.length) f = f.select(columns.filter(c => f.has(c)));
@@ -327,17 +396,18 @@ export class Engine {
     throw new Error(`Unknown export format ${format}`);
   }
 
-  runSteps({ frameFrom, steps }) {
-    const q = { id: '__batch', name: 'batch', source: { kind: 'file', sourceId: frameFrom }, steps: steps.map(migrateStep) };
+  runSteps({ frameFrom, steps, id = '__batch', queryName = 'batch' }) {
+    const q = { id, name: queryName, source: { kind: 'file', sourceId: frameFrom }, steps: steps.map((s, i) => ({ id: `b${i}`, ...migrateStep(s) })) };
     this.queries.set(q.id, q);
-    try {
-      const r = this._run(q, q.steps.length - 1, null);
-      if (r.error) return { error: r.error, errorIndex: r.errorIndex };
-      const id = `r${++this.resultSeq}`;
-      this.results.set(id, r.frame);
-      return { resultId: id, rowCount: r.frame.rowCount };
-    } finally { this.queries.delete(q.id); }
+    const r = this._run(q, q.steps.length - 1, null);
+    if (r.needsSql) return { needsSql: r.needsSql };
+    if (r.error) return { error: r.error, errorIndex: r.errorIndex };
+    const rid = `r${++this.resultSeq}`;
+    this.results.set(rid, r.frame);
+    return { resultId: rid, rowCount: r.frame.rowCount };
   }
+
+  dropQuery({ id }) { this.queries.delete(id); return true; }
 }
 
 function parseJsonText(text, format, options) {
@@ -390,4 +460,4 @@ function flatten(o, prefix = '', out = {}, depth = 0) {
   return out;
 }
 
-export const ENGINE_METHODS = ['ping', 'loadText', 'loadColumns', 'peekText', 'removeSource', 'setQueries', 'sourceInfo', 'evaluate', 'rows', 'profile', 'distinct', 'queryColumns', 'findRows', 'exportData', 'runSteps', 'invalidate'];
+export const ENGINE_METHODS = ['dropQuery', 'putSqlResult', 'sqlInput', 'pendingSql', 'ping', 'loadText', 'loadColumns', 'peekText', 'removeSource', 'setQueries', 'sourceInfo', 'evaluate', 'rows', 'profile', 'distinct', 'queryColumns', 'findRows', 'exportData', 'runSteps', 'invalidate'];

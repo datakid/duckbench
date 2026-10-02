@@ -2,8 +2,9 @@
 <html lang="en"><head><meta charset="UTF-8"><title>Duckbench demo</title></head>
 <body><p>Opening demo…</p>
 <script>
-  var t = new URLSearchParams(location.search).get('theme');
-  if (t) localStorage.setItem('duckbench2.theme', JSON.stringify(t));
-  location.replace('index.html?demo&t=' + Date.now());
+  var p = new URLSearchParams(location.search);
+  var t = p.get('theme') || 'dark';
+  localStorage.setItem('duckbench2.theme', JSON.stringify(t));
+  location.replace('index.html?demo' + (p.has('tour') ? '' : '&notour') + '&t=' + Date.now());
 </script>
 </body></html>

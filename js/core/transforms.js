@@ -1601,7 +1601,28 @@ def('append', {
   },
 });
 
-const STEP_ALIASES = { limit: 'keep_rows', rename_column: 'rename_columns', edit_cell: 'edit_cells', select: 'select_columns' };
+def('sql', {
+  label: 'SQL query', code: 'SQL', category: 'Table', icon: 'database',
+  ribbon: { tab: 'transform', group: 'SQL', size: 'large' },
+  keywords: 'sql duckdb select query custom raw_sql',
+  params: [
+    { key: 'sql', type: 'code', label: 'Query', default: 'SELECT *\nFROM input', help: 'Runs in DuckDB. The current data is the table input. Other queries listed below are available by name.' },
+    { key: 'tables', type: 'queries', label: 'Also expose these queries as tables', default: () => [] },
+  ],
+  migrate(d) { return d.sql != null ? { sql: d.sql, tables: d.tables || [] } : { sql: d.query || d.raw || 'SELECT * FROM input', tables: [] }; },
+  validate(d) { return String(d.sql || '').trim() ? null : 'Write a query.'; },
+  summary(d) { return String(d.sql || '').replace(/\s+/g, ' ').trim(); },
+  deps(d) { return d.tables || []; },
+  apply(frame, d, ctx) {
+    const hit = ctx.sqlResult();
+    if (!hit) { const e = new Error('Waiting for DuckDB…'); e.needsSql = true; throw e; }
+    if (hit.error) throw new Error(hit.error);
+    if (hit.note) ctx.info(hit.note);
+    return new Frame(hit.fields.map(f => ({ ...f })), hit.columns, hit.columns[0]?.length ?? 0);
+  },
+});
+
+const STEP_ALIASES = { raw_sql: 'sql', custom_sql: 'sql', limit: 'keep_rows', rename_column: 'rename_columns', edit_cell: 'edit_cells', select: 'select_columns' };
 
 export function migrateStep(step) {
   if (!step || typeof step !== 'object') return null;

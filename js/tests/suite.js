@@ -5,6 +5,9 @@ import { inferColumnType, parseDateString, parseNumberString, formatValue } from
 import { evaluateFormula } from '../core/formula.js';
 import { Frame } from '../core/frame.js';
 import { SAMPLE_SALES_CSV, SAMPLE_REGIONS_CSV } from '../app/samples.js';
+import { validateSql, withInput, tableNameFor } from '../engine/duck.js';
+import { zipFiles, unzipEntries, crc32 } from '../io/zip.js';
+import { createStore } from '../app/store.js';
 
 const eq = (a, b, msg) => { const A = JSON.stringify(a), B = JSON.stringify(b); if (A !== B) throw new Error(`${msg || 'mismatch'}: expected ${B}, got ${A}`); };
 const ok = (c, msg) => { if (!c) throw new Error(msg || 'assertion failed'); };
@@ -92,15 +95,90 @@ export const TESTS = [
   ['export — dates keep ISO format', () => { const r = run([]); const j = JSON.parse(r.engine.exportData({ resultId: r.res.resultId, format: 'json' }).text); eq(j[0].order_date, '2026-01-31'); }],
   ['batch runSteps', () => { const e = setup(); const r = e.runSteps({ frameFrom: 'sales', steps: [{ type: 'filter', data: { column: 'region', mode: 'operator', operator: '=', value: 'North' } }] }); ok(r.rowCount > 0 && r.rowCount < 52); }],
   ['JSON import — nested objects flatten', () => { const e = new Engine(); const info = e.loadText({ id: 'j', name: 'x.json', text: JSON.stringify({ data: [{ a: 1, b: { c: 'x' } }, { a: 2, b: { c: 'y' } }] }), format: 'json' }); eq(info.fields.map(f => f.name), ['a', 'b.c']); }],
+  ['sql — validator accepts reads, rejects writes and files', () => {
+    ok(validateSql('SELECT * FROM input;').sql === 'SELECT * FROM input');
+    ok(validateSql('-- note\nWITH a AS (SELECT 1) SELECT * FROM a').sql);
+    ok(validateSql("SELECT 'drop table x' AS s FROM input").sql, 'keyword inside string is fine');
+    ok(validateSql('SELECT 1; DROP TABLE input').error);
+    ok(validateSql('DELETE FROM input').error);
+    ok(validateSql("SELECT * FROM read_csv('x.csv')").error);
+    ok(validateSql('COPY input TO \'x\'').error);
+    ok(validateSql('').error);
+  }],
+  ['sql — WITH composition', () => {
+    eq(withInput('SELECT 1', 'SELECT * FROM input'), 'WITH input AS (SELECT 1) SELECT * FROM input');
+    eq(withInput('SELECT 1', 'WITH b AS (SELECT * FROM input) SELECT * FROM b'), 'WITH input AS (SELECT 1), b AS (SELECT * FROM input) SELECT * FROM b');
+  }],
+  ['sql — table names', () => { const t = new Set(['input']); eq(tableNameFor('Sample Sales (2026)', t), 'sample_sales_2026'); eq(tableNameFor('Sample sales 2026', t), 'sample_sales_2026_2'); eq(tableNameFor('input', t), 'input_query'); eq(tableNameFor('2026', t), 'q_2026'); }],
+  ['sql step — pending, then resolved from cache', () => {
+    const e = setup();
+    e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: 'sales' }, steps: [{ id: 'a', type: 'keep_rows', data: { mode: 'first', count: 5 } }, { id: 'b', type: 'sql', data: { sql: 'SELECT region FROM input', tables: [] } }, { id: 'c', type: 'keep_rows', data: { mode: 'first', count: 2 } }] }] });
+    const first = e.evaluate({ queryId: 'q' });
+    ok(first.needsSql && first.needsSql.index === 1 && first.needsSql.key, 'reports pending SQL');
+    const input = e.sqlInput({ queryId: 'q', index: 1 });
+    eq(input.columns[0].length, 5);
+    e.putSqlResult({ key: first.needsSql.key, fields: [{ name: 'region', type: 'text' }], columns: [['North', 'South', 'X', 'Y', 'Z']] });
+    const second = e.evaluate({ queryId: 'q' });
+    eq(second.rowCount, 2); eq(second.fields.map(f => f.name), ['region']);
+    e.putSqlResult({ key: first.needsSql.key, error: 'Binder: no column foo' });
+    const third = e.evaluate({ queryId: 'q' });
+    ok(third.fullError && /foo/.test(third.fullError.message));
+  }],
+  ['sql step — v1 raw_sql migrates', () => { const s = migrateStep({ type: 'raw_sql', data: { sql: 'SELECT 1' } }); eq(s.type, 'sql'); eq(s.data.sql, 'SELECT 1'); }],
+  ['duck source — pushdown of leading SQL step', () => {
+    const e = new Engine();
+    e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: "SELECT * FROM read_parquet('big.parquet')", limit: 100 }, steps: [{ id: 'a', type: 'sql', data: { sql: 'SELECT COUNT(*) AS n FROM input', tables: [] } }] }] });
+    const r = e.evaluate({ queryId: 'd' });
+    ok(r.needsSql && r.needsSql.index === 0, 'needs the SQL step, not the 1M-row source');
+    const input = e.sqlInput({ queryId: 'd', index: 0 });
+    ok(input.pushdown && /read_parquet/.test(input.pushdown));
+    e.putSqlResult({ key: r.needsSql.key, fields: [{ name: 'n', type: 'integer' }], columns: [[123456789]] });
+    eq(e.evaluate({ queryId: 'd' }).page.rows[0][0], 123456789);
+  }],
+  ['duck source — non-SQL steps load the preview slice', () => {
+    const e = new Engine();
+    e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: 'SELECT 1', limit: 10 }, steps: [{ id: 'a', type: 'keep_rows', data: { mode: 'first', count: 1 } }] }] });
+    const r = e.evaluate({ queryId: 'd' });
+    ok(r.needsSql && r.needsSql.source, 'asks for the source slice');
+    e.putSqlResult({ key: r.needsSql.key, fields: [{ name: 'x', type: 'integer' }], columns: [[1, 2, 3]], note: 'slice' });
+    const r2 = e.evaluate({ queryId: 'd' });
+    eq(r2.rowCount, 1); eq(r2.sourceNote, 'slice');
+  }],
+  ['batch — query survives setQueries and SQL resolves', () => {
+    const e = setup();
+    const first = e.runSteps({ frameFrom: 'sales', steps: [{ type: 'sql', data: { sql: 'SELECT 1', tables: [] } }], id: 'batchq_x' });
+    ok(first.needsSql);
+    e.setQueries({ queries: [] });
+    e.putSqlResult({ key: first.needsSql.key, fields: [{ name: 'a', type: 'integer' }], columns: [[1, 2]] });
+    eq(e.runSteps({ frameFrom: 'sales', steps: [{ type: 'sql', data: { sql: 'SELECT 1', tables: [] } }], id: 'batchq_x' }).rowCount, 2);
+  }],
+  ['zip — round trip with deflate and store, CRC valid', async () => {
+    const big = 'region,amount\n' + 'North,1\n'.repeat(500);
+    const blob = await zipFiles([{ name: 'a.csv', data: big }, { name: 'b.bin', data: new Uint8Array([1, 2, 3]) }, { name: 'a.csv', data: 'dup' }]);
+    const entries = await unzipEntries(blob);
+    eq(entries.map(e => e.name), ['a.csv', 'b.bin', 'a (2).csv']);
+    ok(entries.every(e => e.crcOk), 'CRC');
+    eq(new TextDecoder().decode(entries[0].data), big);
+    eq([...entries[1].data], [1, 2, 3]);
+    if (typeof CompressionStream !== 'undefined') eq(entries[0].method, 8);
+    eq(crc32(new TextEncoder().encode('123456789')), 0xCBF43926);
+  }],
+  ['store — delete step keeps cursor on the same step', () => {
+    const s = createStore();
+    s.commit('init', (st) => { st.queries = [{ id: 'q', name: 'q', source: {}, steps: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] }]; st.activeQueryId = 'q'; st.stepCursor = { q: 2 }; });
+    s.commit('del', (st) => { const qq = st.queries[0]; const cur = st.stepCursor.q; qq.steps.splice(0, 1); const next = cur >= 0 ? cur - 1 : cur; st.stepCursor.q = next; });
+    eq(s.state.queries[0].steps[s.cursor()].id, 'c');
+    s.undo(); eq(s.state.queries[0].steps.length, 4); s.redo(); eq(s.state.queries[0].steps.length, 3);
+  }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];
 
-export function runAll(onResult) {
+export async function runAll(onResult) {
   const results = [];
   for (const [name, fn] of TESTS) {
     const t0 = performance.now();
     let error = null;
-    try { fn(); } catch (e) { error = e.message || String(e); }
+    try { await fn(); } catch (e) { error = e.message || String(e); }
     const r = { name, ok: !error, error, ms: performance.now() - t0 };
     results.push(r);
     onResult?.(r);

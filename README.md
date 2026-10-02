@@ -9,6 +9,7 @@ A data-prep workbench that runs entirely in the browser, written in plain JavaSc
 - **Cancel.** A running job is cancelled by terminating the worker. The engine then restarts and reloads its sources and queries.
 - **Excel** runs in its own classic worker using the bundled `vendor/xlsx-0.20.3.full.min.js`.
 - **Parquet** uses `hyparquet` and `hyparquet-writer`, loaded from jsDelivr only the first time Parquet is used.
+- **DuckDB is optional.** `@duckdb/duckdb-wasm@1.32.0` (version 1.29.2 is blocked) is loaded from jsDelivr only when a SQL step runs or a file is opened with DuckDB. The engine reports a SQL step as `needsSql` along with a cache key. `js/app/sqlrunner.js` then copies the step's input into DuckDB, runs the query, and stores the result in the engine under that key. Any steps after it keep using the normal engine and cache.
 
 ## Files
 | Path | Purpose |
@@ -17,8 +18,11 @@ A data-prep workbench that runs entirely in the browser, written in plain JavaSc
 | `demo.html` | Opens the app with the sample data loaded (`index.html?demo`) |
 | `css/app.css` | All styles: dark and light themes, responsive layout |
 | `js/core/` | `types` (inference and conversion), `csv`, `frame`, `formula` (expression language), `normalize` (loose and Arabic matching), `profile`, `transforms` (the step registry), `util` |
-| `js/engine/` | `engine.js` (pipeline, cache, export), `worker.js`, `client.js` (RPC, cancel, inline fallback), `parquet.js`, `xlsx-worker.js` |
-| `js/io/xlsx-core.js` | Excel read and write, shared by the worker and the inline fallback |
+| `js/engine/` | `engine.js` (pipeline, cache, export), `worker.js`, `client.js` (RPC, cancel, inline fallback), `parquet.js`, `xlsx-worker.js`, `duck.js` (DuckDB loader, SQL validator, table loading, export via `COPY`) |
+| `js/io/` | `xlsx-core.js` (Excel read and write), `zip.js` (ZIP writer and reader, CRC-32, deflate via `CompressionStream`) |
+| `js/app/sqlrunner.js` | Runs SQL steps and DuckDB-backed file sources |
+| `js/app/tour.js` | Six-step onboarding tour |
+| `tests.html`, `js/tests/` | Self-test suite |
 | `js/ui/` | `grid` (virtual grid), `forms` (inspector built from step parameter definitions), `overlay` (modal, menu, toast), `dom`, `icons` |
 | `js/app/` | `main.js` (wires everything together), `store.js` (state, undo/redo, IndexedDB), `samples.js` |
 
@@ -44,24 +48,45 @@ A data-prep workbench that runs entirely in the browser, written in plain JavaSc
 - **Export:** CSV or TSV (with BOM and protection against spreadsheet formula injection), Excel (one query, or every query as its own sheet), Parquet, JSON, JSONL, Markdown and SQL INSERT. You can choose columns and a row range, and export from the step you are previewing.
 - **Recipes:** v2 recipes (`.duckbench.json`) store all queries. Duckbench 1 recipes can be opened, and their steps are converted to v2 steps.
 
-## Visual identity: "field notebook"
-- **Palette:** calm, low-chroma colour. Dark theme: pond ink `#101417` with verdigris `#86b8a6` and ochre `#d2a85e`. Light theme: linen `#f2eee5` with deep verdigris `#3d7566` and ochre `#9a6b1f`. Data types each get their own muted colour: text is verdigris, numbers are slate blue, dates are plum, true/false is ochre.
-- **Type:** Fraunces (variable optical size, SOFT axis) for headlines and figures. IBM Plex Sans for the interface. Plex Mono, in small caps with wide letter spacing, for labels, codes and the status bar.
-- **Motifs:** contour lines and crop marks on the import screen. A numbered thread connecting the applied steps. Type badges drawn as outlines. Thin rules instead of filled boxes. A faint film grain over everything.
+## Visual system: Slate & Lichen
+- **Dark theme:** a graphite canvas `#131417`, panels `#1a1b1f`, and a pale lichen accent `#c3c992`.
+- **Light theme:** a fog canvas `#e9e8e2`, panels `#f8f7f3`, and a moss accent `#5c6a2d`.
+- **Data colours:** mist blue for numbers, heather for dates, clay for true/false. Clay also marks changed cells, empty values and warnings.
+- **Layout:** panels float on the canvas with rounded corners and 6 px gaps. The interface uses IBM Plex Sans, and numbers use Plex Mono with tabular figures. No display typeface, no textures, no marketing copy.
 
-## Self-test
-`tests.html` (or `selftest.html`) runs 62 engine tests in the browser and currently shows **62/62**. They cover CSV and type parsing, every transform, conversion of v1 recipe steps, formulas, joins in all join types, references and circular-reference detection, row edits after sorting, the step cache, preview at an earlier step, and every export format.
+## SQL and large files
+- **SQL step:** Transform → SQL. It's a read-only SELECT over `input`, plus any other queries you select, which appear as tables. One statement only. Writes, `COPY`, `ATTACH`, `INSTALL`, `PRAGMA` and direct file reads are rejected. Results are capped at 2 million rows. Duckbench 1 `raw_sql` steps are converted to this step.
+- **Files over 1 GB** (or any file, by ticking "Open with DuckDB" in Import with options) are registered with DuckDB without being read into memory.
+  - If the first step is a SQL step, it runs directly against the whole file.
+  - Other steps work on the first 1,000,000 rows, and a banner says so.
+  - "Export full file via DuckDB" runs a chain of SQL-only steps over every row and writes Parquet, CSV or JSON.
+  - Files opened this way must be located again after a reload.
 
 ## Batch apply
-Available from the import screen or the command palette. Pick a recipe (or use the current query's steps), add files and choose an output format. Each file is processed and its result downloaded.
+Available from the import screen or the command palette. Choose a recipe (with a query picker for multi-query recipes) or use the current query's steps. Add files, pick an output format, and download one ZIP or the individual files. Steps that join or append other queries are flagged before the run.
+
+## Onboarding tour
+Six spotlight steps covering Queries, Applied steps, the ribbon, the preview grid, Actions (⌘K) and Export. It runs once automatically, and can be started again from the masthead or the import screen. Keyboard: arrow keys, Enter, Esc. `?notour` skips it.
+
+## Self-test
+`tests.html` (or `selftest.html`) runs **72/72** tests. In addition to the transform, migration, formula, join, cache and export tests, it covers:
+- the SQL validator
+- how `WITH` clauses are combined
+- DuckDB table naming
+- the full SQL-step lifecycle: pending → resolved → error, including cache invalidation
+- pushdown to DuckDB-backed sources and the row-slice fallback
+- batch queries surviving a `setQueries` call
+- a ZIP round trip with CRC-32 checks
+- undo/redo and the step cursor
+
+The DuckDB-WASM download itself is not covered by tests.
 
 ## Not yet done
-- The guided tour.
-- A Custom SQL step. This was removed together with DuckDB.
 - Freezing columns and resizing panels.
-- Downloading batch results as one ZIP file.
+- A SQL editor with syntax highlighting.
+- Remembering large DuckDB-backed files across reloads.
 
 ## Next steps
-1. Add a ZIP option for batch downloads.
-2. Add an optional DuckDB-WASM mode for SQL steps and files over about 1 GB.
-3. Add the onboarding tour.
+1. Add a column-freeze option and resizable side panels.
+2. Add a SQL editor with highlighting and column autocomplete.
+3. Add a streaming CSV reader, so files around 300 MB to 1 GB don't need DuckDB.

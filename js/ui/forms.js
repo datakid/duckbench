@@ -105,6 +105,17 @@ function field(p, data, ctx, set, rerender) {
       wrap.append(label(p), seg);
       break;
     }
+    case 'code': {
+      const ta = el('textarea', { class: 'input code-input', rows: '8', spellcheck: 'false', dataset: { fkey: p.key } });
+      ta.value = v ?? '';
+      ta.addEventListener('input', () => set(ta.value));
+      ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); const s = ta.selectionStart; ta.value = ta.value.slice(0, s) + '  ' + ta.value.slice(ta.selectionEnd); ta.setSelectionRange(s + 2, s + 2); set(ta.value); }
+      });
+      const cols = el('div', { class: 'sql-cols' }, fields.slice(0, 60).map(f => el('button', { type: 'button', class: 'chip chip-btn', title: `Insert "${f.name}"`, onclick: () => { const s = ta.selectionStart ?? ta.value.length; const ins = `"${f.name.replace(/"/g, '""')}"`; ta.value = ta.value.slice(0, s) + ins + ta.value.slice(ta.selectionEnd ?? s); ta.focus(); ta.setSelectionRange(s + ins.length, s + ins.length); set(ta.value); } }, f.name)));
+      wrap.append(label(p), ta, el('div', { class: 'sql-info' }, el('span', {}, p.help || ''), ctx.sqlTables?.length ? el('span', {}, `Tables: input, ${ctx.sqlTables.join(', ')}`) : el('span', {}, 'Tables: input'), cols));
+      break;
+    }
     case 'formula': {
       wrap.append(label(p), formulaEditor(v || '', p, fields, (nv) => set(nv)));
       break;

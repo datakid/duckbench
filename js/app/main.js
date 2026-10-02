@@ -9,10 +9,24 @@ import { TRANSFORMS, RIBBON_TABS, transformCatalog, defaultsFor, stepSummary, mi
 import { TYPE_LABELS, formatValue } from '../core/types.js';
 import { uid, uniqueName } from '../core/util.js';
 import { SAMPLE_SALES_CSV, SAMPLE_REGIONS_CSV } from './samples.js';
+import { createSqlRunner } from './sqlrunner.js';
+import { startTour, maybeAutoTour, resumePendingTour } from './tour.js';
+import { zipFiles } from '../io/zip.js';
+import * as duck from '../engine/duck.js';
 
 const store = createStore();
 const client = new EngineClient();
 const xlsx = makeXlsxRpc();
+const sql = createSqlRunner(client, { onStatus: () => renderMast() });
+const LARGE_FILE_BYTES = 1024 * 1024 * 1024;
+const DUCK_PREVIEW_ROWS = 1_000_000;
+const duckFiles = new Map();
+
+function engineLabel() {
+  const st = duck.duckStatus();
+  const base = client.mode === 'worker' ? 'Worker engine' : 'Inline engine';
+  return st === 'ready' ? `${base} + DuckDB` : st === 'loading' ? `${base} · loading DuckDB` : base;
+}
 const ui = {
   result: null, selection: { columns: [] }, selectedStep: null, rightMode: null, profileColumn: null,
   showQuality: prefs.get('quality', true), evalToken: 0, diag: [], inputFields: [], search: '',
@@ -66,9 +80,35 @@ function chooseSheet(name, sheets) {
   });
 }
 
-async function importFiles(files, { asNewProject = false, options } = {}) {
+async function importLargeViaDuck(file, { asNewProject }) {
+  const format = formatOf(file.name);
+  if (format === 'excel') throw new Error('Excel files over 1 GB are not supported. Save the sheet as CSV or Parquet first.');
+  const table = duck.tableNameFor(file.name.replace(/\.[^.]+$/, ''), new Set([...duckFiles.values()].map(d => d.table)));
+  const fname = `${table}.${format === 'parquet' ? 'parquet' : format === 'jsonl' ? 'jsonl' : format === 'json' ? 'json' : 'csv'}`;
+  await duck.registerFile(fname, file);
+  const srcSql = `SELECT * FROM ${duck.readerFor(fname, format)}`;
+  const sid = uid('d');
+  duckFiles.set(sid, { table, fname, file });
+  const qname = uniqueName(file.name.replace(/\.[^.]+$/, ''), store.state.queries.map(q => q.name), ' ');
+  const q = newQuery(qname, { kind: 'duck', sourceId: sid, table, sql: srcSql, limit: DUCK_PREVIEW_ROWS });
+  const src = { id: sid, name: file.name, format, options: { duck: true }, rowCount: null, size: file.size, fields: [], duck: true };
+  store.commit(`Import ${file.name}`, (s) => {
+    if (asNewProject) { s.queries = []; s.sources = []; s.projectName = qname; }
+    s.sources.push(src); s.queries.push(q); s.activeQueryId = q.id;
+  });
+  toast(`${file.name} opened with DuckDB`, { kind: 'success' });
+}
+
+async function importFiles(files, { asNewProject = false, options, viaDuck = false } = {}) {
+  const done = [];
   for (const file of files) {
     try {
+      if (viaDuck || file.size > LARGE_FILE_BYTES) {
+        if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB, downloaded once from cdn.jsdelivr.net. The first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows are loaded for steps; exports can run over the whole file.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
+        await importLargeViaDuck(file, { asNewProject });
+        asNewProject = false;
+        continue;
+      }
       const sid = uid('f');
       const info = await loadFileIntoEngine(file, sid, options || {});
       if (!info) continue;
@@ -81,11 +121,13 @@ async function importFiles(files, { asNewProject = false, options } = {}) {
         s.sources.push(src); s.queries.push(q); s.activeQueryId = q.id;
       });
       asNewProject = false;
-      toast(`${file.name}: ${fmtCount(info.rowCount)} rows × ${info.fields.length} columns${info.ms ? ` in ${fmtMs(info.ms)}` : ''}`, { kind: 'success' });
+      done.push(`${file.name}: ${fmtCount(info.rowCount)} rows`);
     } catch (e) {
       toast(`Couldn’t read ${file.name}: ${e.message}`, { kind: 'error' });
     }
   }
+  if (done.length === 1) toast(done[0], { kind: 'success' });
+  else if (done.length > 1) toast(`${done.length} files imported`, { kind: 'success' });
   if (store.state.queries.length) showWorkbench();
 }
 
@@ -105,10 +147,13 @@ async function importWithOptions(asNewProject) {
     body.push(row('Skip rows before the header', el('input', { class: 'input', type: 'number', min: '0', value: '0', oninput: (e) => { opts.skipRows = Number(e.target.value) || 0; } })));
     body.push(el('label', { class: 'f-toggle' }, el('input', { type: 'checkbox', checked: true, onchange: (e) => { opts.header = e.target.checked; } }), el('span', { class: 'toggle-ui' }), el('span', {}, 'First row contains column names')));
   }
-  body.push(el('label', { class: 'f-toggle' }, el('input', { type: 'checkbox', checked: true, onchange: (e) => { opts.detectTypes = e.target.checked; } }), el('span', { class: 'toggle-ui' }), el('span', {}, 'Detect column types (numbers, dates, true/false)')));
+  body.push(el('label', { class: 'f-toggle' }, el('input', { type: 'checkbox', checked: true, onchange: (e) => { opts.detectTypes = e.target.checked; } }), el('span', { class: 'toggle-ui' }), el('span', {}, 'Detect column types')));
+  let viaDuck = false;
+  if (format !== 'excel') body.push(el('label', { class: 'f-toggle' }, el('input', { type: 'checkbox', onchange: (e) => { viaDuck = e.target.checked; } }), el('span', { class: 'toggle-ui' }), el('span', {}, 'Open with DuckDB (for very large files; delimiter and type options are detected by DuckDB)')));
   const m = modal({ title: `Import ${file.name}`, icon: 'file', body: el('div', { class: 'form' }, body), footer: [
+    el('span', { class: 'f-help' }, fmtBytes(file.size)), el('span', { class: 'spacer' }),
     el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Cancel'),
-    el('button', { class: 'btn btn-primary', onclick: () => { m.close(); importFiles([file], { asNewProject, options: opts }); } }, 'Import')] });
+    el('button', { class: 'btn btn-primary', onclick: () => { m.close(); importFiles([file], { asNewProject, options: opts, viaDuck }); } }, 'Import')] });
 }
 
 async function loadSample() {
@@ -122,33 +167,24 @@ async function loadSample() {
 function renderImport() {
   const screen = $('#importScreen');
   clear(screen);
-  const drop = el('label', { class: 'drop-zone', tabindex: '0' },
-    icon('upload', 34),
-    el('p', { class: 'drop-title' }, el('strong', {}, 'Drop files here'), ' or click to browse'),
-    el('p', { class: 'drop-hint' }, 'CSV · TSV · Excel · JSON · JSONL · Parquet — several at once is fine'));
+  const drop = el('label', { class: 'drop-zone', tabindex: '0', id: 'dropZone' },
+    icon('upload', 26),
+    el('p', { class: 'drop-title' }, 'Drop files or click to browse'),
+    el('p', { class: 'drop-hint' }, 'CSV, TSV, Excel, JSON, JSONL, Parquet'));
   drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickFiles({ accept: ACCEPT, multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
   const resume = el('div', { class: 'resume-slot' });
-  const contours = el('div', { html: contourSvg() }).firstChild;
-  const principle = (n, t, d) => el('li', {}, el('span', { class: 'num' }, n), el('strong', {}, t), d);
-  screen.append(contours, el('div', { class: 'import-layout' },
-    el('div', { class: 'import-intro' },
-      el('p', { class: 'eyebrow' }, 'Duckbench — a data workbench'),
-      el('h2', { class: 'import-title', html: 'Quiet tools for <em>messy</em> data.' }),
-      el('p', { class: 'import-copy' }, 'Clean, reshape, join and export without sending a single row anywhere. Every click becomes a step you can read, reorder and replay on next month’s file.'),
-      el('ul', { class: 'principles' },
-        principle('01', 'Private', 'Files never leave this tab.'),
-        principle('02', 'Recorded', 'Every action is a replayable step.'),
-        principle('03', 'Exact', 'Full-data profiles, no sampling.'))),
-    el('div', { class: 'import-card' },
-      el('div', { class: 'card-label' }, el('span', { class: 'mono-label' }, 'New project'), el('span', { class: 'mono-label' }, 'CSV · XLSX · JSON · PARQUET')),
-      resume, drop,
-      el('div', { class: 'import-links' },
-        el('button', { class: 'link-btn', onclick: loadSample }, icon('sparkles', 15), 'Explore with sample sales data'),
-        el('button', { class: 'link-btn', onclick: () => importWithOptions(true) }, icon('settings', 15), 'Import with delimiter, encoding & header options'),
-        el('button', { class: 'link-btn', onclick: loadRecipeFile }, icon('clipboard', 15), 'Open a saved recipe'),
-        el('button', { class: 'link-btn', onclick: openBatch }, icon('layers', 15), 'Batch-apply a recipe to many files')),
-      el('div', { class: 'import-foot' }, el('span', { class: 'mono-label' }, `v2 · ${client.mode === 'worker' ? 'worker engine' : 'inline engine'}`), el('a', { class: 'mono-label', href: 'tests.html', style: { color: 'inherit', textDecoration: 'none' } }, 'Self-test →')))));
+  const action = (ic, label, hint, fn, id) => el('button', { class: 'import-action', onclick: fn, id: id || null }, icon(ic, 16), el('span', { class: 'ia-text' }, el('span', { class: 'ia-label' }, label), el('span', { class: 'ia-hint' }, hint)));
+  screen.append(el('div', { class: 'import-panel' },
+    el('div', { class: 'import-head' }, el('h2', { class: 'import-title' }, 'New project'), el('div', { class: 'import-sub' }, 'Files are processed in this tab and are not uploaded.')),
+    resume, drop,
+    el('div', { class: 'import-actions' },
+      action('table', 'Sample data', 'Sales orders and regions', loadSample, 'sampleBtn'),
+      action('settings', 'Import with options', 'Delimiter, encoding, header', () => importWithOptions(true)),
+      action('clipboard', 'Open recipe', '.duckbench.json', loadRecipeFile),
+      action('layers', 'Batch apply', 'One recipe, many files', openBatch),
+      action('play', 'Tour', 'Walk through the workbench', () => startTour({ force: true }))),
+    el('div', { class: 'import-foot' }, el('span', {}, `Duckbench 2 · ${engineLabel()}`), el('a', { href: 'tests.html' }, 'Self-test'))));
   persist.getSession().then((sess) => {
     if (!sess?.json) return;
     let data; try { data = JSON.parse(sess.json); } catch { return; }
@@ -161,19 +197,10 @@ function renderImport() {
   });
 }
 
-function contourSvg() {
-  let paths = '';
-  for (let i = 0; i < 14; i++) {
-    const y = 60 + i * 52;
-    const a = 18 + (i % 4) * 9, b = 26 - (i % 3) * 7;
-    paths += `<path d="M-20 ${y} C 180 ${y - a}, 360 ${y + b}, 560 ${y - a / 2} S 940 ${y + a}, 1140 ${y - b / 2} S 1380 ${y + a / 3}, 1480 ${y}" fill="none" stroke="currentColor" stroke-width="${i % 5 === 0 ? 1.1 : .6}"/>`;
-  }
-  return `<svg class="import-contours" viewBox="0 0 1440 800" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${paths}</svg>`;
-}
-
 async function resumeSession(data) {
   const missing = [];
   for (const s of data.sources || []) {
+    if (s.duck) { s.missing = true; missing.push(s.name); continue; }
     const blob = await persist.getFile(s.id);
     if (!blob) { s.missing = true; missing.push(s.name); continue; }
     try {
@@ -196,6 +223,8 @@ function showWorkbench() {
   }
   renderAll();
   refresh();
+  resumePendingTour();
+  if (!prefs.get('tourDone', false)) maybeAutoTour();
 }
 
 function showImport() {
@@ -220,7 +249,7 @@ const refresh = debounce(async () => {
     const payload = { queries: enginePayload() };
     client.remember('setQueries', payload);
     await client.call('setQueries', payload, { track: false });
-    const res = await client.call('evaluate', { queryId: q.id, stepIndex: cursor, pageSize: 200 }, { label: 'Running steps' });
+    const res = await sql.evaluate({ queryId: q.id, stepIndex: cursor, pageSize: 200 }, { label: 'Running steps' });
     if (token !== ui.evalToken) return;
     ui.diag = res.diag || [];
     if (res.error) {
@@ -241,15 +270,18 @@ const refresh = debounce(async () => {
     if (res.viewError) msgs.push(['error', `Step ${res.viewError.index + 1}: ${res.viewError.message}`]);
     if (vd?.warn?.length) vd.warn.forEach(w => msgs.push(['warn', w]));
     if (vd?.info?.length) vd.info.forEach(w => msgs.push(['info', w]));
-    if (cursor < q.steps.length - 1) msgs.push(['info', `Previewing step ${cursor + 1} of ${q.steps.length} — later steps are paused.`]);
+    if (res.sourceNote) msgs.push(['info', res.sourceNote]);
+    if (cursor < q.steps.length - 1) msgs.push(['info', `Showing step ${cursor + 1} of ${q.steps.length}.`]);
     banner.hidden = !msgs.length;
     for (const [k, m] of msgs.slice(0, 4)) banner.appendChild(el('div', { class: `banner-line banner-${k}` }, icon(k === 'error' ? 'warn' : k === 'warn' ? 'warn' : 'info', 14), el('span', {}, m)));
     if (cursor < q.steps.length - 1) banner.appendChild(el('button', { class: 'btn btn-ghost btn-xs', onclick: () => setCursor(q.steps.length - 1) }, 'Jump to last step'));
     renderSteps(); renderStatus(); renderToolbar();
     if (ui.rightMode === 'profile' && ui.profileColumn) renderProfile(ui.profileColumn);
   } catch (e) {
-    if (e.cancelled) return;
-    showGridMessage('Something went wrong', e.message);
+    if (e.cancelled || token !== ui.evalToken) return;
+    ui.result = null;
+    showGridMessage('The preview could not be computed', e.message);
+    renderSteps(); renderStatus();
   }
 }, 60);
 
@@ -275,6 +307,17 @@ async function locateSource(q) {
   const src = store.source(q.source?.sourceId);
   const [file] = await pickFiles({ accept: ACCEPT });
   if (!file) return;
+  if (q.source?.kind === 'duck') {
+    try {
+      const d = duckFiles.get(q.source.sourceId) || { table: q.source.table, fname: q.source.sql.match(/'([^']+)'/)?.[1] };
+      await duck.registerFile(d.fname, file);
+      duckFiles.set(q.source.sourceId, { ...d, file });
+      await client.call('invalidate');
+      store.commit('Reconnect file', (s) => { const x = s.sources.find(y => y.id === q.source.sourceId); if (x) { x.missing = false; x.size = file.size; } });
+      refresh();
+    } catch (e) { toast(`Couldn’t open ${file.name}: ${e.message}`, { kind: 'error' }); }
+    return;
+  }
   try {
     const sid = src?.id || uid('f');
     const info = await loadFileIntoEngine(file, sid, src?.options || {});
@@ -336,12 +379,15 @@ function deleteStep(stepId) {
   const label = TRANSFORMS[q.steps[i].type]?.label || q.steps[i].type;
   store.commit(`Delete ${label}`, (s) => {
     const qq = s.queries.find(x => x.id === q.id);
+    const cur = s.stepCursor[q.id];
     qq.steps.splice(i, 1);
-    s.stepCursor[q.id] = Math.min(i, qq.steps.length) - 1 + (i < qq.steps.length ? 0 : 0);
-    if (s.stepCursor[q.id] >= qq.steps.length - 1) delete s.stepCursor[q.id];
+    if (cur == null) return;
+    const next = cur >= i ? cur - 1 : cur;
+    if (next >= qq.steps.length - 1) delete s.stepCursor[q.id];
+    else s.stepCursor[q.id] = Math.max(-1, next);
   });
   if (ui.selectedStep === stepId) { ui.selectedStep = null; closeRight(); }
-  toast(`Deleted “${label}”`, { action: 'Undo', onAction: () => store.undo() });
+  toast(`Deleted ${label}`, { action: 'Undo', onAction: () => store.undo() });
 }
 
 function moveStep(stepId, delta) {
@@ -367,18 +413,19 @@ function renderMast() {
       btn('undo', `Undo ${store.undoLabel()} (${kbd('⌘Z')})`, () => doUndo(), { disabled: !store.canUndo() }),
       btn('redo', `Redo ${store.redoLabel()} (${kbd('⌘⇧Z')})`, () => doRedo(), { disabled: !store.canRedo() }),
       el('span', { class: 'mast-sep' }),
-      el('button', { class: 'btn btn-ghost btn-sm palette-btn', onclick: openPalette, title: 'Command palette' }, icon('search', 14), 'Search actions', el('kbd', {}, kbd('⌘K'))),
+      el('button', { class: 'btn btn-ghost btn-sm palette-btn', id: 'paletteBtn', onclick: openPalette, title: 'Command palette' }, icon('search', 14), el('span', {}, 'Actions'), el('kbd', {}, kbd('⌘K'))),
       btn('save', `Save recipe (${kbd('⌘S')})`, saveRecipe),
       btn('clipboard', 'Open recipe', loadRecipeFile),
-      el('button', { class: 'btn btn-primary btn-sm', onclick: (e) => openExportMenu(e.currentTarget) }, icon('download', 14), 'Export'),
+      el('button', { class: 'btn btn-primary btn-sm', id: 'exportBtn', onclick: (e) => openExportMenu(e.currentTarget) }, icon('download', 14), 'Export'),
       el('span', { class: 'mast-sep' }));
   }
   const light = document.documentElement.getAttribute('data-theme') === 'light';
   nav.append(
     btn(light ? 'moon' : 'sun', 'Toggle light / dark', toggleTheme),
     btn('keyboard', 'Keyboard shortcuts (?)', openHelp),
+    inBench ? btn('help', 'Tour', () => startTour({ force: true })) : null,
     inBench ? btn('x', 'Close project', closeProject) : null,
-    el('span', { class: 'engine-pill', title: client.mode === 'worker' ? 'All processing runs in a background worker — the page stays responsive' : 'Running on the main thread (workers unavailable here)' }, el('span', { class: 'dot' }), client.mode === 'worker' ? 'Worker engine' : 'Inline engine'));
+    el('span', { class: 'engine-pill', title: `DuckDB ${duck.duckVersion()} loads on first SQL step or large file` }, el('span', { class: 'dot' }), engineLabel()));
 }
 
 function toggleTheme() {
@@ -389,7 +436,7 @@ function toggleTheme() {
 }
 
 async function closeProject() {
-  if (!(await confirmDialog('Close this project? Your session stays saved in this browser and can be resumed.', { ok: 'Close project' }))) return;
+  if (!(await confirmDialog('The session stays saved in this browser and can be resumed.', { title: 'Close project', ok: 'Close' }))) return;
   await saveSessionNow();
   store.load(JSON.stringify({ queries: [], sources: [], activeQueryId: null, projectName: 'Untitled project', stepCursor: {} }));
   ui.result = null; closeRight();
@@ -399,7 +446,7 @@ async function closeProject() {
 function renderRibbon() {
   const host = clear($('#ribbon'));
   const active = prefs.get('ribbonTab', 'home');
-  const tabs = el('div', { class: 'ribbon-tabs', role: 'tablist' }, RIBBON_TABS.map(t => el('button', { class: `ribbon-tab${t.id === active ? ' is-on' : ''}`, role: 'tab', 'aria-selected': String(t.id === active), onclick: () => { prefs.set('ribbonTab', t.id); renderRibbon(); } }, t.label)));
+  const tabs = el('div', { class: 'ribbon-tabs', role: 'tablist', id: 'ribbonTabs' }, RIBBON_TABS.map(t => el('button', { class: `ribbon-tab${t.id === active ? ' is-on' : ''}`, role: 'tab', 'aria-selected': String(t.id === active), onclick: () => { prefs.set('ribbonTab', t.id); renderRibbon(); } }, t.label)));
   const groups = el('div', { class: 'ribbon-groups' });
   if (active === 'view') {
     const g = (title, ...btns) => el('div', { class: 'ribbon-group' }, el('div', { class: 'rg-items' }, btns), el('div', { class: 'rg-title' }, title));
@@ -407,7 +454,7 @@ function renderRibbon() {
     groups.append(
       g('Grid', b('chart', 'Column quality', () => { ui.showQuality = !ui.showQuality; prefs.set('quality', ui.showQuality); grid?.setQualityVisible(ui.showQuality); renderRibbon(); }, ui.showQuality), b('table', 'Reset widths', () => { grid?.clearWidths(); refresh(); })),
       g('Panels', b('panel-right', 'Column profile', () => { const c = ui.selection.columns?.[0] || ui.result?.fields[0]?.name; if (c) openProfile(c); }, ui.rightMode === 'profile')),
-      g('Engine', b('stop', 'Clear cache', async () => { await client.call('invalidate'); refresh(); toast('Step cache cleared'); })));
+      g('Engine', b('stop', 'Clear cache', async () => { await client.call('invalidate'); refresh(); toast('Step cache cleared'); }), b('database', duck.duckStatus() === 'ready' ? 'DuckDB ready' : 'Load DuckDB', async () => { try { renderMast(); await duck.ensureDuck(); toast(`DuckDB ${duck.duckVersion()} ready`, { kind: 'success' }); } catch (e) { toast(e.message, { kind: 'error' }); } renderMast(); renderRibbon(); }, duck.duckStatus() === 'ready')));
   } else {
     const byGroup = new Map();
     for (const t of transformCatalog()) {
@@ -430,9 +477,9 @@ function renderQueries() {
   host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Queries'), el('button', { class: 'icon-btn icon-btn-sm', title: 'Import another file as a new query', onclick: async () => { const f = await pickFiles({ accept: ACCEPT, multiple: true }); if (f.length) importFiles(f); } }, icon('plus', 15))));
   const list = el('ul', { class: 'query-list', role: 'listbox', 'aria-label': 'Queries' });
   for (const q of store.state.queries) {
-    const src = q.source?.kind === 'file' ? store.source(q.source.sourceId) : null;
+    const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
     const on = q.id === store.state.activeQueryId;
-    const meta = q.source?.kind === 'reference' ? `→ ${queryName(q.source.parentId)}` : src ? `${src.missing ? 'file missing · ' : ''}${fmtCount(src.rowCount)} rows` : '';
+    const meta = q.source?.kind === 'reference' ? `→ ${queryName(q.source.parentId)}` : src ? `${src.missing ? 'file missing · ' : ''}${src.duck ? `DuckDB · ${fmtBytes(src.size)}` : `${fmtCount(src.rowCount)} rows`}` : '';
     const li = el('li', { class: `query-item${on ? ' is-on' : ''}${src?.missing ? ' is-missing' : ''}`, role: 'option', 'aria-selected': String(on), tabindex: '0' },
       icon(q.source?.kind === 'reference' ? 'ref' : 'table', 15),
       el('span', { class: 'qi-text' }, el('span', { class: 'qi-name' }, q.name), el('span', { class: 'qi-meta' }, `${meta} · ${q.steps.length} step${q.steps.length === 1 ? '' : 's'}`)),
@@ -452,7 +499,7 @@ function activateQuery(id) {
 }
 
 function queryMenu(q, anchor, pos = {}) {
-  const src = q.source?.kind === 'file' ? store.source(q.source.sourceId) : null;
+  const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
   menu(anchor, [
     { label: 'Rename…', icon: 'edit', onClick: async () => { const v = await promptDialog('Rename query', { value: q.name, validate: (v) => (!v ? 'Enter a name.' : store.state.queries.some(x => x.name === v && x.id !== q.id) ? 'Another query has that name.' : null) }); if (v) store.commit('Rename query', (s) => { s.queries.find(x => x.id === q.id).name = v; }); } },
     { label: 'Duplicate', icon: 'copy', onClick: () => { const c = newQuery(uniqueName(`${q.name} (copy)`, store.state.queries.map(x => x.name), ' '), { ...q.source }, q.steps.map(s => ({ ...JSON.parse(JSON.stringify(s)), id: uid('s') }))); store.commit('Duplicate query', (s) => { s.queries.push(c); s.activeQueryId = c.id; }); } },
@@ -474,12 +521,12 @@ function renderSteps() {
   if (!q) return;
   const cursor = store.cursor();
   host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Applied steps'), el('span', { class: 'panel-count' }, String(q.steps.length))));
-  host.appendChild(el('button', { class: 'btn btn-primary btn-block add-step-btn', onclick: openPalette }, icon('plus', 15), 'Add step', el('kbd', {}, kbd('⌘K'))));
-  const list = el('ol', { class: 'step-list' });
-  const src = q.source?.kind === 'file' ? store.source(q.source.sourceId) : null;
+  host.appendChild(el('button', { class: 'btn btn-primary btn-block add-step-btn', id: 'addStepBtn', onclick: openPalette }, icon('plus', 15), 'Add step', el('kbd', {}, kbd('⌘K'))));
+  const list = el('ol', { class: 'step-list', id: 'stepList' });
+  const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
   const srcItem = el('li', { class: `step-item step-source${cursor === -1 ? ' is-cursor' : ''}`, tabindex: '0', onclick: () => setCursor(-1) },
     el('span', { class: 'step-code' }, 'SRC'),
-    el('span', { class: 'step-text' }, el('span', { class: 'step-name' }, q.source?.kind === 'reference' ? `From ${queryName(q.source.parentId)}` : src?.name || 'Source'), el('span', { class: 'step-sum' }, src ? `${src.format}${src.options?.sheet ? ` · ${src.options.sheet}` : ''}${src.size ? ` · ${fmtBytes(src.size)}` : ''}` : '')));
+    el('span', { class: 'step-text' }, el('span', { class: 'step-name' }, q.source?.kind === 'reference' ? `From ${queryName(q.source.parentId)}` : src?.name || 'Source'), el('span', { class: 'step-sum' }, src ? `${src.duck ? 'DuckDB · ' : ''}${src.format}${src.options?.sheet ? ` · ${src.options.sheet}` : ''}${src.size ? ` · ${fmtBytes(src.size)}` : ''}` : '')));
   list.appendChild(srcItem);
   q.steps.forEach((s, i) => {
     const t = TRANSFORMS[s.type];
@@ -497,13 +544,19 @@ function renderSteps() {
     li.addEventListener('keydown', (e) => {
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteStep(s.id); }
       if (e.key === 'F2') { e.preventDefault(); renameStep(s); }
-      if (e.key === 'ArrowDown') { e.preventDefault(); li.nextSibling?.focus(); li.nextSibling?.click(); }
-      if (e.key === 'ArrowUp') { e.preventDefault(); li.previousSibling?.focus(); li.previousSibling?.click(); }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const j = i + (e.key === 'ArrowDown' ? 1 : -1);
+        if (j < -1 || j >= q.steps.length) return;
+        if (j >= 0) ui.selectedStep = q.steps[j].id;
+        setCursor(j);
+        requestAnimationFrame(() => $(`#stepList > li:nth-child(${j + 2})`)?.focus());
+      }
     });
     li.addEventListener('contextmenu', (e) => { e.preventDefault(); stepMenu(s, i, li, { x: e.clientX, y: e.clientY }); });
     li.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/x-step', String(i)); li.classList.add('is-drag'); });
     li.addEventListener('dragend', () => li.classList.remove('is-drag'));
-    li.addEventListener('dragover', (e) => { e.preventDefault(); li.classList.add('is-drop'); });
+    li.addEventListener('dragover', (e) => { if (!e.dataTransfer.types.includes('text/x-step')) return; e.preventDefault(); li.classList.add('is-drop'); });
     li.addEventListener('dragleave', () => li.classList.remove('is-drop'));
     li.addEventListener('drop', (e) => {
       e.preventDefault(); li.classList.remove('is-drop');
@@ -514,7 +567,7 @@ function renderSteps() {
     list.appendChild(li);
   });
   host.appendChild(list);
-  if (!q.steps.length) host.appendChild(el('p', { class: 'panel-empty' }, 'No steps yet. Click a column header, use the ribbon, or press ', el('kbd', {}, kbd('⌘K')), '. Every action is recorded here and replays on new files.'));
+  if (!q.steps.length) host.appendChild(el('p', { class: 'panel-empty' }, 'No steps yet.'));
 }
 
 async function renameStep(s) {
@@ -551,24 +604,26 @@ async function openInspector(stepId) {
   const step = q.steps[idx];
   const t = TRANSFORMS[step.type];
   let input;
-  try { input = await client.call('evaluate', { queryId: q.id, stepIndex: idx - 1, pageSize: 0 }, { track: false }); } catch { input = {}; }
+  try { input = await sql.evaluate({ queryId: q.id, stepIndex: idx - 1, pageSize: 0 }, { track: false }); } catch { input = {}; }
   if (ui.selectedStep !== stepId || ui.rightMode !== 'inspector') return;
   const fields = input.fields || [];
   let rightFields = [];
   const rightId = step.data?.rightSource;
-  if (rightId) { try { rightFields = (await client.call('queryColumns', { queryId: rightId }, { track: false })).fields || []; } catch {} }
+  if (rightId) { try { rightFields = (await sql.queryColumns({ queryId: rightId })).fields || []; } catch {} }
   const data = JSON.parse(JSON.stringify(step.data || {}));
   const errBox = el('div', { class: 'insp-error', hidden: true });
   const showErr = () => { const d = ui.diag[idx]; errBox.hidden = !d?.error; errBox.textContent = d?.error || ''; };
   const commit = debounce((label) => { updateStep(stepId, (x) => { x.data = JSON.parse(JSON.stringify(data)); }, label); }, 260);
+  const sqlTaken = new Set(['input']);
+  const sqlTables = step.type === 'sql' ? (step.data?.tables || []).map(id => duck.tableNameFor(queryName(id), sqlTaken)) : [];
   const ctx = {
-    fields, rightFields, queryId: q.id, queries: store.state.queries,
+    fields, rightFields, sqlTables, queryId: q.id, queries: store.state.queries,
     loadDistinct: (column, search) => (input.resultId ? client.call('distinct', { resultId: input.resultId, column, search, limit: 500 }, { track: false }) : null),
     onAddQuery: async () => { const f = await pickFiles({ accept: ACCEPT }); if (f.length) { const keep = store.state.activeQueryId; await importFiles(f); store.quiet((s) => { s.activeQueryId = keep; }, 'change'); openInspector(stepId); } },
   };
   const form = buildForm(t?.params || [], data, ctx, (d, meta) => {
     commit(`Edit ${t.label}`);
-    if (meta.key === 'rightSource') setTimeout(() => openInspector(stepId), 320);
+    if (meta.key === 'rightSource' || (step.type === 'sql' && meta.key === 'tables')) setTimeout(() => openInspector(stepId), 320);
   });
   clear(rail).append(
     el('header', { class: 'rail-head' },
@@ -816,6 +871,7 @@ function openExportMenu(anchor) {
     { label: 'Copy as SQL INSERT', icon: 'clipboard', onClick: () => runExport({ format: 'sql', clipboard: true, rowEnd: 1000 }) },
     '-',
     { label: 'Export options…', icon: 'settings', onClick: () => openExportDialog() },
+    store.activeQuery()?.source?.kind === 'duck' ? { label: 'Export full file via DuckDB…', icon: 'database', onClick: () => exportFullViaDuck() } : null,
   ], { align: 'end' });
 }
 
@@ -838,6 +894,36 @@ function openExportDialog() {
     el('button', { class: 'btn btn-primary', onclick: () => { m.close(); runExport({ ...o, rowStart: Math.max(0, (Number(o.rowStart) || 1) - 1), rowEnd: o.rowEnd === '' ? Infinity : Number(o.rowEnd) }); } }, 'Export')] });
 }
 
+async function exportFullViaDuck() {
+  const q = store.activeQuery();
+  const active = q.steps.filter(s => !s.disabled);
+  if (active.some(s => s.type !== 'sql')) {
+    toast('Full-file export runs SQL steps only. Other steps work on the loaded rows; use Export for those.', { kind: 'error', duration: 8000 });
+    return;
+  }
+  if (active.some(s => (s.data?.tables || []).length)) { toast('Full-file export can’t combine with other queries.', { kind: 'error' }); return; }
+  const fmtSel = el('select', { class: 'input' }, [['parquet', 'Parquet'], ['csv', 'CSV'], ['json', 'JSON']].map(([v, l]) => el('option', { value: v }, l)));
+  const m = modal({ title: 'Export full file', icon: 'database', width: 440, body: [el('p', { class: 'modal-text' }, `Runs ${active.length ? `${active.length} SQL step${active.length === 1 ? '' : 's'}` : 'the source'} over every row with DuckDB.`), el('label', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Format'), fmtSel)], footer: [
+    el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Cancel'),
+    el('button', { class: 'btn btn-primary', onclick: async () => {
+      const format = fmtSel.value;
+      m.close();
+      const dismiss = toast('Exporting with DuckDB…', { duration: 600000 });
+      try {
+        let cur = q.source.sql;
+        for (const s of active) {
+          const v = duck.validateSql(s.data.sql);
+          if (v.error) throw new Error(v.error);
+          cur = duck.withInput(cur, v.sql);
+        }
+        const buf = await duck.copyTo(cur, format);
+        download(new Blob([buf]), `${q.name.replace(/[\\/:*?"<>|]+/g, '_')}.${format}`);
+        dismiss();
+        toast('Exported', { kind: 'success' });
+      } catch (e) { dismiss(); toast(`Export failed: ${e.message}`, { kind: 'error' }); }
+    } }, 'Export')] });
+}
+
 async function runExport(opts) {
   const q = store.activeQuery();
   if (!q) return;
@@ -845,6 +931,8 @@ async function runExport(opts) {
   const stepIndex = opts.atStep ? store.cursor() : q.steps.length - 1;
   const args = { queryId: q.id, stepIndex, columns: opts.columns, nullText: opts.nullText ?? '', delimiter: opts.delimiter || ',', bom: opts.bom !== false, guard: opts.guard !== false, rowStart: opts.rowStart || 0, rowEnd: opts.rowEnd ?? Infinity };
   try {
+    const targetsToResolve = opts.format === 'xlsx-all' ? store.state.queries : [q];
+    for (const t of targetsToResolve) await sql.exportPrepared(t.id, t.id === q.id ? stepIndex : t.steps.length - 1);
     if (opts.format === 'xlsx' || opts.format === 'xlsx-all') {
       const targets = opts.format === 'xlsx-all' ? store.state.queries : [q];
       const sheets = [];
@@ -883,7 +971,7 @@ function buildRecipe() {
 function saveRecipe() {
   if (!store.state.queries.length) return;
   download(JSON.stringify(buildRecipe(), null, 2), `${store.state.projectName.replace(/[\\/:*?"<>|]+/g, '_')}.duckbench.json`, 'application/json');
-  toast('Recipe saved — it holds your steps, not your data', { kind: 'success' });
+  toast('Recipe saved', { kind: 'success' });
 }
 
 async function loadRecipeFile() {
@@ -917,81 +1005,135 @@ async function loadRecipeFile() {
     const steps = r.steps.map(migrateStep).filter(Boolean).map(s => ({ ...s, id: uid('s') }));
     const unsupported = steps.filter(s => s.unsupported).length;
     store.commit('Apply v1 recipe', (st) => { st.queries.find(x => x.id === q.id).steps.push(...steps); delete st.stepCursor[q.id]; });
-    toast(`Applied ${steps.length} steps from a Duckbench 1 recipe${unsupported ? ` (${unsupported} need attention)` : ''}`, { kind: unsupported ? 'info' : 'success' });
+    toast(`Applied ${steps.length} steps${unsupported ? `, ${unsupported} unsupported` : ''}`, { kind: unsupported ? 'info' : 'success' });
     return;
   }
   toast('That doesn’t look like a Duckbench recipe.', { kind: 'error' });
 }
 
+const BATCH_FORMATS = [['csv', 'CSV'], ['xlsx', 'Excel (.xlsx)'], ['json', 'JSON'], ['jsonl', 'JSON Lines'], ['parquet', 'Parquet']];
+const CROSS_QUERY = new Set(['join', 'append']);
+
+async function exportResult(resultId, format, base) {
+  if (format === 'xlsx') {
+    const c = await client.call('exportData', { resultId, format: 'columns' }, { track: false });
+    const { buffer } = await xlsx.call('write', { sheets: [{ name: base.slice(0, 31), fields: c.fields, columns: c.columns }] });
+    return { name: `${base}.xlsx`, data: new Uint8Array(buffer) };
+  }
+  if (format === 'parquet') {
+    const p = await client.call('exportParquet', { resultId }, { track: false });
+    return { name: `${base}.parquet`, data: new Uint8Array(p.buffer) };
+  }
+  const t = await client.call('exportData', { resultId, format }, { track: false });
+  return { name: `${base}.${format}`, data: t.text, mime: t.mime };
+}
+
 function openBatch() {
-  const st = { recipe: null, steps: null, files: [], format: 'csv', zip: false };
+  const st = { steps: null, recipeName: '', files: [], format: 'csv', zip: true, running: false, cancel: false };
   const fromProject = store.activeQuery();
-  if (fromProject?.steps.length) { st.steps = fromProject.steps; st.recipeName = `${fromProject.name} (current query)`; }
+  if (fromProject?.steps.length) { st.steps = fromProject.steps.map(s => migrateStep(JSON.parse(JSON.stringify(s)))); st.recipeName = fromProject.name; }
   const recipeLabel = el('span', { class: 'f-help' });
+  const warn = el('p', { class: 'field-error', hidden: true });
   const list = el('ul', { class: 'batch-list' });
-  const runBtn = el('button', { class: 'btn btn-primary' }, icon('play', 14), 'Run batch');
+  const runBtn = el('button', { class: 'btn btn-primary' }, icon('play', 14), 'Run');
+  const progress = el('span', { class: 'f-help' });
   const draw = () => {
-    recipeLabel.textContent = st.steps ? `${st.recipeName} · ${st.steps.length} steps` : 'No recipe chosen yet.';
+    recipeLabel.textContent = st.steps ? `${st.recipeName} · ${st.steps.length} step${st.steps.length === 1 ? '' : 's'}` : 'None chosen';
+    const cross = (st.steps || []).filter(s => CROSS_QUERY.has(s.type) && !s.disabled).length;
+    warn.hidden = !cross;
+    warn.textContent = cross ? `${cross} step${cross === 1 ? ' joins or appends' : 's join or append'} other queries and will fail in batch runs. Disable ${cross === 1 ? 'it' : 'them'} in the project first.` : '';
     clear(list);
-    if (!st.files.length) list.appendChild(el('li', { class: 'batch-item' }, el('span', { class: 'bi-name', style: { color: 'var(--muted)' } }, 'No files chosen.')));
-    st.files.forEach(f => list.appendChild(el('li', { class: `batch-item${f.status === 'done' ? ' is-ok' : f.status === 'error' ? ' is-err' : f.status === 'running' ? ' is-run' : ''}`, title: f.error || '' }, icon('file', 14), el('span', { class: 'bi-name' }, f.file.name), el('span', { class: 'bi-status' }, f.status === 'done' ? `${fmtCount(f.rows)} rows` : f.status === 'error' ? 'failed' : f.status || 'queued'))));
-    runBtn.disabled = !st.steps || !st.files.length;
+    if (!st.files.length) list.appendChild(el('li', { class: 'batch-item' }, el('span', { class: 'bi-name', style: { color: 'var(--muted)' } }, 'No files')));
+    st.files.forEach((f, i) => list.appendChild(el('li', { class: `batch-item${f.status === 'done' ? ' is-ok' : f.status === 'error' ? ' is-err' : f.status === 'running' ? ' is-run' : ''}`, title: f.error || '' },
+      icon('file', 14), el('span', { class: 'bi-name' }, f.file.name),
+      el('span', { class: 'bi-status' }, f.status === 'done' ? `${fmtCount(f.rows)} rows` : f.status === 'error' ? 'failed' : f.status === 'running' ? 'running' : fmtBytes(f.file.size)),
+      !st.running && !f.status ? el('button', { class: 'icon-btn icon-btn-xs', 'aria-label': `Remove ${f.file.name}`, onclick: () => { st.files.splice(i, 1); draw(); } }, icon('x', 12)) : null)));
+    runBtn.disabled = st.running || !st.steps || !st.files.length;
+    const failures = st.files.filter(f => f.status === 'error');
+    if (failures.length && !st.running) progress.textContent = failures.map(f => `${f.file.name}: ${f.error}`).join(' · ');
   };
   const pickRecipe = async () => {
     const [file] = await pickFiles({ accept: '.json' });
     if (!file) return;
     try {
       const r = JSON.parse(await file.text());
-      const q = r.version === 2 ? (r.queries.find(x => x.id === r.activeQueryId) || r.queries[0]) : r;
-      if (!Array.isArray(q?.steps)) throw new Error('No steps found');
-      const usesOthers = q.steps.some(s => ['join', 'append'].includes(migrateStep(s)?.type));
-      if (usesOthers) toast('This recipe joins or appends other queries — those steps will fail in batch mode.', { kind: 'error' });
-      st.steps = q.steps.map(migrateStep).filter(Boolean);
-      st.recipeName = file.name;
+      let steps = null, name = file.name;
+      if (r.version === 2 && Array.isArray(r.queries)) {
+        const qs = r.queries.filter(q => q.steps?.length);
+        let q = qs.find(x => x.id === r.activeQueryId) || qs[0] || r.queries[0];
+        if (qs.length > 1) q = await chooseQuery(qs, q);
+        if (!q) return;
+        steps = q.steps; name = `${file.name} › ${q.name}`;
+      } else if (Array.isArray(r.steps)) steps = r.steps;
+      if (!steps) throw new Error('No steps found');
+      st.steps = steps.map(migrateStep).filter(Boolean);
+      st.recipeName = name;
       draw();
     } catch (e) { toast(`Couldn’t read recipe: ${e.message}`, { kind: 'error' }); }
   };
-  const pickData = async () => { const files = await pickFiles({ accept: ACCEPT, multiple: true }); st.files.push(...files.map(file => ({ file }))); draw(); };
-  const fmt = el('select', { class: 'input', onchange: (e) => { st.format = e.target.value; } }, [['csv', 'CSV'], ['xlsx', 'Excel (.xlsx)'], ['json', 'JSON'], ['jsonl', 'JSON Lines'], ['parquet', 'Parquet']].map(([v, l]) => el('option', { value: v }, l)));
+  const pickData = async () => { const files = await pickFiles({ accept: ACCEPT, multiple: true }); for (const f of files) if (f.size > LARGE_FILE_BYTES) { toast(`${f.name} is over 1 GB; batch runs load files in memory.`, { kind: 'error' }); } else st.files.push({ file: f }); draw(); };
+  const fmt = el('select', { class: 'input', onchange: (e) => { st.format = e.target.value; } }, BATCH_FORMATS.map(([v, l]) => el('option', { value: v }, l)));
+  const zipToggle = el('input', { type: 'checkbox', checked: true, onchange: (e) => { st.zip = e.target.checked; } });
   runBtn.addEventListener('click', async () => {
-    runBtn.disabled = true;
+    st.running = true; st.cancel = false;
+    for (const f of st.files) { f.status = null; f.error = null; }
+    draw();
+    const outputs = [];
     let ok = 0;
-    for (const item of st.files) {
-      item.status = 'running'; draw();
+    const qid = uid('batchq');
+    for (let i = 0; i < st.files.length; i++) {
+      if (st.cancel) break;
+      const item = st.files[i];
+      item.status = 'running';
+      progress.textContent = `${i + 1} of ${st.files.length}`;
+      draw();
       const sid = uid('batch');
       try {
         const info = await loadFileIntoEngine(item.file, sid, {});
         if (!info) throw new Error('Skipped');
-        const r = await client.call('runSteps', { frameFrom: sid, steps: st.steps }, { label: `Processing ${item.file.name}` });
-        if (r.error) throw new Error(`Step ${r.errorIndex + 1}: ${r.error}`);
-        const base = item.file.name.replace(/\.[^.]+$/, '') + '_prepared';
-        if (st.format === 'xlsx') {
-          const c = await client.call('exportData', { resultId: r.resultId, format: 'columns' });
-          const { buffer } = await xlsx.call('write', { sheets: [{ name: base.slice(0, 31), fields: c.fields, columns: c.columns }] });
-          download(new Blob([buffer]), `${base}.xlsx`);
-        } else if (st.format === 'parquet') {
-          const p = await client.call('exportParquet', { resultId: r.resultId });
-          download(new Blob([p.buffer]), `${base}.parquet`);
-        } else {
-          const t = await client.call('exportData', { resultId: r.resultId, format: st.format });
-          download(t.text, `${base}.${st.format}`, t.mime);
-        }
+        const r = await sql.runSteps({ frameFrom: sid, steps: st.steps, id: qid, queryName: item.file.name }, { label: `Processing ${item.file.name}` });
+        if (r.error) throw new Error(r.errorIndex >= 0 ? `Step ${r.errorIndex + 1}: ${r.error}` : r.error);
+        const out = await exportResult(r.resultId, st.format, item.file.name.replace(/\.[^.]+$/, ''));
+        if (st.zip) outputs.push(out);
+        else { download(out.data instanceof Uint8Array ? new Blob([out.data]) : out.data, out.name, out.mime); await new Promise(res => setTimeout(res, 300)); }
         item.status = 'done'; item.rows = r.rowCount; ok++;
       } catch (e) { item.status = 'error'; item.error = e.message; }
-      finally { client.call('removeSource', { id: sid }, { track: false }); client.remember('removeSource', { id: sid }); }
+      finally {
+        await client.call('removeSource', { id: sid }, { track: false }).catch(() => {});
+        client.remember('removeSource', { id: sid });
+      }
       draw();
-      await new Promise(res => setTimeout(res, 250));
     }
-    toast(`Batch finished: ${ok} of ${st.files.length} files exported`, { kind: ok === st.files.length ? 'success' : 'error' });
-    runBtn.disabled = false;
+    await client.call('dropQuery', { id: qid }, { track: false }).catch(() => {});
+    if (st.zip && outputs.length) {
+      progress.textContent = 'Building ZIP…';
+      try {
+        const blob = await zipFiles(outputs, { compress: st.format !== 'parquet' && st.format !== 'xlsx' });
+        download(blob, `${(st.recipeName.split(' › ').pop() || 'batch').replace(/\.duckbench\.json$|\.json$/i, '').replace(/[\\/:*?"<>|]+/g, '_')}_batch.zip`);
+      } catch (e) { toast(`ZIP failed: ${e.message}`, { kind: 'error' }); }
+    }
+    st.running = false;
+    progress.textContent = `${ok} of ${st.files.length} exported`;
+    draw();
   });
-  const m = modal({ title: 'Batch apply', icon: 'layers', width: 580, body: el('div', { class: 'form' },
-    el('p', { class: 'modal-text' }, 'Run one query’s steps over many files with the same layout — e.g. every monthly export — and download each result.'),
-    el('div', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Recipe'), el('div', { style: { display: 'flex', gap: '10px', alignItems: 'center' } }, el('button', { class: 'btn btn-ghost btn-sm', onclick: pickRecipe }, icon('clipboard', 14), 'Choose recipe…'), recipeLabel)),
+  const m = modal({ title: 'Batch apply', icon: 'layers', width: 580, onClose: () => { st.cancel = true; }, body: el('div', { class: 'form' },
+    el('div', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Steps'), el('div', { style: { display: 'flex', gap: '10px', alignItems: 'center' } }, el('button', { class: 'btn btn-ghost btn-sm', onclick: pickRecipe }, icon('clipboard', 14), 'From recipe…'), recipeLabel), warn),
     el('div', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Files'), list, el('button', { class: 'btn btn-ghost btn-sm', style: { alignSelf: 'flex-start' }, onclick: pickData }, icon('plus', 14), 'Add files…')),
-    el('label', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Output format'), fmt)),
-    footer: [el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Close'), runBtn] });
+    el('label', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Output format'), fmt),
+    el('label', { class: 'f-toggle' }, zipToggle, el('span', { class: 'toggle-ui' }), el('span', {}, 'Download as one ZIP'))),
+    footer: [progress, el('span', { class: 'spacer' }), el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Close'), runBtn] });
   draw();
+}
+
+function chooseQuery(qs, preferred) {
+  return new Promise((resolve) => {
+    let out = null;
+    const sel = el('select', { class: 'input' }, qs.map(q => el('option', { value: q.id }, `${q.name} · ${q.steps.length} steps`)));
+    sel.value = preferred?.id || qs[0].id;
+    const m = modal({ title: 'Which query’s steps?', width: 420, body: [sel], footer: [
+      el('button', { class: 'btn btn-ghost', onclick: () => m.close(null) }, 'Cancel'),
+      el('button', { class: 'btn btn-primary', onclick: () => { out = qs.find(q => q.id === sel.value); m.close(out); } }, 'Use')], onClose: () => resolve(out) });
+  });
 }
 
 function doUndo() { const l = store.undo(); if (l) toast(`Undid: ${l}`); }
@@ -1027,7 +1169,7 @@ client.onBusy((n, label) => {
     const t0 = performance.now();
     busyTimer = setTimeout(() => {
       bar.hidden = false;
-      clear(bar).append(el('span', { class: 'job-dot' }), el('span', { class: 'job-label' }, `${label || 'Working'}…`), el('span', { class: 'job-time' }), client.canCancel ? el('button', { class: 'btn btn-ghost btn-xs', onclick: async () => { await client.cancel(); bar.hidden = true; toast('Cancelled — the engine was restarted'); refresh(); } }, 'Cancel') : null);
+      clear(bar).append(el('span', { class: 'job-dot' }), el('span', { class: 'job-label' }, `${label || 'Working'}…`), el('span', { class: 'job-time' }), client.canCancel ? el('button', { class: 'btn btn-ghost btn-xs', onclick: async () => { await client.cancel(); bar.hidden = true; toast('Cancelled'); refresh(); } }, 'Cancel') : null);
       bar._tick = setInterval(() => { const t = bar.querySelector('.job-time'); if (t) t.textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`; }, 200);
     }, 450);
   } else {
@@ -1070,5 +1212,7 @@ window.addEventListener('beforeunload', () => { if (store.state.queries.length) 
   renderImport();
   $('#importScreen').hidden = false;
   window.duckbench = { store, client, version: '2.0.0' };
-  if (new URLSearchParams(location.search).has('demo') || document.documentElement.dataset.demo) loadSample();
+  const params = new URLSearchParams(location.search);
+  if (params.has('notour')) prefs.set('tourDone', true);
+  if (params.has('demo')) loadSample();
 })();
