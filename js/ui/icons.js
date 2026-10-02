@@ -1,0 +1,87 @@
+const S = 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"';
+
+const P = {
+  filter: `<path ${S} d="M4 5h16l-6 7.5V18l-4 2v-7.5z"/>`,
+  sort: `<path ${S} d="M7 5v14M7 5L4 8M7 5l3 3M17 19V5M17 19l3-3M17 19l-3-3"/>`,
+  'sort-asc': `<path ${S} d="M4 6h7M4 12h5M4 18h3M17 4v16m0-16l-4 4m4-4l4 4"/>`,
+  'sort-desc': `<path ${S} d="M4 6h3M4 12h5M4 18h7M17 20V4m0 16l-4-4m4 4l4-4"/>`,
+  layers: `<path ${S} d="M12 4l8 4.5-8 4.5-8-4.5zM4 13l8 4.5 8-4.5"/>`,
+  eraser: `<path ${S} d="M17 3l4 4-9.5 9.5H7L3 12.5zM7 20.5h13"/>`,
+  crop: `<path ${S} d="M6 2v16a2 2 0 0 0 2 2h14M2 6h16a2 2 0 0 1 2 2v14"/>`,
+  heading: `<path ${S} d="M5 5v14M19 5v14M5 12h14"/>`,
+  hash: `<path ${S} d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/>`,
+  scissors: `<circle ${S} cx="7" cy="6" r="2.4"/><circle ${S} cx="7" cy="18" r="2.4"/><path ${S} d="M9 7.5L20 18M9 16.5L20 6"/>`,
+  'columns-keep': `<rect ${S} x="4" y="5" width="16" height="14" rx="1.5"/><path ${S} d="M9.5 5v14M13 10.5l2 2-2 2"/>`,
+  'columns-remove': `<rect ${S} x="4" y="5" width="16" height="14" rx="1.5"/><path ${S} d="M9.5 5v14M12.5 10.5l3 3m0-3l-3 3"/>`,
+  edit: `<path ${S} d="M4 20l.9-3.6L15.5 6.7a1.8 1.8 0 0 1 2.5 0l1.3 1.3a1.8 1.8 0 0 1 0 2.5L8.6 19.1z"/>`,
+  type: `<path ${S} d="M5 6.5h14M12 6.5V18M9 18h6"/>`,
+  'git-branch': `<circle ${S} cx="6" cy="5.5" r="2"/><circle ${S} cx="6" cy="18.5" r="2"/><circle ${S} cx="18" cy="8.5" r="2"/><path ${S} d="M6 7.5v9M6 12c4 0 5-3.5 5-3.5"/>`,
+  split: `<path ${S} d="M4 6h5l7 12h4M4 18h5l3-5"/>`,
+  merge: `<path ${S} d="M20 6h-5L8 18H4M20 18h-5l-3-5"/>`,
+  replace: `<path ${S} d="M4 7h11l-2.5-2.5M4 7l2.5 2.5M20 17H9l2.5-2.5M20 17l-2.5 2.5"/>`,
+  case: `<path ${S} d="M3 18l4.5-12L12 18M4.5 14h6M17 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM19.5 12v6"/>`,
+  trim: `<path ${S} d="M3 12h4M17 12h4M7 8v8M17 8v8M10 12h4"/>`,
+  'arrow-down': `<path ${S} d="M12 4v16M6 14l6 6 6-6"/>`,
+  'arrow-right': `<path ${S} d="M4 12h16M14 6l6 6-6 6"/>`,
+  trophy: `<path ${S} d="M7 4h10v5a5 5 0 0 1-10 0zM7 5H4v2a3 3 0 0 0 3 3M17 5h3v2a3 3 0 0 1-3 3M12 14v3m-3 3h6l-1-3h-4z"/>`,
+  'trending-up': `<path ${S} d="M4 16l6-6 4 4 6-8M14 6h6v6"/>`,
+  group: `<circle ${S} cx="8" cy="9" r="3"/><circle ${S} cx="16" cy="9" r="3"/><path ${S} d="M3.5 19c.5-3 2.2-4.5 4.5-4.5s4 1.5 4.5 4.5M11.5 19c.5-3 2.2-4.5 4.5-4.5s4 1.5 4.5 4.5"/>`,
+  pivot: `<rect ${S} x="4" y="4" width="7" height="7" rx="1"/><path ${S} d="M15 6h5M15 10h5M13 15h7M17 12v7"/><rect ${S} x="4" y="14" width="7" height="6" rx="1"/>`,
+  unpivot: `<rect ${S} x="13" y="4" width="7" height="7" rx="1"/><path ${S} d="M9 6H4M9 10H4M11 15H4M7 12v7"/><rect ${S} x="13" y="14" width="7" height="6" rx="1"/>`,
+  trash: `<path ${S} d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0v12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V7"/>`,
+  copy: `<rect ${S} x="9" y="9" width="11" height="11" rx="1.5"/><path ${S} d="M5.5 15H5a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 5 3.5h8.5A1.5 1.5 0 0 1 15 5v.5"/>`,
+  function: `<path ${S} d="M14 4h-1.5A2.5 2.5 0 0 0 10 6.5V18a2.5 2.5 0 0 1-2.5 2.5H6M7 11h7M15 13l5 6M20 13l-5 6"/>`,
+  calculator: `<rect ${S} x="5" y="3" width="14" height="18" rx="2"/><path ${S} d="M8 7h8M8 12h.01M12 12h.01M16 12h.01M8 16h.01M12 16h.01M16 16h.01"/>`,
+  calendar: `<rect ${S} x="4" y="5" width="16" height="15" rx="2"/><path ${S} d="M4 10h16M9 3v4M15 3v4"/>`,
+  percent: `<path ${S} d="M19 5L5 19"/><circle ${S} cx="7" cy="7" r="2.5"/><circle ${S} cx="17" cy="17" r="2.5"/>`,
+  plus: `<path ${S} d="M12 5v14M5 12h14"/>`,
+  undo: `<path ${S} d="M7 8h8.5a4.5 4.5 0 0 1 0 9H10M10.5 4.5L7 8l3.5 3.5"/>`,
+  redo: `<path ${S} d="M17 8H8.5a4.5 4.5 0 0 0 0 9H14M13.5 4.5L17 8l-3.5 3.5"/>`,
+  save: `<path ${S} d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M5 16v3.5A2.5 2.5 0 0 0 7.5 22h9a2.5 2.5 0 0 0 2.5-2.5V16"/>`,
+  upload: `<path ${S} d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5M5 16v3.5A2.5 2.5 0 0 0 7.5 22h9a2.5 2.5 0 0 0 2.5-2.5V16"/>`,
+  download: `<path ${S} d="M12 4v11m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>`,
+  sun: `<circle ${S} cx="12" cy="12" r="4"/><path ${S} d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>`,
+  moon: `<path ${S} d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>`,
+  help: `<circle ${S} cx="12" cy="12" r="9"/><path ${S} d="M9.5 9.5a2.5 2.5 0 0 1 4.9.7c0 1.7-2.4 2-2.4 3.3M12 17h.01"/>`,
+  search: `<circle ${S} cx="11" cy="11" r="7"/><path ${S} d="M21 21l-4.5-4.5"/>`,
+  x: `<path ${S} d="M6 6l12 12M18 6L6 18"/>`,
+  eye: `<path ${S} d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle ${S} cx="12" cy="12" r="2.6"/>`,
+  'eye-off': `<path ${S} d="M3 3l18 18M10.6 5.6A10 10 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3 3.7M6.4 6.9C4 8.6 2.5 12 2.5 12S6 18.5 12 18.5a9.6 9.6 0 0 0 3.4-.6M9.9 10a2.6 2.6 0 0 0 3.7 3.7"/>`,
+  'chevron-down': `<path ${S} d="M6 9l6 6 6-6"/>`,
+  'chevron-right': `<path ${S} d="M9 6l6 6-6 6"/>`,
+  'chevron-left': `<path ${S} d="M15 6l-6 6 6 6"/>`,
+  more: `<circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/>`,
+  drag: `<circle cx="9" cy="6" r="1.3" fill="currentColor"/><circle cx="15" cy="6" r="1.3" fill="currentColor"/><circle cx="9" cy="12" r="1.3" fill="currentColor"/><circle cx="15" cy="12" r="1.3" fill="currentColor"/><circle cx="9" cy="18" r="1.3" fill="currentColor"/><circle cx="15" cy="18" r="1.3" fill="currentColor"/>`,
+  table: `<rect ${S} x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path ${S} d="M3.5 9.5h17M9 4.5v15"/>`,
+  link: `<path ${S} d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>`,
+  file: `<path ${S} d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/>`,
+  warn: `<path ${S} d="M12 4L2.5 20h19zM12 10v4.5"/><circle cx="12" cy="17.5" r="0.9" fill="currentColor"/>`,
+  info: `<circle ${S} cx="12" cy="12" r="9"/><path ${S} d="M12 11v5M12 8h.01"/>`,
+  check: `<path ${S} d="M5 13l4 4L19 7"/>`,
+  stop: `<rect ${S} x="6" y="6" width="12" height="12" rx="2"/>`,
+  database: `<ellipse ${S} cx="12" cy="6" rx="7" ry="3"/><path ${S} d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>`,
+  sparkles: `<path ${S} d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>`,
+  keyboard: `<rect ${S} x="2.5" y="6" width="19" height="12" rx="2"/><path ${S} d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>`,
+  'panel-left': `<rect ${S} x="3" y="4" width="18" height="16" rx="2"/><path ${S} d="M9 4v16"/>`,
+  'panel-right': `<rect ${S} x="3" y="4" width="18" height="16" rx="2"/><path ${S} d="M15 4v16"/>`,
+  'panel-bottom': `<rect ${S} x="3" y="4" width="18" height="16" rx="2"/><path ${S} d="M3 14h18"/>`,
+  chart: `<path ${S} d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>`,
+  clipboard: `<rect ${S} x="6" y="4" width="12" height="17" rx="2"/><path ${S} d="M9 4V3h6v1M9 9h6M9 13h6M9 17h4"/>`,
+  library: `<path ${S} d="M5 4v16M9 4v16M13 5l4 15M19 4v0"/><path ${S} d="M13 5l3.8-1 4 15-3.8 1z"/>`,
+  play: `<path ${S} d="M7 5l12 7-12 7z"/>`,
+  rows: `<rect ${S} x="3" y="4" width="18" height="4" rx="1"/><rect ${S} x="3" y="10" width="18" height="4" rx="1"/><rect ${S} x="3" y="16" width="18" height="4" rx="1"/>`,
+  ref: `<path ${S} d="M7 7h10v10M17 7L7 17"/>`,
+  settings: `<circle ${S} cx="12" cy="12" r="3"/><path ${S} d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>`,
+};
+
+export function svg(name, size = 16, cls = '') {
+  return `<svg class="ico ${cls}" viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">${P[name] || P.table}</svg>`;
+}
+
+export function icon(name, size = 16, cls = '') {
+  const t = document.createElement('template');
+  t.innerHTML = svg(name, size, cls);
+  return t.content.firstChild;
+}
+
+export const LOGO = `<svg viewBox="0 0 64 64" width="30" height="30" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#FE6164"/><g fill="#F2F2F3"><rect x="8" y="42" width="9" height="12" rx="4.5"/><rect x="21" y="34" width="9" height="20" rx="4.5"/><path d="M34 49.5V30.5A10.5 10.5 0 1 1 48.4 17.4L56 18.6Q58.6 21 55.7 23.6L47.6 26.3A10.5 10.5 0 0 1 43 30.5V49.5A4.5 4.5 0 0 1 34 49.5Z"/></g><circle cx="43" cy="17" r="3" fill="#FE6164"/></svg>`;
