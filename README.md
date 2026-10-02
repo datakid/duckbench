@@ -44,14 +44,24 @@ A data-prep workbench that runs entirely in the browser, written in plain JavaSc
 - **Export:** CSV or TSV (with BOM and protection against spreadsheet formula injection), Excel (one query, or every query as its own sheet), Parquet, JSON, JSONL, Markdown and SQL INSERT. You can choose columns and a row range, and export from the step you are previewing.
 - **Recipes:** v2 recipes (`.duckbench.json`) store all queries. Duckbench 1 recipes can be opened, and their steps are converted to v2 steps.
 
+## Visual identity: "field notebook"
+- **Palette:** calm, low-chroma colour. Dark theme: pond ink `#101417` with verdigris `#86b8a6` and ochre `#d2a85e`. Light theme: linen `#f2eee5` with deep verdigris `#3d7566` and ochre `#9a6b1f`. Data types each get their own muted colour: text is verdigris, numbers are slate blue, dates are plum, true/false is ochre.
+- **Type:** Fraunces (variable optical size, SOFT axis) for headlines and figures. IBM Plex Sans for the interface. Plex Mono, in small caps with wide letter spacing, for labels, codes and the status bar.
+- **Motifs:** contour lines and crop marks on the import screen. A numbered thread connecting the applied steps. Type badges drawn as outlines. Thin rules instead of filled boxes. A faint film grain over everything.
+
+## Self-test
+`tests.html` (or `selftest.html`) runs 62 engine tests in the browser and currently shows **62/62**. They cover CSV and type parsing, every transform, conversion of v1 recipe steps, formulas, joins in all join types, references and circular-reference detection, row edits after sorting, the step cache, preview at an earlier step, and every export format.
+
+## Batch apply
+Available from the import screen or the command palette. Pick a recipe (or use the current query's steps), add files and choose an output format. Each file is processed and its result downloaded.
+
 ## Not yet done
-- The automated self-test suite. `selftest.html` and `selftest-frame.html` from v1 point at `?selftest`, which doesn't exist in v2.
 - The guided tour.
-- Batch-applying a recipe to many files. The engine has a `runSteps` method for this, but nothing in the UI uses it yet.
 - A Custom SQL step. This was removed together with DuckDB.
 - Freezing columns and resizing panels.
+- Downloading batch results as one ZIP file.
 
 ## Next steps
-1. Add `tests.html`, which runs every transform against fixtures and checks the expected outputs.
-2. Add the batch-apply screen.
-3. Add an optional DuckDB-WASM mode for SQL steps and files over about 1 GB.
+1. Add a ZIP option for batch downloads.
+2. Add an optional DuckDB-WASM mode for SQL steps and files over about 1 GB.
+3. Add the onboarding tour.

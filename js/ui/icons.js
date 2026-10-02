@@ -84,4 +84,4 @@ export function icon(name, size = 16, cls = '') {
   return t.content.firstChild;
 }
 
-export const LOGO = `<svg viewBox="0 0 64 64" width="30" height="30" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#FE6164"/><g fill="#F2F2F3"><rect x="8" y="42" width="9" height="12" rx="4.5"/><rect x="21" y="34" width="9" height="20" rx="4.5"/><path d="M34 49.5V30.5A10.5 10.5 0 1 1 48.4 17.4L56 18.6Q58.6 21 55.7 23.6L47.6 26.3A10.5 10.5 0 0 1 43 30.5V49.5A4.5 4.5 0 0 1 34 49.5Z"/></g><circle cx="43" cy="17" r="3" fill="#FE6164"/></svg>`;
+export const LOGO = `<svg viewBox="0 0 64 64" width="30" height="30" aria-hidden="true"><rect x="1" y="1" width="62" height="62" rx="15" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity=".55"/><g fill="var(--accent)"><rect x="10" y="41" width="8" height="12" rx="4"/><rect x="22" y="33" width="8" height="20" rx="4"/><path d="M34 49V30.5A10.5 10.5 0 1 1 48.4 17.4L55 18.6Q57.6 21 54.7 23.6L47.6 26.3A10.5 10.5 0 0 1 42 30.5V49A4 4 0 0 1 34 49Z"/></g><circle cx="43" cy="17" r="2.6" fill="var(--bg)"/><path d="M8 57.5h48" stroke="var(--ochre)" stroke-width="1.5" stroke-linecap="round"/></svg>`;

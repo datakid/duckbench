@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Duckbench — self-test</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  body{overflow:auto}
+  .t-wrap{max-width:880px;margin:0 auto;padding:48px 24px}
+  .t-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:8px}
+  .t-head h1{margin:0;font:300 42px/1 var(--font-display);font-variation-settings:"opsz" 144,"SOFT" 100;letter-spacing:-.02em}
+  .t-score{font:300 42px/1 var(--font-display);font-variant-numeric:tabular-nums}
+  .t-score.is-ok{color:var(--accent)}.t-score.is-bad{color:var(--err)}
+  .t-list{list-style:none;margin:0;padding:0}
+  .t-item{display:grid;grid-template-columns:22px 1fr auto;gap:12px;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:13px}
+  .t-item .mark{font:500 11px var(--font-mono);color:var(--accent)}
+  .t-item.is-bad .mark{color:var(--err)}
+  .t-item .err{grid-column:2/4;color:var(--err);font:12px/1.5 var(--font-mono)}
+  .t-item .ms{font:10px var(--font-mono);color:var(--faint)}
+  .t-foot{margin-top:20px;display:flex;gap:12px}
+</style>
+</head>
+<body>
+<main class="t-wrap">
+  <header class="t-head">
+    <div><p class="eyebrow">Duckbench 2 · engine self-test</p><h1>Every transform, checked.</h1></div>
+    <div id="score" class="t-score">…</div>
+  </header>
+  <ol id="list" class="t-list"></ol>
+  <div class="t-foot"><a class="btn btn-ghost btn-sm" href="index.html">← Back to the workbench</a><button class="btn btn-ghost btn-sm" onclick="location.reload()">Run again</button></div>
+</main>
+<script type="module" src="js/tests/page.js"></script>
+</body>
+</html>

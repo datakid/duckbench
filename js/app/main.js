@@ -129,15 +129,26 @@ function renderImport() {
   drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickFiles({ accept: ACCEPT, multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
   const resume = el('div', { class: 'resume-slot' });
-  screen.append(el('div', { class: 'import-card' },
-    el('p', { class: 'eyebrow' }, 'Local-first data prep'),
-    el('h2', { class: 'import-title' }, 'Bring in your data'),
-    el('p', { class: 'import-copy' }, 'Clean, reshape, join and export — every step is recorded and replayable. Files are processed in this tab and never uploaded; only the Parquet library is fetched from jsDelivr when you use Parquet.'),
-    resume, drop,
-    el('div', { class: 'import-links' },
-      el('button', { class: 'link-btn', onclick: loadSample }, icon('sparkles', 14), 'Try sample sales data'),
-      el('button', { class: 'link-btn', onclick: () => importWithOptions(true) }, icon('settings', 14), 'Import with options…'),
-      el('button', { class: 'link-btn', onclick: loadRecipeFile }, icon('clipboard', 14), 'Open a recipe…'))));
+  const contours = el('div', { html: contourSvg() }).firstChild;
+  const principle = (n, t, d) => el('li', {}, el('span', { class: 'num' }, n), el('strong', {}, t), d);
+  screen.append(contours, el('div', { class: 'import-layout' },
+    el('div', { class: 'import-intro' },
+      el('p', { class: 'eyebrow' }, 'Duckbench — a data workbench'),
+      el('h2', { class: 'import-title', html: 'Quiet tools for <em>messy</em> data.' }),
+      el('p', { class: 'import-copy' }, 'Clean, reshape, join and export without sending a single row anywhere. Every click becomes a step you can read, reorder and replay on next month’s file.'),
+      el('ul', { class: 'principles' },
+        principle('01', 'Private', 'Files never leave this tab.'),
+        principle('02', 'Recorded', 'Every action is a replayable step.'),
+        principle('03', 'Exact', 'Full-data profiles, no sampling.'))),
+    el('div', { class: 'import-card' },
+      el('div', { class: 'card-label' }, el('span', { class: 'mono-label' }, 'New project'), el('span', { class: 'mono-label' }, 'CSV · XLSX · JSON · PARQUET')),
+      resume, drop,
+      el('div', { class: 'import-links' },
+        el('button', { class: 'link-btn', onclick: loadSample }, icon('sparkles', 15), 'Explore with sample sales data'),
+        el('button', { class: 'link-btn', onclick: () => importWithOptions(true) }, icon('settings', 15), 'Import with delimiter, encoding & header options'),
+        el('button', { class: 'link-btn', onclick: loadRecipeFile }, icon('clipboard', 15), 'Open a saved recipe'),
+        el('button', { class: 'link-btn', onclick: openBatch }, icon('layers', 15), 'Batch-apply a recipe to many files')),
+      el('div', { class: 'import-foot' }, el('span', { class: 'mono-label' }, `v2 · ${client.mode === 'worker' ? 'worker engine' : 'inline engine'}`), el('a', { class: 'mono-label', href: 'tests.html', style: { color: 'inherit', textDecoration: 'none' } }, 'Self-test →')))));
   persist.getSession().then((sess) => {
     if (!sess?.json) return;
     let data; try { data = JSON.parse(sess.json); } catch { return; }
@@ -148,6 +159,16 @@ function renderImport() {
       el('button', { class: 'btn btn-primary btn-sm', onclick: () => resumeSession(data) }, 'Resume'),
       el('button', { class: 'icon-btn', title: 'Forget this session', onclick: async () => { await persist.clearSession(); await persist.clearFiles(); resume.remove(); } }, icon('x', 14))));
   });
+}
+
+function contourSvg() {
+  let paths = '';
+  for (let i = 0; i < 14; i++) {
+    const y = 60 + i * 52;
+    const a = 18 + (i % 4) * 9, b = 26 - (i % 3) * 7;
+    paths += `<path d="M-20 ${y} C 180 ${y - a}, 360 ${y + b}, 560 ${y - a / 2} S 940 ${y + a}, 1140 ${y - b / 2} S 1380 ${y + a / 3}, 1480 ${y}" fill="none" stroke="currentColor" stroke-width="${i % 5 === 0 ? 1.1 : .6}"/>`;
+  }
+  return `<svg class="import-contours" viewBox="0 0 1440 800" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${paths}</svg>`;
 }
 
 async function resumeSession(data) {
@@ -740,6 +761,7 @@ function openPalette() {
     { label: 'Export…', icon: 'download', run: () => openExportDialog() },
     { label: 'Save recipe', icon: 'save', run: saveRecipe },
     { label: 'Open recipe…', icon: 'clipboard', run: loadRecipeFile },
+    { label: 'Batch apply steps to many files…', icon: 'layers', run: openBatch },
     { label: 'Import another file', icon: 'upload', run: async () => { const f = await pickFiles({ accept: ACCEPT, multiple: true }); if (f.length) importFiles(f); } },
     { label: 'Toggle light / dark theme', icon: 'sun', run: toggleTheme },
     { label: 'Undo', icon: 'undo', run: doUndo },
@@ -899,6 +921,77 @@ async function loadRecipeFile() {
     return;
   }
   toast('That doesn’t look like a Duckbench recipe.', { kind: 'error' });
+}
+
+function openBatch() {
+  const st = { recipe: null, steps: null, files: [], format: 'csv', zip: false };
+  const fromProject = store.activeQuery();
+  if (fromProject?.steps.length) { st.steps = fromProject.steps; st.recipeName = `${fromProject.name} (current query)`; }
+  const recipeLabel = el('span', { class: 'f-help' });
+  const list = el('ul', { class: 'batch-list' });
+  const runBtn = el('button', { class: 'btn btn-primary' }, icon('play', 14), 'Run batch');
+  const draw = () => {
+    recipeLabel.textContent = st.steps ? `${st.recipeName} · ${st.steps.length} steps` : 'No recipe chosen yet.';
+    clear(list);
+    if (!st.files.length) list.appendChild(el('li', { class: 'batch-item' }, el('span', { class: 'bi-name', style: { color: 'var(--muted)' } }, 'No files chosen.')));
+    st.files.forEach(f => list.appendChild(el('li', { class: `batch-item${f.status === 'done' ? ' is-ok' : f.status === 'error' ? ' is-err' : f.status === 'running' ? ' is-run' : ''}`, title: f.error || '' }, icon('file', 14), el('span', { class: 'bi-name' }, f.file.name), el('span', { class: 'bi-status' }, f.status === 'done' ? `${fmtCount(f.rows)} rows` : f.status === 'error' ? 'failed' : f.status || 'queued'))));
+    runBtn.disabled = !st.steps || !st.files.length;
+  };
+  const pickRecipe = async () => {
+    const [file] = await pickFiles({ accept: '.json' });
+    if (!file) return;
+    try {
+      const r = JSON.parse(await file.text());
+      const q = r.version === 2 ? (r.queries.find(x => x.id === r.activeQueryId) || r.queries[0]) : r;
+      if (!Array.isArray(q?.steps)) throw new Error('No steps found');
+      const usesOthers = q.steps.some(s => ['join', 'append'].includes(migrateStep(s)?.type));
+      if (usesOthers) toast('This recipe joins or appends other queries — those steps will fail in batch mode.', { kind: 'error' });
+      st.steps = q.steps.map(migrateStep).filter(Boolean);
+      st.recipeName = file.name;
+      draw();
+    } catch (e) { toast(`Couldn’t read recipe: ${e.message}`, { kind: 'error' }); }
+  };
+  const pickData = async () => { const files = await pickFiles({ accept: ACCEPT, multiple: true }); st.files.push(...files.map(file => ({ file }))); draw(); };
+  const fmt = el('select', { class: 'input', onchange: (e) => { st.format = e.target.value; } }, [['csv', 'CSV'], ['xlsx', 'Excel (.xlsx)'], ['json', 'JSON'], ['jsonl', 'JSON Lines'], ['parquet', 'Parquet']].map(([v, l]) => el('option', { value: v }, l)));
+  runBtn.addEventListener('click', async () => {
+    runBtn.disabled = true;
+    let ok = 0;
+    for (const item of st.files) {
+      item.status = 'running'; draw();
+      const sid = uid('batch');
+      try {
+        const info = await loadFileIntoEngine(item.file, sid, {});
+        if (!info) throw new Error('Skipped');
+        const r = await client.call('runSteps', { frameFrom: sid, steps: st.steps }, { label: `Processing ${item.file.name}` });
+        if (r.error) throw new Error(`Step ${r.errorIndex + 1}: ${r.error}`);
+        const base = item.file.name.replace(/\.[^.]+$/, '') + '_prepared';
+        if (st.format === 'xlsx') {
+          const c = await client.call('exportData', { resultId: r.resultId, format: 'columns' });
+          const { buffer } = await xlsx.call('write', { sheets: [{ name: base.slice(0, 31), fields: c.fields, columns: c.columns }] });
+          download(new Blob([buffer]), `${base}.xlsx`);
+        } else if (st.format === 'parquet') {
+          const p = await client.call('exportParquet', { resultId: r.resultId });
+          download(new Blob([p.buffer]), `${base}.parquet`);
+        } else {
+          const t = await client.call('exportData', { resultId: r.resultId, format: st.format });
+          download(t.text, `${base}.${st.format}`, t.mime);
+        }
+        item.status = 'done'; item.rows = r.rowCount; ok++;
+      } catch (e) { item.status = 'error'; item.error = e.message; }
+      finally { client.call('removeSource', { id: sid }, { track: false }); client.remember('removeSource', { id: sid }); }
+      draw();
+      await new Promise(res => setTimeout(res, 250));
+    }
+    toast(`Batch finished: ${ok} of ${st.files.length} files exported`, { kind: ok === st.files.length ? 'success' : 'error' });
+    runBtn.disabled = false;
+  });
+  const m = modal({ title: 'Batch apply', icon: 'layers', width: 580, body: el('div', { class: 'form' },
+    el('p', { class: 'modal-text' }, 'Run one query’s steps over many files with the same layout — e.g. every monthly export — and download each result.'),
+    el('div', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Recipe'), el('div', { style: { display: 'flex', gap: '10px', alignItems: 'center' } }, el('button', { class: 'btn btn-ghost btn-sm', onclick: pickRecipe }, icon('clipboard', 14), 'Choose recipe…'), recipeLabel)),
+    el('div', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Files'), list, el('button', { class: 'btn btn-ghost btn-sm', style: { alignSelf: 'flex-start' }, onclick: pickData }, icon('plus', 14), 'Add files…')),
+    el('label', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Output format'), fmt)),
+    footer: [el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Close'), runBtn] });
+  draw();
 }
 
 function doUndo() { const l = store.undo(); if (l) toast(`Undid: ${l}`); }
