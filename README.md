@@ -1,15 +1,34 @@
-# Duckbench 2.1
+# Duckbench 2.2
 
-A data-prep workbench that runs entirely in the browser, written in plain JavaScript. It cleans, reshapes, joins and exports CSV, TSV, Excel, JSON, JSONL and Parquet files. Visual steps cover everyday work; DuckDB-WASM handles SQL, large files and fast exports. Data stays in the browser tab and is never uploaded.
+A data-prep workbench that runs entirely in the browser or as a desktop app, written in plain JavaScript. It cleans, reshapes, joins and exports CSV, TSV, Excel, JSON, JSONL and Parquet files. Visual steps cover everyday work; DuckDB-WASM handles SQL, large files and fast exports. Data stays in the browser tab and is never uploaded.
 
 ## Entry points
 | Path | Purpose |
 |---|---|
 | `index.html` | The app. `?demo` loads the sample project, `?notour` skips the tour |
 | `demo.html` | Opens the demo. `?theme=light` and `?tour` are optional |
-| `tests.html` / `selftest.html` | Self-test suite (**81/81** passing) |
+| `tests.html` / `selftest.html` | Self-test suite (**88/88** passing) |
 
 No backend, no build step, no data tables. Hosting is static.
+
+## Two targets, one codebase
+| Target | Where | Libraries | Saving files |
+|---|---|---|---|
+| **Web** | Repo root, deployed as-is (Vercel, any static host) | DuckDB-WASM and hyparquet from jsDelivr on first use | Browser downloads |
+| **Desktop** | `desktop/` (Tauri 2), see [`desktop/README.md`](desktop/README.md) | Bundled into the app, works offline | Native Save and Choose-folder dialogs |
+
+`js/app/platform.js` detects the desktop shell (`window.__TAURI__`). `js/engine/libs.js` switches library URLs. Both builds share every other file.
+
+### Deploying the web app
+- `.vercelignore` excludes `desktop/`, `.github/` and `images/`, so the Tauri project is never uploaded.
+- `vercel.json` sets security headers and caching, plus `Cross-Origin-Opener-Policy: same-origin`.
+- No build command or output directory is needed: the framework preset is "Other" and the root is the output.
+
+### Building the desktop app
+```bash
+cd desktop && npm install && npm run build
+```
+Pushing a `v*` tag builds macOS, Windows and Linux installers in GitHub Actions (`.github/workflows/desktop.yml`).
 
 ## Architecture
 - **Native ES modules, no framework.** Fonts are self-hosted in `fonts/files/`.
@@ -51,6 +70,31 @@ No backend, no build step, no data tables. Hosting is static.
 - `⌘↵` runs, `⌘/` toggles comments, Tab indents, and Enter keeps the current indentation.
 - Used in SQL steps (the inspector widens to 520 px) and in the console.
 
+## New in 2.2
+- **Visual steps run in DuckDB over the whole file.**
+  - On DuckDB-backed files, leading steps are compiled to SQL (`js/engine/compile.js`) and composed with any SQL steps into one plan. Supported steps:
+    - filter by conditions or picked values
+    - sort (stable)
+    - choose, remove and rename columns
+    - first N rows, range, remove first N
+    - remove blank rows
+    - exact duplicate removal (first, last or lowest)
+    - group by with count, non-empty, distinct, sum, avg, median, std, min and max
+  - These steps get a `duck` badge. Steps after the first one that can't compile run in JS on the preview slice.
+  - Anything that would give a different answer in SQL is never compiled: formulas, regex, loose/Arabic matching, sampling, text min/max, or literals that don't parse.
+  - Compiled output was checked row-for-row against the JS engine on real DuckDB-WASM for 13 representative steps.
+  - The column schema is read once with `LIMIT 0` and cached.
+  - Full-file export now covers every compiled step. It only refuses when a step can't run in DuckDB, and the message names that step.
+- **OPFS storage.**
+  - Where the Origin Private File System is available, DuckDB opens a fresh `opfs://duckbench_work_*.db` database, so large intermediate tables spill to disk instead of memory.
+  - Old work files are cleared on start, and DuckDB falls back to memory if OPFS fails.
+  - Toggle it from the DuckDB menu (stored in `duckbench2.duckOpfs`). The menu shows the active storage.
+- **EXPLAIN and timing in the SQL console.**
+  - **Explain** shows the plan.
+  - **Analyze** runs `EXPLAIN (ANALYZE, FORMAT JSON)` and shows the operator tree with row counts and times, plus the slowest operators as chips. It falls back to the text plan.
+  - Every Run, Explain and Analyze shows a timing bar split into DuckDB load, input preparation and query time.
+- **Desktop app** (Tauri 2) with offline libraries, native save dialogs, a folder target for batch output, "Show in folder" after saving, and remembered window size.
+
 ## Other additions
 - **Streaming CSV reader.**
   - CSV/TSV files are streamed into the worker with `File.stream()` through a chunk-safe state-machine parser (`CsvStream`).
@@ -81,17 +125,26 @@ No backend, no build step, no data tables. Hosting is static.
 | `css/app.css` | All styles |
 | `js/core/` | types, csv (+ `CsvStream`), frame, formula, normalize, profile, transforms, util |
 | `js/engine/` | `engine.js` (pipeline, cache, `loadFile`, `queryData`), `worker.js` (progress messages), `client.js`, `parquet.js`, `xlsx-worker.js`, `duck.js` (loader, status events, Arrow conversion, single-pass `runQuery`, `COPY`, validator) |
-| `js/app/sqlrunner.js` | DuckDB orchestration: serialised jobs, materialisation LRU, pushdown, console, summarize, exports |
+| `js/app/sqlrunner.js` | DuckDB orchestration: serialised jobs, materialisation LRU, schema and source resolution, console, EXPLAIN, summarize, exports |
+| `js/engine/compile.js` | Visual step to DuckDB SQL compiler |
+| `js/engine/libs.js` | CDN or bundled library URLs (`LOCAL_LIBS`) |
+| `js/app/platform.js` | Desktop detection and native save, folder and reveal calls |
+| `vendor/xlsx-0.20.3.full.min.js` | SheetJS (Excel read/write) |
+| `fonts/files/` | Self-hosted Instrument Sans, Bricolage Grotesque, JetBrains Mono |
+| `desktop/` | Tauri 2 project (excluded from web deploys) |
+| `vercel.json`, `.vercelignore` | Web deploy settings |
 | `js/ui/sqleditor.js` | SQL editor, highlighter, function and pattern catalog |
 | `js/ui/` | grid (virtual, frozen columns), forms, overlay, dom, icons |
 | `js/tests/` | Self-test suite (the folder was previously misnamed `js/test/`, so `tests.html` failed to load) |
 
 ## Not yet done
-- DuckDB-side execution of visual steps (translating steps to SQL) for whole-file previews.
+- Compiling the remaining visual steps (change type, replace values, split, joins, pivot) to SQL.
 - Persisting DuckDB-backed files in Firefox and Safari (no File System Access API).
 - Opening Excel files with DuckDB (requires the `excel` extension).
+- Code signing and auto-update for the desktop app.
+- On desktop, opening files by native path (files are still read through the WebView file picker).
 
 ## Next steps
-1. Compile common visual steps (filter, sort, group by, select) to SQL so DuckDB files can be cleaned without the 1M-row slice.
-2. Use DuckDB OPFS storage for very large intermediate results.
-3. Add an EXPLAIN view and a query-time breakdown in the console.
+1. Compile `change_type`, `replace_values`, `change_case`/`trim` and `join` to SQL, with a row-for-row DuckDB parity test for each.
+2. Add signing secrets to the desktop workflow and enable the Tauri updater.
+3. On desktop, register large files with DuckDB by path for zero-copy reads, and remember recent files.

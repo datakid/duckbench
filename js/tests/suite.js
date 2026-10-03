@@ -10,6 +10,17 @@ import { CsvStream, parseCSV as parseCsvAll } from '../core/csv.js';
 import { highlightSql } from '../ui/sqleditor.js';
 import { zipFiles, unzipEntries, crc32 } from '../io/zip.js';
 import { createStore } from '../app/store.js';
+import { compileStep, mayCompile } from '../engine/compile.js';
+import { profileFromJson } from '../engine/duck.js';
+
+const SALES_FIELDS = [{ name: 'order_id', type: 'integer' }, { name: 'order_date', type: 'date' }, { name: 'customer', type: 'text' }, { name: 'region', type: 'text' }, { name: 'quantity', type: 'integer' }, { name: 'unit_price', type: 'number' }];
+function duckEngine(steps, schemaFields = SALES_FIELDS) {
+  const e = new Engine();
+  e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: 'SELECT * FROM src', limit: 10 }, steps: steps.map((s, i) => ({ id: 's' + i, ...migrateStep(s) })) }] });
+  const first = e.evaluate({ queryId: 'd' });
+  if (first.needsSql?.schema) e.putDuckSchema({ key: first.needsSql.key, fields: schemaFields });
+  return e;
+}
 
 const eq = (a, b, msg) => { const A = JSON.stringify(a), B = JSON.stringify(b); if (A !== B) throw new Error(`${msg || 'mismatch'}: expected ${B}, got ${A}`); };
 const ok = (c, msg) => { if (!c) throw new Error(msg || 'assertion failed'); };
@@ -131,17 +142,16 @@ export const TESTS = [
     const e = new Engine();
     e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: "SELECT * FROM read_parquet('big.parquet')", limit: 100 }, steps: [{ id: 'a', type: 'sql', data: { sql: 'SELECT COUNT(*) AS n FROM input', tables: [] } }] }] });
     const r = e.evaluate({ queryId: 'd' });
-    ok(r.needsSql && r.needsSql.index === 0, 'needs the SQL step, not the 1M-row source');
-    const input = e.sqlInput({ queryId: 'd', index: 0 });
-    ok(input.pushdown && /read_parquet/.test(input.pushdown));
+    ok(r.needsSql?.source && r.needsSql.source.pushed === 1, 'the SQL step is pushed into the whole-file source');
+    ok(/read_parquet/.test(r.needsSql.source.sql) && /COUNT\(\*\)/.test(r.needsSql.source.sql));
     e.putSqlResult({ key: r.needsSql.key, fields: [{ name: 'n', type: 'integer' }], columns: [[123456789]] });
     eq(e.evaluate({ queryId: 'd' }).page.rows[0][0], 123456789);
   }],
-  ['duck source — non-SQL steps load the preview slice', () => {
+  ['duck source — non-pushable steps load the preview slice', () => {
     const e = new Engine();
-    e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: 'SELECT 1', limit: 10 }, steps: [{ id: 'a', type: 'keep_rows', data: { mode: 'first', count: 1 } }] }] });
+    e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: 'SELECT 1', limit: 10 }, steps: [{ id: 'a', type: 'keep_rows', data: { mode: 'sample', count: 1 } }] }] });
     const r = e.evaluate({ queryId: 'd' });
-    ok(r.needsSql && r.needsSql.source, 'asks for the source slice');
+    ok(r.needsSql && r.needsSql.source && r.needsSql.source.sql === 'SELECT 1', 'asks for the plain source slice');
     e.putSqlResult({ key: r.needsSql.key, fields: [{ name: 'x', type: 'integer' }], columns: [[1, 2, 3]], note: 'slice' });
     const r2 = e.evaluate({ queryId: 'd' });
     eq(r2.rowCount, 1); eq(r2.sourceNote, 'slice');
@@ -204,12 +214,8 @@ export const TESTS = [
     const e = new Engine();
     e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: 'SELECT * FROM src', limit: 10 }, steps: [{ id: 'a', type: 'sql', data: { sql: 'SELECT * FROM input WHERE x > 1', tables: [] } }, { id: 'b', type: 'sql', data: { sql: 'SELECT COUNT(*) AS n FROM input', tables: [] } }] }] });
     const r = e.evaluate({ queryId: 'd' });
-    ok(r.needsSql && r.needsSql.index === 0);
-    e.putSqlResult({ key: r.needsSql.key, fields: [{ name: 'x', type: 'integer' }], columns: [[2, 3]] });
-    const r2 = e.evaluate({ queryId: 'd' });
-    ok(r2.needsSql && r2.needsSql.index === 1);
-    const input = e.sqlInput({ queryId: 'd', index: 1 });
-    eq(input.pushdown, 'WITH input AS (SELECT * FROM src) SELECT * FROM input WHERE x > 1');
+    eq(r.needsSql.source.sql, 'WITH input AS (WITH input AS (SELECT * FROM src) SELECT * FROM input WHERE x > 1) SELECT COUNT(*) AS n FROM input');
+    eq(e.duckPlan({ queryId: 'd', stepIndex: 0 }).sql, 'WITH input AS (SELECT * FROM src) SELECT * FROM input WHERE x > 1');
   }],
   ['sql — input key lets DuckDB reuse materialized tables', () => { const e = setup(); e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: 'sales' }, steps: [{ id: 'a', type: 'sql', data: { sql: 'SELECT 1', tables: ['r'] } }] }, { id: 'r', name: 'regions', source: { kind: 'file', sourceId: 'reg' }, steps: [] }] }); const i = e.sqlInput({ queryId: 'q', index: 0 }); ok(i.inputKey && i.inputKey.startsWith('src:sales')); ok(i.tables[0].key.startsWith('src:reg')); }],
   ['duck — arrow type mapping and value conversion', () => {
@@ -223,6 +229,73 @@ export const TESTS = [
   }],
   ['duck — reader options', () => { eq(readerFor('a.csv', 'csv', { delimiter: ';', header: false, skipRows: 2 }), "read_csv('a.csv', sample_size=20480, delim=';', header=false, skip=2)"); eq(readerFor('a.tsv', 'tsv'), "read_csv('a.tsv', sample_size=20480, delim='\t')"); }],
   ['sql editor — highlighter escapes and classifies', () => { const h = highlightSql("SELECT count(*) FROM input WHERE a = '<b>' -- x", { tables: ['input'] }); ok(h.includes('<span class="sq-k">SELECT</span>')); ok(h.includes('<span class="sq-f">count</span>')); ok(h.includes('<span class="sq-t">input</span>')); ok(h.includes('&lt;b&gt;')); ok(h.includes('sq-c')); }],
+  ['compile — filter rules, values, blanks', () => {
+    const f = compileStep({ type: 'filter', data: { mode: 'rules', logic: 'any', rules: [{ column: 'quantity', operator: '>', value: '2' }, { column: 'region', operator: '=', value: 'North' }] } }, SALES_FIELDS);
+    eq(f.sql, "SELECT * FROM input WHERE (\"quantity\" > 2) OR (\"region\" IS NOT NULL AND lower(\"region\") = 'north')");
+    ok(/BETWEEN DATE '2026-01-01' AND DATE '2026-02-01'/.test(compileStep({ type: 'filter', data: { mode: 'rules', rules: [{ column: 'order_date', operator: 'between', value: '2026-01-01', value2: '2026-02-01' }] } }, SALES_FIELDS).sql));
+    ok(/contains\(lower\("customer"\), 'o''b'\)/.test(compileStep({ type: 'filter', data: { rules: [{ column: 'customer', operator: 'contains', value: "O'B" }] } }, SALES_FIELDS).sql), 'quotes escaped');
+    ok(/IN \('North', 'East'\)/.test(compileStep({ type: 'filter', data: { mode: 'values', column: 'region', values: { include: true, list: ['North', 'East'] } } }, SALES_FIELDS).sql));
+    ok(/trim\("customer"\) = ''/.test(compileStep({ type: 'remove_blank_rows', data: { columns: ['customer'], mode: 'any' } }, SALES_FIELDS).sql));
+  }],
+  ['compile — refuses what DuckDB would get wrong', () => {
+    eq(compileStep({ type: 'filter', data: { mode: 'formula', formula: '[a] > 1' } }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'filter', data: { loose: true, rules: [{ column: 'customer', operator: 'contains', value: 'x' }] } }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'filter', data: { rules: [{ column: 'customer', operator: 'regex', value: 'x' }] } }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'filter', data: { rules: [{ column: 'quantity', operator: '>', value: 'abc' }] } }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'filter', data: { rules: [{ column: 'missing', operator: '=', value: '1' }] } }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'keep_rows', data: { mode: 'sample', count: 5 } }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'remove_duplicates', data: { columns: ['customer'], matchMode: 'loose' } }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'group_by', data: { groupColumns: ['region'], aggregations: [{ fn: 'concat', column: 'customer', name: 'c' }] } }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'split_column', data: {} }, SALES_FIELDS), null);
+    ok(!mayCompile({ type: 'sort', disabled: true }));
+  }],
+  ['compile — columns, sort, limits, dedupe, group by', () => {
+    const sel = compileStep({ type: 'select_columns', data: { columns: ['region', 'quantity'] } }, SALES_FIELDS);
+    eq(sel.fields.map(f => f.name), ['region', 'quantity']);
+    eq(compileStep({ type: 'remove_columns', data: { columns: ['customer'] } }, SALES_FIELDS).fields.length, 5);
+    const ren = compileStep({ type: 'rename_columns', data: { mapping: { region: 'area' } } }, SALES_FIELDS);
+    ok(ren.sql.includes('"region" AS "area"')); eq(ren.fields[3].name, 'area');
+    eq(compileStep({ type: 'rename_columns', data: { mapping: { region: 'customer' } } }, SALES_FIELDS), null, 'clashing rename');
+    ok(/ORDER BY lower\("region"\) ASC NULLS LAST, "unit_price" DESC NULLS LAST, __duckbench_rn$/.test(compileStep({ type: 'sort', data: { keys: [{ column: 'region', direction: 'asc' }, { column: 'unit_price', direction: 'desc' }] } }, SALES_FIELDS).sql), 'stable sort');
+    eq(compileStep({ type: 'keep_rows', data: { mode: 'range', offset: 3, count: 2 } }, SALES_FIELDS).sql, 'SELECT * FROM input LIMIT 2 OFFSET 2');
+    ok(/QUALIFY row_number\(\) OVER \(PARTITION BY "customer" ORDER BY __duckbench_rn DESC\) = 1/.test(compileStep({ type: 'remove_duplicates', data: { columns: ['customer'], keep: 'last' } }, SALES_FIELDS).sql));
+    const g = compileStep({ type: 'group_by', data: { groupColumns: ['region'], aggregations: [{ fn: 'sum', column: 'quantity', name: 'q' }, { fn: 'count', name: 'n' }, { fn: 'avg', column: 'unit_price', name: 'p' }] } }, SALES_FIELDS);
+    eq(g.fields, [{ name: 'region', type: 'text' }, { name: 'q', type: 'integer' }, { name: 'n', type: 'integer' }, { name: 'p', type: 'number' }]);
+    ok(/GROUP BY "region" ORDER BY min\(__duckbench_rn\)/.test(g.sql), 'first-seen group order');
+  }],
+  ['engine — visual steps push down on DuckDB files', () => {
+    const e = duckEngine([{ type: 'filter', data: { rules: [{ column: 'quantity', operator: '>', value: '2' }] } }, { type: 'select_columns', data: { columns: ['region', 'quantity'] } }, { type: 'split_column', data: { column: 'region', delimiter: ' ', mode: 'columns' } }]);
+    const r = e.evaluate({ queryId: 'd' });
+    ok(r.needsSql?.source, 'asks for the pushed source');
+    ok(/WHERE \("quantity" > 2\)/.test(r.needsSql.source.sql) && /SELECT "region", "quantity" FROM input/.test(r.needsSql.source.sql));
+    eq(r.needsSql.source.pushed, 2);
+    e.putSqlResult({ key: r.needsSql.key, fields: [{ name: 'region', type: 'text' }, { name: 'quantity', type: 'integer' }], columns: [['North East', 'South'], [3, 4]] });
+    const r2 = e.evaluate({ queryId: 'd' });
+    eq(r2.rowCount, 2); ok(r2.fields.some(f => f.name === 'region_1'));
+    ok(r2.diag[0].pushed && r2.diag[1].pushed && !r2.diag[2].pushed);
+    const plan = e.duckPlan({ queryId: 'd' });
+    ok(!plan.complete && plan.blockedAt === 2 && plan.pushed === 2);
+    ok(e.duckPlan({ queryId: 'd', stepIndex: 1 }).complete);
+  }],
+  ['engine — pushdown chains SQL after visual steps and reports errors at the step', () => {
+    const e = duckEngine([{ type: 'keep_rows', data: { mode: 'first', count: 5 } }, { type: 'sql', data: { sql: 'SELECT COUNT(*) AS n FROM input', tables: [] } }]);
+    const r = e.evaluate({ queryId: 'd' });
+    eq(r.needsSql.source.sql, 'WITH input AS (WITH input AS (SELECT * FROM src) SELECT * FROM input LIMIT 5) SELECT COUNT(*) AS n FROM input');
+    e.putSqlResult({ key: r.needsSql.key, error: 'bad column' });
+    const r2 = e.evaluate({ queryId: 'd' });
+    ok(r2.error && r2.errorIndex === 1, 'error points at the last pushed step');
+    const qd = duckEngine([{ type: 'sort', data: { keys: [{ column: 'region', direction: 'asc' }] } }]).queryData({ queryId: 'd' });
+    ok(qd.pushdown && /ORDER BY/.test(qd.pushdown), 'console sees the whole-file plan');
+  }],
+  ['engine — editing a step previews from the slice before it', () => {
+    const e = duckEngine([{ type: 'filter', data: { rules: [{ column: 'quantity', operator: '>', value: '2' }] } }, { type: 'sort', data: { keys: [{ column: 'region', direction: 'asc' }] } }]);
+    const r = e.evaluate({ queryId: 'd', override: { index: 1, step: { type: 'sort', data: { keys: [{ column: 'quantity', direction: 'desc' }] } } } });
+    ok(r.needsSql?.source && !/ORDER BY/.test(r.needsSql.source.sql) && /WHERE/.test(r.needsSql.source.sql), 'draft step runs locally on the pushed prefix');
+  }],
+  ['duck — EXPLAIN ANALYZE JSON profile', () => {
+    const p = profileFromJson({ latency: 0.012, children: [{ operator_name: 'PROJECTION', operator_timing: 0.001, operator_cardinality: 5, children: [{ operator_name: 'FILTER', operator_timing: 0.004, operator_cardinality: 5, children: [{ operator_name: 'TABLE_SCAN', operator_timing: 0.006, operator_cardinality: 52, children: [] }] }] }] });
+    eq(p.ops.map(o => o.name), ['PROJECTION', 'FILTER', 'TABLE_SCAN']); eq(p.total, 0.012); ok(p.text.includes('    TABLE_SCAN  52 rows'));
+  }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];
 

@@ -1,4 +1,5 @@
-import { $, el, clear, put, debounce, modKey, kbd, fmtCount, fmtBytes, fmtMs, fmtAgo, download, copyText, pickFiles, fuzzyScore } from '../ui/dom.js';
+import { $, el, clear, put, debounce, modKey, kbd, fmtCount, fmtBytes, fmtMs, fmtAgo, download, copyText, pickFiles, fuzzyScore, setNativeSaver } from '../ui/dom.js';
+import { isDesktop, saveNative, revealNative, pickFolderNative, saveIntoFolder } from './platform.js';
 import { icon, svg, LOGO } from '../ui/icons.js';
 import { modal, confirmDialog, promptDialog, menu, toast, hasOverlay } from '../ui/overlay.js';
 import { Grid } from '../ui/grid.js';
@@ -117,7 +118,7 @@ async function importFiles(files, { asNewProject = false, options, viaDuck = fal
     try {
       const handle = handles?.get(file) || null;
       if (viaDuck || file.size > LARGE_FILE_BYTES) {
-        if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB, loaded once from cdn.jsdelivr.net. The first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows are loaded for steps; leading SQL steps and exports use every row.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
+        if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB. Filters, sorts, column changes, group by and SQL steps run over every row; other steps work on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
         await importLargeViaDuck(file, { asNewProject, handle, options: viaDuck ? options || {} : {} });
         asNewProject = false;
         continue;
@@ -210,13 +211,13 @@ function renderImport() {
   screen.append(el('div', { class: 'import-shell' },
     el('section', { class: 'hero', 'aria-labelledby': 'heroTitle' },
       el('h2', { class: 'hero-title', id: 'heroTitle' }, 'New project'),
-      el('p', { class: 'hero-sub' }, 'Files are processed in this tab and are not uploaded.'),
+      el('p', { class: 'hero-sub' }, isDesktop() ? 'Files are processed on this computer and never leave it.' : 'Files are processed in this tab and are not uploaded.'),
       drop,
       el('div', { class: 'hero-row' },
         el('button', { class: 'btn btn-primary', id: 'sampleBtn', onclick: loadSample }, icon('table', 14), 'Sample data'),
         el('button', { class: 'btn btn-ghost', onclick: () => importWithOptions(true) }, icon('settings', 14), 'Import with options'),
         el('button', { class: 'btn btn-ghost', onclick: () => startTour({ force: true }) }, icon('play', 14), 'Tour')),
-      el('div', { class: 'hero-foot' }, el('span', {}, `Duckbench 2 · ${engineLabel()}`), el('span', { style: { marginLeft: 'auto' } }, el('a', { href: 'tests.html' }, 'Self-test')))),
+      el('div', { class: 'hero-foot' }, el('span', {}, `Duckbench 2.2${isDesktop() ? ' desktop' : ''} · ${engineLabel()}`), el('span', { style: { marginLeft: 'auto' } }, el('a', { href: 'tests.html' }, 'Self-test')))),
     el('div', { class: 'side-col' },
       resume,
       el('div', { class: 'side-card' }, el('h3', {}, 'Open'),
@@ -511,6 +512,9 @@ function duckMenu(anchor) {
     { label: 'Open large file…', icon: 'database', onClick: () => openWithDuck(!store.state.queries.length) },
     store.activeQuery() ? { label: 'Add SQL step', icon: 'plus', onClick: () => { if ($('#workbench').hidden) return; addStep('sql'); } } : null,
     store.activeQuery() ? { label: 'Summarize this query with DuckDB', icon: 'chart', onClick: () => openSummarize() } : null,
+    '-',
+    { header: `Storage · ${duck.duckStorage() === 'opfs' ? 'browser disk (OPFS)' : duck.duckStorage() === 'memory' ? 'memory' : duck.opfsAvailable() ? (duck.opfsPreference() ? 'OPFS on next load' : 'memory on next load') : 'memory'}` },
+    duck.opfsAvailable() ? { label: duck.opfsPreference() ? 'Keep DuckDB tables in memory' : 'Store DuckDB tables on disk (OPFS)', icon: 'database', onClick: () => { duck.setOpfsPreference(!duck.opfsPreference()); toast(st === 'off' || st === 'failed' ? 'Applies when DuckDB loads' : 'Applies after a reload', { action: st === 'ready' ? 'Reload' : null, onAction: async () => { await saveSessionNow(); location.reload(); } }); } } : null,
   ], { align: 'end' });
 }
 
@@ -627,7 +631,7 @@ function renderSteps() {
       el('span', { class: 'step-text' },
         el('span', { class: 'step-name' }, s.name || t?.label || s.type),
         el('span', { class: 'step-sum' }, d.error ? d.error : stepSummary(s, { queryName }))),
-      el('span', { class: 'step-meta' }, d.cached ? el('span', { class: 'step-cached', title: 'Served from cache' }, '●') : null, delta ? el('span', { class: 'step-delta' }, delta) : null, d.ms != null && !d.cached ? el('span', { class: 'step-ms' }, fmtMs(d.ms)) : null),
+      el('span', { class: 'step-meta' }, d.pushed ? el('span', { class: 'step-pushed', title: 'Ran in DuckDB over the whole file' }, 'duck') : null, d.cached ? el('span', { class: 'step-cached', title: 'Served from cache' }, '●') : null, delta ? el('span', { class: 'step-delta' }, delta) : null, d.ms != null && !d.cached ? el('span', { class: 'step-ms' }, fmtMs(d.ms)) : null),
       el('button', { class: 'icon-btn icon-btn-xs step-more', 'aria-label': 'Step actions', onclick: (e) => { e.stopPropagation(); stepMenu(s, i, e.currentTarget); } }, icon('more', 14)));
     li.addEventListener('click', () => { ui.selectedStep = s.id; ui.rightMode = 'inspector'; setCursor(i); });
     li.addEventListener('keydown', (e) => {
@@ -1002,32 +1006,34 @@ function openExportDialog() {
     el('button', { class: 'btn btn-primary', onclick: () => { m.close(); runExport({ ...o, rowStart: Math.max(0, (Number(o.rowStart) || 1) - 1), rowEnd: o.rowEnd === '' ? Infinity : Number(o.rowEnd) }); } }, 'Export')] });
 }
 
+async function saveOut(data, filename, mime, message) {
+  const r = await download(data, filename, mime);
+  if (r?.cancelled || r?.error) return false;
+  if (!isDesktop() && message) toast(message, { kind: 'success' });
+  return true;
+}
+
 async function exportFullViaDuck() {
   const q = store.activeQuery();
-  const active = q.steps.filter(s => !s.disabled);
-  if (active.some(s => s.type !== 'sql')) {
-    toast('Full-file export runs SQL steps only. Other steps work on the loaded rows; use Export for those.', { kind: 'error', duration: 8000 });
+  let plan;
+  try { plan = await sql.planFor(q.id, q.steps.length - 1); } catch (e) { toast(e.message, { kind: 'error' }); return; }
+  if (plan.error) { toast(plan.error, { kind: 'error' }); return; }
+  if (!plan.complete) {
+    const s = q.steps[plan.blockedAt];
+    toast(`Step ${plan.blockedAt + 1} (${s.name || TRANSFORMS[s.type]?.label || s.type}) can’t run in DuckDB, so full-file export stops there. DuckDB runs filters, sorts, column choice/removal/renames, first-row limits, blank and duplicate removal, group by and SQL steps.`, { kind: 'error', duration: 10000 });
     return;
   }
-  if (active.some(s => (s.data?.tables || []).length)) { toast('Full-file export can’t combine with other queries.', { kind: 'error' }); return; }
   const fmtSel = el('select', { class: 'input' }, [['parquet', 'Parquet (ZSTD)'], ['csv', 'CSV'], ['jsonl', 'JSON Lines'], ['json', 'JSON']].map(([v, l]) => el('option', { value: v }, l)));
-  const m = modal({ title: 'Export full file', icon: 'database', width: 440, body: [el('p', { class: 'modal-text' }, `Runs ${active.length ? `${active.length} SQL step${active.length === 1 ? '' : 's'}` : 'the source'} over every row with DuckDB.`), el('label', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Format'), fmtSel)], footer: [
+  const m = modal({ title: 'Export full file', icon: 'database', width: 440, body: [el('p', { class: 'modal-text' }, `Runs ${plan.pushed ? `${plan.pushed} step${plan.pushed === 1 ? '' : 's'}` : 'the source'} over every row with DuckDB.`), el('label', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Format'), fmtSel)], footer: [
     el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Cancel'),
     el('button', { class: 'btn btn-primary', onclick: async () => {
       const format = fmtSel.value;
       m.close();
       const dismiss = toast('Exporting with DuckDB…', { duration: 600000 });
       try {
-        let cur = q.source.sql;
-        for (const s of active) {
-          const v = duck.validateSql(s.data.sql);
-          if (v.error) throw new Error(v.error);
-          cur = duck.withInput(cur, v.sql);
-        }
-        const buf = await duck.copyTo(cur, format);
-        download(new Blob([buf]), `${q.name.replace(/[\\/:*?"<>|]+/g, '_')}.${format}`);
+        const buf = await duck.copyTo(plan.sql, format);
         dismiss();
-        toast('Exported', { kind: 'success' });
+        await saveOut(new Blob([buf]), `${q.name.replace(/[\\/:*?"<>|]+/g, '_')}.${format}`, 'application/octet-stream', 'Exported');
       } catch (e) { dismiss(); toast(`Export failed: ${e.message}`, { kind: 'error' }); }
     } }, 'Export')] });
 }
@@ -1049,28 +1055,24 @@ async function runExport(opts) {
         sheets.push({ name: t.name, fields: r.fields, columns: r.columns });
       }
       const { buffer } = await xlsx.call('write', { sheets });
-      download(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${opts.format === 'xlsx-all' ? store.state.projectName.replace(/[\\/:*?"<>|]+/g, '_') : base}.xlsx`);
-      toast(`Exported ${sheets.length} sheet${sheets.length === 1 ? '' : 's'}`, { kind: 'success' });
+      await saveOut(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${opts.format === 'xlsx-all' ? store.state.projectName.replace(/[\\/:*?"<>|]+/g, '_') : base}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', `Exported ${sheets.length} sheet${sheets.length === 1 ? '' : 's'}`);
       return;
     }
     if (opts.format === 'parquet-duck') {
       const c = await client.call('exportData', { ...args, format: 'columns' }, { label: 'Preparing export' });
       const buf = await sql.exportViaDuck({ fields: c.fields, columns: c.columns, format: 'parquet', key: null });
-      download(new Blob([buf], { type: 'application/octet-stream' }), `${base}.parquet`);
-      toast(`Exported ${fmtCount(c.rows)} rows with DuckDB`, { kind: 'success' });
+      await saveOut(new Blob([buf], { type: 'application/vnd.apache.parquet' }), `${base}.parquet`, 'application/vnd.apache.parquet', `Exported ${fmtCount(c.rows)} rows with DuckDB`);
       return;
     }
     if (opts.format === 'parquet') {
       const r = await client.call('exportParquet', args, { label: 'Writing Parquet' });
-      download(new Blob([r.buffer], { type: 'application/octet-stream' }), `${base}.parquet`);
-      toast('Exported Parquet', { kind: 'success' });
+      await saveOut(new Blob([r.buffer], { type: 'application/vnd.apache.parquet' }), `${base}.parquet`, 'application/vnd.apache.parquet', 'Exported Parquet');
       return;
     }
     const r = await client.call('exportData', { ...args, format: opts.format }, { label: 'Exporting' });
     if (opts.clipboard) { await copyText(r.text); toast(`Copied ${fmtCount(r.rows)} rows`, { kind: 'success' }); return; }
     const ext = { csv: 'csv', tsv: 'tsv', json: 'json', jsonl: 'jsonl', markdown: 'md', sql: 'sql' }[opts.format];
-    download(r.text, `${base}.${ext}`, r.mime);
-    toast(`Exported ${fmtCount(r.rows)} rows`, { kind: 'success' });
+    await saveOut(r.text, `${base}.${ext}`, r.mime, `Exported ${fmtCount(r.rows)} rows`);
   } catch (e) { toast(`Export failed: ${e.message}`, { kind: 'error' }); }
 }
 
@@ -1085,8 +1087,7 @@ function buildRecipe() {
 
 function saveRecipe() {
   if (!store.state.queries.length) return;
-  download(JSON.stringify(buildRecipe(), null, 2), `${store.state.projectName.replace(/[\\/:*?"<>|]+/g, '_')}.duckbench.json`, 'application/json');
-  toast('Recipe saved', { kind: 'success' });
+  saveOut(JSON.stringify(buildRecipe(), null, 2), `${store.state.projectName.replace(/[\\/:*?"<>|]+/g, '_')}.duckbench.json`, 'application/json', 'Recipe saved');
 }
 
 async function loadRecipeFile() {
@@ -1190,6 +1191,11 @@ function openBatch() {
   const fmt = el('select', { class: 'input', onchange: (e) => { st.format = e.target.value; } }, BATCH_FORMATS.map(([v, l]) => el('option', { value: v }, l)));
   const zipToggle = el('input', { type: 'checkbox', checked: true, onchange: (e) => { st.zip = e.target.checked; } });
   runBtn.addEventListener('click', async () => {
+    let folder = null;
+    if (isDesktop() && !st.zip) {
+      try { folder = await pickFolderNative('Save batch output to'); } catch (e) { toast(`Couldn’t open the folder picker: ${e?.message || e}`, { kind: 'error' }); return; }
+      if (!folder) return;
+    }
     st.running = true; st.cancel = false;
     for (const f of st.files) { f.status = null; f.error = null; }
     draw();
@@ -1210,6 +1216,7 @@ function openBatch() {
         if (r.error) throw new Error(r.errorIndex >= 0 ? `Step ${r.errorIndex + 1}: ${r.error}` : r.error);
         const out = await exportResult(r.resultId, st.format, item.file.name.replace(/\.[^.]+$/, ''));
         if (st.zip) outputs.push(out);
+        else if (folder) { await saveIntoFolder(folder, out.name, out.data instanceof Blob ? out.data : new Blob([out.data], { type: out.mime })); }
         else { download(out.data instanceof Uint8Array ? new Blob([out.data]) : out.data, out.name, out.mime); await new Promise(res => setTimeout(res, 300)); }
         item.status = 'done'; item.rows = r.rowCount; ok++;
       } catch (e) { item.status = 'error'; item.error = e.message; }
@@ -1224,18 +1231,19 @@ function openBatch() {
       progress.textContent = 'Building ZIP…';
       try {
         const blob = await zipFiles(outputs, { compress: st.format !== 'parquet' && st.format !== 'xlsx' });
-        download(blob, `${(st.recipeName.split(' › ').pop() || 'batch').replace(/\.duckbench\.json$|\.json$/i, '').replace(/[\\/:*?"<>|]+/g, '_')}_batch.zip`);
+        await download(blob, `${(st.recipeName.split(' › ').pop() || 'batch').replace(/\.duckbench\.json$|\.json$/i, '').replace(/[\\/:*?"<>|]+/g, '_')}_batch.zip`, 'application/zip');
       } catch (e) { toast(`ZIP failed: ${e.message}`, { kind: 'error' }); }
     }
     st.running = false;
     progress.textContent = `${ok} of ${st.files.length} exported`;
+    if (folder && ok) toast(`${ok} file${ok === 1 ? '' : 's'} saved`, { kind: 'success', action: 'Show', onAction: () => revealNative(folder) });
     draw();
   });
   const m = modal({ title: 'Batch apply', icon: 'layers', width: 580, onClose: () => { st.cancel = true; }, body: el('div', { class: 'form' },
     el('div', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Steps'), el('div', { style: { display: 'flex', gap: '10px', alignItems: 'center' } }, el('button', { class: 'btn btn-ghost btn-sm', onclick: pickRecipe }, icon('clipboard', 14), 'From recipe…'), recipeLabel), warn),
     el('div', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Files'), list, el('button', { class: 'btn btn-ghost btn-sm', style: { alignSelf: 'flex-start' }, onclick: pickData }, icon('plus', 14), 'Add files…')),
     el('label', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Output format'), fmt),
-    el('label', { class: 'f-toggle' }, zipToggle, el('span', { class: 'toggle-ui' }), el('span', {}, 'Download as one ZIP'))),
+    el('label', { class: 'f-toggle' }, zipToggle, el('span', { class: 'toggle-ui' }), el('span', {}, isDesktop() ? 'Save as one ZIP (off: choose a folder)' : 'Download as one ZIP'))),
     footer: [progress, el('span', { class: 'spacer' }), el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Close'), runBtn] });
   draw();
 }
@@ -1285,6 +1293,9 @@ function openConsole(initial, { autorun = false } = {}) {
   const ed = sqlEditor({ value: start, rows: 9, autofocus: true, label: 'SQL query', getContext: () => ({ tables: ['input', ...tables.map(t => t.name)], columns: fields }), onRun: () => run() });
   const runBtn = el('button', { class: 'btn btn-primary btn-sm', onclick: () => run() }, icon('play', 13), 'Run', el('kbd', {}, kbd('\u2318\u21b5')));
   const stepBtn = el('button', { class: 'btn btn-ghost btn-sm', disabled: !q, onclick: () => { const sqlText = ed.getValue(); const used = duck.referencedNames(sqlText, tables.map(t => t.name)); const ids = tables.filter(t => used.includes(t.name) && t.q.id !== q.id).map(t => t.q.id); m.close(); addStep('sql', { sql: sqlText, tables: ids }, { label: 'Add SQL step' }); } }, icon('plus', 13), 'Add as step');
+  const explainBtn = el('button', { class: 'btn btn-ghost btn-sm', title: 'Show the query plan', onclick: () => explainRun(false) }, icon('layers', 13), 'Explain');
+  const analyzeBtn = el('button', { class: 'btn btn-ghost btn-sm', title: 'Run the query and time every operator', onclick: () => explainRun(true) }, icon('zap', 13), 'Analyze');
+  const timingBar = el('div', { class: 'console-timing', hidden: true });
   const dlBtn = el('button', { class: 'btn btn-ghost btn-sm', disabled: true, onclick: (e) => menu(e.currentTarget, [['csv', 'CSV'], ['parquet', 'Parquet'], ['jsonl', 'JSON Lines'], ['json', 'JSON']].map(([f, l]) => ({ label: l, icon: 'download', onClick: () => downloadConsole(f) }))) }, icon('download', 13), 'Download');
   const snippets = el('select', { class: 'input input-sm sql-snippets', 'aria-label': 'Insert a pattern' }, el('option', { value: '' }, 'Patterns\u2026'), SQL_SNIPPETS.map((s, i) => el('option', { value: String(i) }, s.label)));
   snippets.addEventListener('change', () => { const s = SQL_SNIPPETS[Number(snippets.value)]; if (s) ed.setValue(s.sql); snippets.value = ''; ed.textarea.focus(); });
@@ -1303,6 +1314,7 @@ function openConsole(initial, { autorun = false } = {}) {
       fields = r.fields.length ? r.fields : fields;
       clear(out).appendChild(r.rows ? resultTable(r) : el('div', { class: 'console-empty' }, 'No rows.'));
       status.textContent = `${fmtCount(r.rows)}${r.truncated ? '+' : ''} row${r.rows === 1 ? '' : 's'} \u00b7 ${r.fields.length} col${r.fields.length === 1 ? '' : 's'} \u00b7 ${fmtMs(r.ms)}`;
+      renderTiming(r.timing);
       dlBtn.disabled = false;
       const h = [sqlText, ...history.filter(x => x !== sqlText)].slice(0, 20);
       history.splice(0, history.length, ...h);
@@ -1311,6 +1323,31 @@ function openConsole(initial, { autorun = false } = {}) {
       status.className = 'console-status is-err';
       status.textContent = e.message.replace(/^(Binder|Parser|Catalog|Conversion) Error:\s*/i, '').split('\n')[0];
     } finally { runBtn.disabled = false; }
+  }
+  function renderTiming(t, ops) {
+    if (!t) { timingBar.hidden = true; return; }
+    const parts = [['DuckDB load', t.load], ['Prepare inputs', t.prepare], ['Query', t.run]].filter(([, v]) => v > 0.5);
+    const total = Math.max(1, parts.reduce((a, [, v]) => a + v, 0));
+    clear(timingBar).append(
+      el('div', { class: 'ct-track' }, parts.map(([k, v], i) => el('span', { class: `ct-seg ct-${i}`, style: { width: `${Math.max(2, (v / total) * 100)}%` }, title: `${k}: ${fmtMs(v)}` }))),
+      el('div', { class: 'ct-legend' }, parts.map(([k, v], i) => el('span', { class: 'ct-item' }, el('span', { class: `ct-dot ct-${i}` }), `${k} ${fmtMs(v)}`)), el('span', { class: 'ct-item ct-total' }, `Total ${fmtMs(t.total)}`)),
+      ops && ops.length ? el('div', { class: 'ct-ops' }, ops.slice().sort((a, b) => b.seconds - a.seconds).slice(0, 8).map(o => el('span', { class: 'ct-op' }, el('code', {}, o.name), `${fmtMs(o.seconds * 1000)}`))) : null);
+    timingBar.hidden = false;
+  }
+  async function explainRun(analyze) {
+    if (!ed.getValue().trim()) return;
+    status.className = 'console-status';
+    status.textContent = analyze ? 'Analyzing\u2026' : 'Planning\u2026';
+    explainBtn.disabled = analyzeBtn.disabled = true;
+    try {
+      const r = await sql.explain(runArgs(), { analyze });
+      clear(out).appendChild(el('pre', { class: 'console-plan' }, r.text || 'No plan.'));
+      status.textContent = analyze ? `Analyzed in ${fmtMs(r.ms)}${r.timings?.total != null ? ` \u00b7 engine ${fmtMs(r.timings.total * 1000)}` : ''}` : `Plan in ${fmtMs(r.ms)}`;
+      renderTiming(r.timing, r.timings?.ops);
+    } catch (e) {
+      status.className = 'console-status is-err';
+      status.textContent = e.message.replace(/^(Binder|Parser|Catalog|Conversion) Error:\s*/i, '').split('\n')[0];
+    } finally { explainBtn.disabled = analyzeBtn.disabled = false; }
   }
   async function downloadConsole(format) {
     const dismiss = toast('Exporting with DuckDB\u2026', { duration: 600000 });
@@ -1323,8 +1360,9 @@ function openConsole(initial, { autorun = false } = {}) {
   }
   const m = modal({ title: 'SQL console', icon: 'terminal', width: 980, className: 'console-modal', body: el('div', { class: 'console' },
     ed,
-    el('div', { class: 'console-bar' }, runBtn, stepBtn, dlBtn, el('span', { class: 'spacer' }), snippets, hist),
+    el('div', { class: 'console-bar' }, runBtn, explainBtn, analyzeBtn, stepBtn, dlBtn, el('span', { class: 'spacer' }), snippets, hist),
     el('div', { class: 'console-bar' }, el('span', { class: 'duck-badge' }, icon('zap', 11), 'DuckDB'), status),
+    timingBar,
     out) });
   if (autorun) setTimeout(run, 50);
 }
@@ -1469,13 +1507,30 @@ document.addEventListener('drop', (e) => {
 
 window.addEventListener('beforeunload', () => { if (store.state.queries.length) persist.putSession(store.serialize()); });
 
+function installDesktop() {
+  if (!isDesktop()) return;
+  document.documentElement.classList.add('is-desktop');
+  setNativeSaver(async (blob, filename, mime) => {
+    try {
+      const r = await saveNative(blob, filename, mime);
+      if (r.cancelled) return r;
+      toast(`Saved ${r.path.split(/[\\/]/).pop()}`, { kind: 'success', action: 'Show', onAction: () => revealNative(r.path) });
+      return r;
+    } catch (e) {
+      toast(`Couldn’t save ${filename}: ${e?.message || e}`, { kind: 'error' });
+      return { error: e };
+    }
+  });
+}
+
 (async function boot() {
+  installDesktop();
   await client.init();
   initSplitters();
   renderMast();
   renderImport();
   $('#importScreen').hidden = false;
-  window.duckbench = { store, client, sql, duck, version: '2.1.0' };
+  window.duckbench = { store, client, sql, duck, version: '2.2.0', desktop: isDesktop() };
   const params = new URLSearchParams(location.search);
   if (params.has('notour')) prefs.set('tourDone', true);
   if (params.has('demo')) await loadSample();

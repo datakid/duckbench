@@ -1,12 +1,14 @@
-const HYPARQUET_URL = 'https://cdn.jsdelivr.net/npm/hyparquet@1/+esm';
-const HYPARQUET_COMPRESSORS_URL = 'https://cdn.jsdelivr.net/npm/hyparquet-compressors@1/+esm';
-const HYPARQUET_WRITER_URL = 'https://cdn.jsdelivr.net/npm/hyparquet-writer@0/+esm';
+import { libUrl, libSource } from './libs.js';
+
+const HYPARQUET_URL = libUrl('hyparquet');
+const HYPARQUET_COMPRESSORS_URL = libUrl('hyparquetCompressors');
+const HYPARQUET_WRITER_URL = libUrl('hyparquetWriter');
 
 let readerMod = null, compMod = null, writerMod = null;
 
 async function loadReader() {
   if (!readerMod) {
-    try { readerMod = await import(HYPARQUET_URL); } catch { throw new Error('Could not download the Parquet reader (hyparquet) from cdn.jsdelivr.net — check your connection.'); }
+    try { readerMod = await import(HYPARQUET_URL); } catch { throw new Error(`Could not load the Parquet reader (hyparquet) from ${libSource()}.`); }
   }
   if (!compMod) { try { compMod = await import(HYPARQUET_COMPRESSORS_URL); } catch { compMod = {}; } }
   return readerMod;
@@ -60,7 +62,7 @@ export async function readParquet(buffer) {
 
 export async function writeParquet(fields, columns) {
   if (!writerMod) {
-    try { writerMod = await import(HYPARQUET_WRITER_URL); } catch { throw new Error('Could not download the Parquet writer (hyparquet-writer) from cdn.jsdelivr.net — check your connection.'); }
+    try { writerMod = await import(HYPARQUET_WRITER_URL); } catch { throw new Error(`Could not load the Parquet writer (hyparquet-writer) from ${libSource()}.`); }
   }
   const build = (typed) => fields.map((f, i) => {
     const src = columns[i];

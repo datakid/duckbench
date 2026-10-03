@@ -172,7 +172,7 @@ function kahanSum(nums) {
   return Math.round(sum * 1e10) / 1e10;
 }
 
-function aggType(fn, type) {
+export function aggType(fn, type) {
   if (fn.startsWith('count')) return 'integer';
   if (fn === 'sum') return type === 'integer' ? 'integer' : 'number';
   if (fn === 'avg' || fn === 'median' || fn === 'std') return 'number';
@@ -180,7 +180,7 @@ function aggType(fn, type) {
   return type || 'text';
 }
 
-const aggDefaultName = (a) => (a.fn === 'count' ? 'Count' : `${AGG_FNS.find(f => f.value === a.fn)?.label.split(' ')[0] || a.fn} of ${a.column}`);
+export const aggDefaultName = (a) => (a.fn === 'count' ? 'Count' : `${AGG_FNS.find(f => f.value === a.fn)?.label.split(' ')[0] || a.fn} of ${a.column}`);
 
 function groupRows(frame, columns) {
   const cols = columns.map(c => frame.col(c));

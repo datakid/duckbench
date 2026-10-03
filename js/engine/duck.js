@@ -1,6 +1,7 @@
+import { libUrl, duckBundles, LOCAL_LIBS, libSource } from './libs.js';
+
 const DUCKDB_VERSION = '1.32.0';
 const DUCKDB_DENY = new Set(['1.29.2']);
-const ESM = `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/+esm`;
 
 let state = null;
 let lastError = null;
@@ -15,6 +16,45 @@ export function duckStatus() {
 }
 
 export function duckVersion() { return state?.engineVersion || DUCKDB_VERSION; }
+export function duckStorage() { return state?.storage || null; }
+
+const OPFS_PREFIX = 'duckbench_work_';
+const OPENED_FLAGS = { query: { castDecimalToDouble: true, castTimestampToDate: true } };
+
+export function opfsAvailable() {
+  try { return typeof navigator !== 'undefined' && !!navigator.storage && typeof navigator.storage.getDirectory === 'function'; } catch { return false; }
+}
+
+function wantsOpfs() {
+  try { return JSON.parse(localStorage.getItem('duckbench2.duckOpfs') || 'true') !== false; } catch { return true; }
+}
+
+async function clearOpfsWork() {
+  try {
+    const root = await navigator.storage.getDirectory();
+    const names = [];
+    for await (const name of root.keys()) if (name.startsWith(OPFS_PREFIX) || name === 'duckbench_tmp') names.push(name);
+    for (const n of names) { try { await root.removeEntry(n, { recursive: true }); } catch {} }
+  } catch {}
+}
+
+async function openStorage(db, duckdb) {
+  if (wantsOpfs() && opfsAvailable()) {
+    await clearOpfsWork();
+    const path = `opfs://${OPFS_PREFIX}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.db`;
+    try {
+      await db.open({ ...OPENED_FLAGS, path, accessMode: duckdb.DuckDBAccessMode.READ_WRITE });
+      return 'opfs';
+    } catch {}
+  }
+  try { await db.open(OPENED_FLAGS); } catch {}
+  return 'memory';
+}
+
+export function setOpfsPreference(on) {
+  try { localStorage.setItem('duckbench2.duckOpfs', JSON.stringify(!!on)); } catch {}
+}
+export function opfsPreference() { return wantsOpfs(); }
 export function duckError() { return lastError; }
 
 export async function ensureDuck() {
@@ -26,25 +66,25 @@ export async function ensureDuck() {
   notify();
   state.promise = (async () => {
     try {
-      const duckdb = await import(ESM);
-      const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
-      const workerUrl = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
-      const worker = new Worker(workerUrl);
+      const duckdb = await import(libUrl('duckdb'));
+      const bundle = await duckdb.selectBundle(LOCAL_LIBS ? duckBundles() : duckdb.getJsDelivrBundles());
+      const workerUrl = LOCAL_LIBS ? null : URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
+      const worker = new Worker(workerUrl || bundle.mainWorker);
       const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
       await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-      URL.revokeObjectURL(workerUrl);
-      try { await db.open({ query: { castDecimalToDouble: true, castTimestampToDate: true } }); } catch {}
+      if (workerUrl) URL.revokeObjectURL(workerUrl);
+      const storage = await openStorage(db, duckdb);
       const conn = await db.connect();
       let engineVersion = DUCKDB_VERSION;
       try { const v = await conn.query('SELECT version() AS v'); engineVersion = String(v.getChildAt(0).get(0)).replace(/^v/, ''); } catch {}
-      Object.assign(state, { duckdb, db, conn, worker, ready: true, engineVersion });
+      Object.assign(state, { duckdb, db, conn, worker, ready: true, engineVersion, storage });
       notify();
       return state;
     } catch (e) {
       lastError = e?.message || String(e);
       state = null;
       notify();
-      throw new Error(`DuckDB could not be loaded from cdn.jsdelivr.net (${lastError}).`);
+      throw new Error(`DuckDB could not be loaded from ${libSource()} (${lastError}).`);
     }
   })();
   return state.promise;
@@ -251,6 +291,61 @@ export async function runQuery(sql, { maxRows = Infinity } = {}) {
     if (batch.numRows > take) { truncated = true; break; }
   }
   return { fields: fields.map(f => ({ name: f.name, type: f.type })), columns: cols, rows: n, truncated, ms: performance.now() - t0 };
+}
+
+export async function schemaOf(sql) {
+  const s = await ensureDuck();
+  const res = await s.conn.query(`SELECT * FROM (${sql}) LIMIT 0`);
+  return res.schema.fields.map(fieldInfo).map(f => ({ name: f.name, type: f.type }));
+}
+
+function planRows(res) {
+  const fields = res.schema.fields.map(f => f.name);
+  const out = [];
+  for (let r = 0; r < res.numRows; r++) out.push(String(res.getChildAt(fields.length > 1 ? 1 : 0).get(r) ?? ''));
+  return out;
+}
+
+export async function explain(sql, { analyze = false } = {}) {
+  const s = await ensureDuck();
+  const t0 = performance.now();
+  if (analyze) {
+    try {
+      const res = await s.conn.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`);
+      const ms = performance.now() - t0;
+      const json = JSON.parse(planRows(res).join(''));
+      const prof = profileFromJson(json);
+      if (prof.ops.length) return { text: prof.text, ms, analyze, timings: prof };
+    } catch {}
+  }
+  const t1 = performance.now();
+  const res = await s.conn.query(`EXPLAIN ${analyze ? 'ANALYZE ' : ''}${sql}`);
+  const ms = performance.now() - t1;
+  return { text: planRows(res).join('\n'), ms, analyze, timings: null };
+}
+
+export function profileFromJson(json) {
+  const root = Array.isArray(json) ? json[0] : json;
+  const ops = [];
+  const lines = [];
+  const nameOf = (n) => n.operator_name || n.operator_type || n.name || '';
+  const timeOf = (n) => Number(n.operator_timing ?? n.timing ?? 0) || 0;
+  const rowsOf = (n) => n.operator_cardinality ?? n.cardinality ?? null;
+  const walk = (n, depth) => {
+    if (!n || typeof n !== 'object') return;
+    const name = String(nameOf(n)).trim();
+    const kids = n.children || [];
+    if (name && !/^(QUERY|EXPLAIN_ANALYZE|EXPLAIN ANALYZE)$/i.test(name)) {
+      const sec = timeOf(n), rows = rowsOf(n);
+      ops.push({ name, seconds: sec, rows });
+      lines.push(`${'  '.repeat(depth)}${name}${rows != null ? `  ${Number(rows).toLocaleString()} rows` : ''}  ${(sec * 1000).toFixed(2)} ms`);
+      depth++;
+    }
+    for (const k of kids) walk(k, depth);
+  };
+  walk(root, 0);
+  const total = Number(root?.latency ?? root?.timing ?? root?.operator_timing ?? NaN);
+  return { ops, total: Number.isFinite(total) ? total : null, text: lines.join('\n') };
 }
 
 export async function queryColumns(sql, limit = Infinity) {

@@ -71,8 +71,12 @@ export function fmtAgo(t) {
   return new Date(t).toLocaleDateString();
 }
 
-export function download(data, filename, mime = 'application/octet-stream') {
+let nativeSaver = null;
+export function setNativeSaver(fn) { nativeSaver = fn; }
+
+export async function download(data, filename, mime = 'application/octet-stream') {
   const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
+  if (nativeSaver) return nativeSaver(blob, filename, blob.type || mime);
   const url = URL.createObjectURL(blob);
   const a = el('a', { href: url, download: filename, style: { display: 'none' } });
   document.body.appendChild(a);

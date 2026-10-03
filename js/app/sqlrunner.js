@@ -91,8 +91,18 @@ export function createSqlRunner(client, { onStatus } = {}) {
     }
   }
 
+  async function resolveSchema(need) {
+    await ensureDuckReady();
+    try {
+      const fields = await duck.schemaOf(need.schema);
+      await client.call('putDuckSchema', { key: need.key, fields: dedupe(fields) }, { track: false });
+    } catch (e) {
+      await client.call('putDuckSchema', { key: need.key, error: cleanError(e) }, { track: false });
+    }
+  }
+
   async function resolveSource(need) {
-    const { table, sql, limit } = need.source;
+    const { table, sql, limit, pushed } = need.source;
     await ensureDuckReady();
     try {
       const take = limit || MAX_ROWS_BACK;
@@ -101,15 +111,16 @@ export function createSqlRunner(client, { onStatus } = {}) {
       if (r.truncated) {
         let total = null;
         try { total = await duck.countRows(sql); } catch {}
-        note = `First ${take.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''} rows. Leading SQL steps and full-file export use every row.`;
-      }
+        note = `First ${take.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''} rows${pushed ? ` after ${pushed} step${pushed === 1 ? '' : 's'} run by DuckDB over the whole file` : ''}. Full-file export uses every row.`;
+      } else if (pushed) note = `${pushed} step${pushed === 1 ? '' : 's'} ran in DuckDB over the whole file.`;
       await client.call('putSqlResult', { key: need.key, fields: dedupe(r.fields), columns: r.columns, note }, { track: false });
     } catch (e) {
-      await client.call('putSqlResult', { key: need.key, error: `${table}: ${cleanError(e)}` }, { track: false });
+      await client.call('putSqlResult', { key: need.key, error: pushed ? cleanError(e) : `${table}: ${cleanError(e)}` }, { track: false });
     }
   }
 
   function resolve(need, depth = 0) {
+    if (need.schema) return resolveSchema(need);
     if (need.source) return resolveSource(need);
     return resolveStep(need, depth);
   }
@@ -129,24 +140,55 @@ export function createSqlRunner(client, { onStatus } = {}) {
     const v = duck.validateSql(sql);
     if (v.error) throw new Error(v.error);
     return exclusive(async () => {
+      const t0 = performance.now();
       await ensureDuckReady();
-      const taken = new Set(['input']);
-      const ctes = {};
-      const refs = [];
-      for (const q of queries) refs.push({ q, name: duck.tableNameFor(q.name, taken) });
-      const used = duck.referencedNames(v.sql, ['input', ...refs.map(r => r.name)]);
-      const wanted = refs.filter(r => used.includes(r.name));
-      if (inputQueryId && used.includes('input')) wanted.unshift({ q: { id: inputQueryId }, name: 'input' });
-      for (const r of wanted) {
-        const data = await loop('queryData', { queryId: r.q.id, stepIndex: r.name === 'input' ? inputStep : undefined }, { track: false }, true);
-        if (data.error) throw new Error(`“${r.q.name || 'input'}”: ${data.error}`);
-        if (data.pushdown) { ctes[r.name] = data.pushdown; continue; }
-        const tbl = await materialize(data.key, data.fields, data.columns);
-        ctes[r.name] = `SELECT * FROM ${duck.qi(tbl)}`;
-      }
-      const res = await duck.runQuery(compose(ctes, v.sql), { maxRows: limit });
-      return { ...res, fields: dedupe(res.fields), tables: wanted.map(r => r.name) };
+      const tLoad = performance.now() - t0;
+      const { sql: finalSql, tables } = await prepareAdhoc({ sql, queries, inputQueryId, inputStep });
+      const tPrep = performance.now() - t0 - tLoad;
+      const res = await duck.runQuery(finalSql, { maxRows: limit });
+      return { ...res, fields: dedupe(res.fields), tables, sql: finalSql, timing: { load: tLoad, prepare: tPrep, run: res.ms, total: performance.now() - t0 } };
     });
+  }
+
+  async function prepareAdhoc({ sql, queries, inputQueryId, inputStep }) {
+    const v = duck.validateSql(sql);
+    if (v.error) throw new Error(v.error);
+    const taken = new Set(['input']);
+    const ctes = {};
+    const refs = [];
+    for (const q of queries) refs.push({ q, name: duck.tableNameFor(q.name, taken) });
+    const used = duck.referencedNames(v.sql, ['input', ...refs.map(r => r.name)]);
+    const wanted = refs.filter(r => used.includes(r.name));
+    if (inputQueryId && used.includes('input')) wanted.unshift({ q: { id: inputQueryId }, name: 'input' });
+    for (const r of wanted) {
+      const data = await loop('queryData', { queryId: r.q.id, stepIndex: r.name === 'input' ? inputStep : undefined }, { track: false }, true);
+      if (data.error) throw new Error(`“${r.q.name || 'input'}”: ${data.error}`);
+      if (data.pushdown) { ctes[r.name] = data.pushdown; continue; }
+      const tbl = await materialize(data.key, data.fields, data.columns);
+      ctes[r.name] = `SELECT * FROM ${duck.qi(tbl)}`;
+    }
+    return { sql: compose(ctes, v.sql), tables: wanted.map(r => r.name) };
+  }
+
+  async function explainAdhoc(args, { analyze = false } = {}) {
+    return exclusive(async () => {
+      const t0 = performance.now();
+      await ensureDuckReady();
+      const tLoad = performance.now() - t0;
+      const { sql: finalSql } = await prepareAdhoc(args);
+      const tPrep = performance.now() - t0 - tLoad;
+      const r = await duck.explain(finalSql, { analyze });
+      return { ...r, sql: finalSql, timing: { load: tLoad, prepare: tPrep, run: r.ms, total: performance.now() - t0 } };
+    });
+  }
+
+  async function planFor(queryId, stepIndex) {
+    for (let guard = 0; guard < 24; guard++) {
+      const p = await client.call('duckPlan', { queryId, stepIndex }, { track: false });
+      if (!p.needsSql) return p;
+      await exclusive(() => resolve(p.needsSql));
+    }
+    throw new Error('Could not plan this query.');
   }
 
   async function exportViaDuck({ fields, columns, format, key }) {
@@ -180,6 +222,8 @@ export function createSqlRunner(client, { onStatus } = {}) {
       await loop('evaluate', { queryId, stepIndex, pageSize: 0 }, { track: false });
     },
     adhoc,
+    explain: explainAdhoc,
+    planFor,
     exportViaDuck,
     summarizeSource,
     async reset() {

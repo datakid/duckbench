@@ -5,6 +5,7 @@ import { columnQuality, profileColumn, distinctValues } from '../core/profile.js
 import { formatValue, convertValue } from '../core/types.js';
 import { hashString, dedupeNames, now } from '../core/util.js';
 import { validateSql, withInput } from './duck.js';
+import { compileStep, mayCompile } from './compile.js';
 
 const CACHE_LIMIT = 64;
 
@@ -16,6 +17,63 @@ export class Engine {
     this.results = new Map();
     this.resultSeq = 0;
     this.sqlResults = new Map();
+    this.duckSchemas = new Map();
+  }
+
+  putDuckSchema({ key, fields, error }) {
+    this.duckSchemas.set(key, error ? { error } : { fields });
+    while (this.duckSchemas.size > 64) this.duckSchemas.delete(this.duckSchemas.keys().next().value);
+    return true;
+  }
+
+  _schemaFor(sql) {
+    return this.duckSchemas.get('schema:' + hashString(sql)) || null;
+  }
+
+  _duckPlan(q, upto, stopAt = Infinity) {
+    let sql = q.source.sql;
+    let schema = this._schemaFor(sql);
+    let count = 0, pushed = 0;
+    const last = Math.min(upto, q.steps.length - 1, stopAt - 1);
+    for (let i = 0; i <= last; i++) {
+      const s = q.steps[i];
+      if (s.disabled) { count = i + 1; continue; }
+      if (s.unsupported) break;
+      if (s.type === 'sql') {
+        if ((s.data?.tables || []).length) break;
+        const v = validateSql(s.data?.sql);
+        if (v.error) break;
+        sql = withInput(sql, v.sql);
+        schema = this._schemaFor(sql);
+        count = i + 1; pushed++;
+        continue;
+      }
+      if (!mayCompile(s)) break;
+      if (!schema) return { needsSchema: sql, sql, count, pushed };
+      if (schema.error) break;
+      const c = compileStep(s, schema.fields);
+      if (!c) break;
+      sql = withInput(sql, c.sql);
+      schema = { fields: c.fields };
+      count = i + 1; pushed++;
+    }
+    while (count > 0 && q.steps[count - 1].disabled) count--;
+    return { sql, count, pushed };
+  }
+
+  _schemaNeed(q, sql) {
+    return { key: 'schema:' + hashString(sql), queryId: q.id, schema: sql };
+  }
+
+  duckPlan({ queryId, stepIndex }) {
+    const q = this.queries.get(queryId);
+    if (!q || q.source?.kind !== 'duck') return { error: 'This query is not backed by DuckDB.' };
+    const upto = stepIndex == null ? q.steps.length - 1 : stepIndex;
+    const plan = this._duckPlan(q, upto);
+    if (plan.needsSchema) return { needsSql: this._schemaNeed(q, plan.needsSchema) };
+    const active = q.steps.slice(0, upto + 1).filter(s => !s.disabled).length;
+    const rest = q.steps.slice(plan.count, upto + 1).filter(s => !s.disabled);
+    return { sql: plan.sql, pushed: plan.pushed, active, complete: rest.length === 0, blockedAt: rest.length ? q.steps.indexOf(rest[0]) : -1 };
   }
 
   putSqlResult({ key, fields, columns, error, note }) {
@@ -29,14 +87,9 @@ export class Engine {
     const q = this.queries.get(queryId);
     if (!q) throw new Error('No such query.');
     const step = q.steps[index];
-    const chain = q.source?.kind === 'duck' && step?.type === 'sql' ? this._duckChain(q, index) : null;
-    const leading = chain != null;
-    let r = null;
-    if (!leading) {
-      r = this._run(q, index - 1, null);
-      if (r.needsSql) return { pending: r.needsSql };
-      if (r.error) throw new Error(r.error);
-    }
+    const r = this._run(q, index - 1, null);
+    if (r.needsSql) return { pending: r.needsSql };
+    if (r.error) throw new Error(r.error);
     const tables = [];
     for (const id of step.data?.tables || []) {
       const dq = this.queries.get(id);
@@ -46,28 +99,18 @@ export class Engine {
       if (dr.error) throw new Error(`“${dq.name}” has an error: ${dr.error}`);
       tables.push({ id, name: dq.name, key: dr.key, fields: dr.frame.fields, columns: dr.frame.columns });
     }
-    if (leading) return { pushdown: chain, limit: q.source.limit, fields: [], columns: [], sql: step.data?.sql || '', tables };
     return { inputKey: r.key, fields: r.frame.fields, columns: r.frame.columns, sql: step.data?.sql || '', tables };
-  }
-
-  _duckChain(q, index) {
-    let sql = q.source.sql;
-    for (let i = 0; i < index; i++) {
-      const s = q.steps[i];
-      if (s.disabled) continue;
-      if (s.type !== 'sql' || (s.data?.tables || []).length) return null;
-      const v = validateSql(s.data?.sql);
-      if (v.error) return null;
-      sql = withInput(sql, v.sql);
-    }
-    return sql;
   }
 
   queryData({ queryId, stepIndex }) {
     const q = this.queries.get(queryId);
     if (!q) return { error: 'No such query.' };
     const upto = stepIndex == null ? q.steps.length - 1 : stepIndex;
-    if (q.source?.kind === 'duck') { const chain = this._duckChain(q, upto + 1); if (chain) return { pushdown: chain }; }
+    if (q.source?.kind === 'duck') {
+      const plan = this._duckPlan(q, upto);
+      if (plan.needsSchema) return { needsSql: this._schemaNeed(q, plan.needsSchema) };
+      if (!q.steps.slice(plan.count, upto + 1).some(s => !s.disabled)) return { pushdown: plan.sql };
+    }
     const r = this._run(q, upto, null);
     if (r.needsSql) return { needsSql: r.needsSql };
     if (r.error) return { error: r.errorIndex >= 0 ? `Step ${r.errorIndex + 1}: ${r.error}` : r.error };
@@ -143,7 +186,7 @@ export class Engine {
     return true;
   }
 
-  invalidate() { this.cache.clear(); this.results.clear(); this.sqlResults.clear(); return true; }
+  invalidate() { this.cache.clear(); this.results.clear(); this.sqlResults.clear(); this.duckSchemas.clear(); return true; }
 
   pendingSql({ queryId }) {
     const q = this.queries.get(queryId);
@@ -168,17 +211,20 @@ export class Engine {
       const f = Frame.fromText(src.names || ['Column1'], (src.names || ['Column1']).map(() => []), { infer: false });
       return { frame: f.withRid(), key: 'blank:' + hashString(JSON.stringify(src.names || [])) };
     }
-    if (src.kind === 'duck') {
-      const key = `duck:${src.table}:${hashString(JSON.stringify([src.sql, src.limit]))}`;
-      const hit = this.sqlResults.get(key);
-      if (!hit) throw Object.assign(new Error('Waiting for DuckDB…'), { needsSql: { key, queryId: q.id, source: { table: src.table, sql: src.sql, limit: src.limit } } });
-      if (hit.error) throw new Error(hit.error);
-      if (!hit.frame) hit.frame = new Frame(hit.fields.map(f => ({ ...f })), hit.columns, hit.columns[0]?.length ?? 0).withRid();
-      return { frame: hit.frame, key, note: hit.note || null };
-    }
+    if (src.kind === 'duck') return this._duckBase(q, { sql: src.sql, count: 0, pushed: 0 });
     const s = this.sources.get(src.sourceId);
     if (!s) throw new Error('This query’s data file is not loaded. Use “Locate file…” to reconnect it.');
     return { frame: s.frame, key: `src:${s.id}:${s.gen}` };
+  }
+
+  _duckBase(q, plan) {
+    const src = q.source;
+    const key = `duck:${src.table}:${hashString(JSON.stringify([plan.sql, src.limit]))}`;
+    const hit = this.sqlResults.get(key);
+    if (!hit) throw Object.assign(new Error('Waiting for DuckDB…'), { needsSql: { key, queryId: q.id, source: { table: src.table, sql: plan.sql, limit: src.limit, pushed: plan.pushed } } });
+    if (hit.error) throw Object.assign(new Error(hit.error), { pushedError: plan.pushed > 0 });
+    if (!hit.frame) hit.frame = new Frame(hit.fields.map(f => ({ ...f })), hit.columns, hit.columns[0]?.length ?? 0).withRid();
+    return { frame: hit.frame, key, note: hit.note || null };
   }
 
   _run(q, upto, override, stack = []) {
@@ -186,10 +232,18 @@ export class Engine {
     stack = [...stack, q.id];
     const diag = [];
     let base;
-    const firstActive = q.steps.findIndex(s => !s.disabled);
-    const pushdown = q.source?.kind === 'duck' && firstActive >= 0 && q.steps[firstActive].type === 'sql' && upto >= firstActive && !override;
-    if (pushdown) base = { frame: Frame.empty([]).withRid(), key: `duckpd:${q.source.table}:${hashString(q.source.sql)}` };
-    else {
+    let pushedCount = 0;
+    if (q.source?.kind === 'duck') {
+      const stop = override ? Math.min(override.index ?? Infinity, override.insertAt ?? Infinity) : Infinity;
+      const plan = this._duckPlan(q, upto, stop);
+      if (plan.needsSchema) return { error: 'Reading the file schema…', errorIndex: -1, diag, frame: null, key: null, needsSql: this._schemaNeed(q, plan.needsSchema) };
+      try { base = this._duckBase(q, plan); } catch (e) {
+        const at = e.pushedError ? plan.count - 1 : -1;
+        for (let i = 0; i < plan.count; i++) diag.push(i === at ? { error: e.message, pushed: true } : { pushed: true });
+        return { error: e.message, errorIndex: at, diag, frame: null, key: null, needsSql: e.needsSql || null };
+      }
+      pushedCount = plan.count;
+    } else {
       try { base = this._baseFor(q, stack); } catch (e) { return { error: e.message, errorIndex: -1, diag, frame: null, key: null, needsSql: e.needsSql || null }; }
     }
     let frame = base.frame;
@@ -207,6 +261,10 @@ export class Engine {
         frame = r.frame; key = r.key;
       }
       if (!step) continue;
+      if (i < pushedCount) {
+        diag.push(step.disabled ? { disabled: true } : { pushed: true, rows: i === pushedCount - 1 ? frame.rowCount : null, cols: i === pushedCount - 1 ? frame.fields.length : null });
+        continue;
+      }
       if (step.disabled) { diag.push({ disabled: true, rows: frame.rowCount, cols: frame.fields.length }); continue; }
       if (error) { diag.push({ blocked: true }); continue; }
       const r = this._applyStep(q, step, frame, key, stack);
@@ -537,4 +595,4 @@ async function streamCsvFile(file, format, options, progress) {
   return { names, cols, delimiter, encoding };
 }
 
-export const ENGINE_METHODS = ['queryData', 'loadFile', 'dropQuery', 'putSqlResult', 'sqlInput', 'pendingSql', 'ping', 'loadText', 'loadColumns', 'peekText', 'removeSource', 'setQueries', 'sourceInfo', 'evaluate', 'rows', 'profile', 'distinct', 'queryColumns', 'findRows', 'exportData', 'runSteps', 'invalidate'];
+export const ENGINE_METHODS = ['duckPlan', 'putDuckSchema', 'queryData', 'loadFile', 'dropQuery', 'putSqlResult', 'sqlInput', 'pendingSql', 'ping', 'loadText', 'loadColumns', 'peekText', 'removeSource', 'setQueries', 'sourceInfo', 'evaluate', 'rows', 'profile', 'distinct', 'queryColumns', 'findRows', 'exportData', 'runSteps', 'invalidate'];
