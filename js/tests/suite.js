@@ -5,7 +5,9 @@ import { inferColumnType, parseDateString, parseNumberString, formatValue } from
 import { evaluateFormula } from '../core/formula.js';
 import { Frame } from '../core/frame.js';
 import { SAMPLE_SALES_CSV, SAMPLE_REGIONS_CSV } from '../app/samples.js';
-import { validateSql, withInput, tableNameFor } from '../engine/duck.js';
+import { validateSql, withInput, tableNameFor, referencedNames, arrowType, convertValue as duckConvert, decimalFromWords, readerFor } from '../engine/duck.js';
+import { CsvStream, parseCSV as parseCsvAll } from '../core/csv.js';
+import { highlightSql } from '../ui/sqleditor.js';
 import { zipFiles, unzipEntries, crc32 } from '../io/zip.js';
 import { createStore } from '../app/store.js';
 
@@ -170,6 +172,57 @@ export const TESTS = [
     eq(s.state.queries[0].steps[s.cursor()].id, 'c');
     s.undo(); eq(s.state.queries[0].steps.length, 4); s.redo(); eq(s.state.queries[0].steps.length, 3);
   }],
+  ['csv stream — matches the one-shot parser across every chunk boundary', () => {
+    const src = 'a,b,c\r\n"x, ""y""",2,\r\n"multi\nline",3,z\n,,\n"end"';
+    const want = parseCsvAll(src, { delimiter: ',' }).rows;
+    for (let k = 1; k < src.length; k++) {
+      const rows = []; const p = new CsvStream(',', (r) => rows.push(r));
+      p.push(src.slice(0, k)); p.push(src.slice(k)); p.end();
+      eq(rows, want, `split at ${k}`);
+    }
+    const rows = []; const p = new CsvStream(',', (r) => rows.push(r));
+    for (const ch of src) p.push(ch);
+    p.end(); eq(rows, want, 'one char at a time');
+  }],
+  ['engine loadFile — streams a Blob into a source', async () => {
+    const e = new Engine();
+    const file = new Blob(['\uFEFFid;name\n1;été\n2;"a;b"\n']);
+    const info = await e.loadFile({ id: 'f', name: 'x.csv', file, format: 'csv' });
+    eq(info.rowCount, 2); eq(info.delimiter, ';'); eq(info.fields.map(f => f.type), ['integer', 'text']);
+    e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: 'f' }, steps: [] }] });
+    eq(e.evaluate({ queryId: 'q' }).page.rows[1], [2, 'a;b']);
+  }],
+  ['sql — SUMMARIZE / DESCRIBE wrap correctly', () => {
+    ok(validateSql('SUMMARIZE input').sql);
+    eq(withInput('SELECT 1', 'SUMMARIZE input'), 'WITH input AS (SELECT 1) SELECT * FROM (SUMMARIZE SELECT * FROM input)');
+    ok(validateSql("SELECT * FROM 'data.csv'").error, 'string-literal file read rejected');
+    ok(validateSql('SELECT * FROM "x.parquet"').error, 'quoted file read rejected');
+    ok(validateSql("SELECT 'a' FROM input WHERE x = 'from'").sql, 'strings are fine');
+  }],
+  ['sql — referenced table detection', () => { eq(referencedNames('SELECT * FROM input JOIN regions USING (region)', ['input', 'regions', 'sales']), ['input', 'regions']); eq(referencedNames("SELECT 'sales' FROM input", ['sales', 'input']), ['input']); }],
+  ['sql — chained leading SQL steps push down to DuckDB', () => {
+    const e = new Engine();
+    e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: 'SELECT * FROM src', limit: 10 }, steps: [{ id: 'a', type: 'sql', data: { sql: 'SELECT * FROM input WHERE x > 1', tables: [] } }, { id: 'b', type: 'sql', data: { sql: 'SELECT COUNT(*) AS n FROM input', tables: [] } }] }] });
+    const r = e.evaluate({ queryId: 'd' });
+    ok(r.needsSql && r.needsSql.index === 0);
+    e.putSqlResult({ key: r.needsSql.key, fields: [{ name: 'x', type: 'integer' }], columns: [[2, 3]] });
+    const r2 = e.evaluate({ queryId: 'd' });
+    ok(r2.needsSql && r2.needsSql.index === 1);
+    const input = e.sqlInput({ queryId: 'd', index: 1 });
+    eq(input.pushdown, 'WITH input AS (SELECT * FROM src) SELECT * FROM input WHERE x > 1');
+  }],
+  ['sql — input key lets DuckDB reuse materialized tables', () => { const e = setup(); e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: 'sales' }, steps: [{ id: 'a', type: 'sql', data: { sql: 'SELECT 1', tables: ['r'] } }] }, { id: 'r', name: 'regions', source: { kind: 'file', sourceId: 'reg' }, steps: [] }] }); const i = e.sqlInput({ queryId: 'q', index: 0 }); ok(i.inputKey && i.inputKey.startsWith('src:sales')); ok(i.tables[0].key.startsWith('src:reg')); }],
+  ['duck — arrow type mapping and value conversion', () => {
+    eq(arrowType('Int64'), 'integer'); eq(arrowType('Float64'), 'number'); eq(arrowType('Decimal[10e+2]'), 'number'); eq(arrowType('Date32<DAY>'), 'date'); eq(arrowType('Timestamp<MICROSECOND>'), 'datetime'); eq(arrowType('Utf8'), 'text'); eq(arrowType('Bool'), 'boolean'); eq(arrowType('Time64<MICROSECOND>'), 'text');
+    eq(duckConvert(12n, { type: 'integer', arrow: 'int64' }), 12);
+    eq(duckConvert(1700000000000000n, { type: 'datetime', arrow: 'timestamp<microsecond>', unit: 2 }), 1700000000000);
+    eq(duckConvert(19723, { type: 'date', arrow: 'date32<day>' }), 19723 * 86400000);
+    eq(duckConvert({ a: 1n }, { type: 'text', arrow: 'struct' }), '{"a":1}');
+    eq(decimalFromWords(new Uint32Array([12345, 0, 0, 0]), 2), 123.45);
+    eq(decimalFromWords(new Uint32Array([0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF]), 0), -1);
+  }],
+  ['duck — reader options', () => { eq(readerFor('a.csv', 'csv', { delimiter: ';', header: false, skipRows: 2 }), "read_csv('a.csv', sample_size=20480, delim=';', header=false, skip=2)"); eq(readerFor('a.tsv', 'tsv'), "read_csv('a.tsv', sample_size=20480, delim='\t')"); }],
+  ['sql editor — highlighter escapes and classifies', () => { const h = highlightSql("SELECT count(*) FROM input WHERE a = '<b>' -- x", { tables: ['input'] }); ok(h.includes('<span class="sq-k">SELECT</span>')); ok(h.includes('<span class="sq-f">count</span>')); ok(h.includes('<span class="sq-t">input</span>')); ok(h.includes('&lt;b&gt;')); ok(h.includes('sq-c')); }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];
 

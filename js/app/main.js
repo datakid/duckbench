@@ -1,4 +1,4 @@
-import { $, el, clear, debounce, modKey, kbd, fmtCount, fmtBytes, fmtMs, fmtAgo, download, copyText, pickFiles, fuzzyScore } from '../ui/dom.js';
+import { $, el, clear, put, debounce, modKey, kbd, fmtCount, fmtBytes, fmtMs, fmtAgo, download, copyText, pickFiles, fuzzyScore } from '../ui/dom.js';
 import { icon, svg, LOGO } from '../ui/icons.js';
 import { modal, confirmDialog, promptDialog, menu, toast, hasOverlay } from '../ui/overlay.js';
 import { Grid } from '../ui/grid.js';
@@ -13,6 +13,8 @@ import { createSqlRunner } from './sqlrunner.js';
 import { startTour, maybeAutoTour, resumePendingTour } from './tour.js';
 import { zipFiles } from '../io/zip.js';
 import * as duck from '../engine/duck.js';
+import { sqlEditor, SQL_SNIPPETS } from '../ui/sqleditor.js';
+import { TYPE_BADGES } from '../core/types.js';
 
 const store = createStore();
 const client = new EngineClient();
@@ -24,9 +26,12 @@ const duckFiles = new Map();
 
 function engineLabel() {
   const st = duck.duckStatus();
-  const base = client.mode === 'worker' ? 'Worker engine' : 'Inline engine';
-  return st === 'ready' ? `${base} + DuckDB` : st === 'loading' ? `${base} · loading DuckDB` : base;
+  if (st === 'ready') return `DuckDB ${duck.duckVersion()}`;
+  if (st === 'loading') return 'Loading DuckDB…';
+  if (st === 'failed') return 'DuckDB offline';
+  return client.mode === 'worker' ? 'Local engine' : 'Inline engine';
 }
+duck.onDuckStatus(() => { renderMast(); if (!$('#workbench').hidden) renderRibbon(); });
 const ui = {
   result: null, selection: { columns: [] }, selectedStep: null, rightMode: null, profileColumn: null,
   showQuality: prefs.get('quality', true), evalToken: 0, diag: [], inputFields: [], search: '',
@@ -46,7 +51,8 @@ function formatOf(name) {
 
 async function loadFileIntoEngine(file, sourceId, options = {}) {
   const format = formatOf(file.name);
-  const buffer = await file.arrayBuffer();
+  const streamable = (format === 'csv' || format === 'tsv') && typeof file.stream === 'function';
+  const buffer = streamable ? null : await file.arrayBuffer();
   if (format === 'excel') {
     let sheet = options.sheet;
     if (!sheet) {
@@ -65,6 +71,11 @@ async function loadFileIntoEngine(file, sourceId, options = {}) {
     client.remember('loadParquet', args);
     return { ...(await client.call('loadParquet', args, { label: `Reading ${file.name}` })), options };
   }
+  if ((format === 'csv' || format === 'tsv') && typeof file.stream === 'function') {
+    const fargs = { id: sourceId, name: file.name, format, file, options };
+    client.remember('loadFile', fargs);
+    return { ...(await client.call('loadFile', fargs, { label: `Reading ${file.name}` })), format, options };
+  }
   const args = { id: sourceId, name: file.name, format, buffer, options };
   client.remember('loadText', args);
   return { ...(await client.call('loadText', args, { label: `Reading ${file.name}` })), options };
@@ -80,15 +91,16 @@ function chooseSheet(name, sheets) {
   });
 }
 
-async function importLargeViaDuck(file, { asNewProject }) {
+async function importLargeViaDuck(file, { asNewProject, handle, options = {} }) {
   const format = formatOf(file.name);
-  if (format === 'excel') throw new Error('Excel files over 1 GB are not supported. Save the sheet as CSV or Parquet first.');
+  if (format === 'excel') throw new Error('Excel files can’t be opened with DuckDB. Save the sheet as CSV or Parquet first.');
   const table = duck.tableNameFor(file.name.replace(/\.[^.]+$/, ''), new Set([...duckFiles.values()].map(d => d.table)));
-  const fname = `${table}.${format === 'parquet' ? 'parquet' : format === 'jsonl' ? 'jsonl' : format === 'json' ? 'json' : 'csv'}`;
+  const fname = `${table}.${format === 'parquet' ? 'parquet' : format === 'jsonl' ? 'jsonl' : format === 'json' ? 'json' : format === 'tsv' ? 'tsv' : 'csv'}`;
   await duck.registerFile(fname, file);
-  const srcSql = `SELECT * FROM ${duck.readerFor(fname, format)}`;
+  const srcSql = `SELECT * FROM ${duck.readerFor(fname, format, options)}`;
   const sid = uid('d');
   duckFiles.set(sid, { table, fname, file });
+  if (handle) persist.putHandle(sid, handle);
   const qname = uniqueName(file.name.replace(/\.[^.]+$/, ''), store.state.queries.map(q => q.name), ' ');
   const q = newQuery(qname, { kind: 'duck', sourceId: sid, table, sql: srcSql, limit: DUCK_PREVIEW_ROWS });
   const src = { id: sid, name: file.name, format, options: { duck: true }, rowCount: null, size: file.size, fields: [], duck: true };
@@ -99,13 +111,14 @@ async function importLargeViaDuck(file, { asNewProject }) {
   toast(`${file.name} opened with DuckDB`, { kind: 'success' });
 }
 
-async function importFiles(files, { asNewProject = false, options, viaDuck = false } = {}) {
+async function importFiles(files, { asNewProject = false, options, viaDuck = false, handles } = {}) {
   const done = [];
   for (const file of files) {
     try {
+      const handle = handles?.get(file) || null;
       if (viaDuck || file.size > LARGE_FILE_BYTES) {
-        if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB, downloaded once from cdn.jsdelivr.net. The first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows are loaded for steps; exports can run over the whole file.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
-        await importLargeViaDuck(file, { asNewProject });
+        if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB, downloaded once from cdn.jsdelivr.net. The file is queried in place; the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows are loaded for visual steps, SQL steps at the top run on every row.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
+        await importLargeViaDuck(file, { asNewProject, handle, options: viaDuck ? options || {} : {} });
         asNewProject = false;
         continue;
       }
@@ -164,43 +177,97 @@ async function loadSample() {
   if (first) store.quiet((s) => { s.activeQueryId = first.id; s.projectName = 'Sample sales'; }, 'change');
 }
 
+async function pickForDuck() {
+  if (typeof window.showOpenFilePicker === 'function') {
+    try {
+      const hs = await window.showOpenFilePicker({ multiple: true, types: [{ description: 'Data files', accept: { 'application/octet-stream': ['.csv', '.tsv', '.txt', '.parquet', '.json', '.jsonl', '.ndjson'] } }] });
+      const files = [], handles = new Map();
+      for (const h of hs) { const f = await h.getFile(); files.push(f); handles.set(f, h); }
+      return { files, handles };
+    } catch (e) { if (e?.name === 'AbortError') return { files: [], handles: null }; }
+  }
+  return { files: await pickFiles({ accept: '.csv,.tsv,.txt,.parquet,.json,.jsonl,.ndjson', multiple: true }), handles: null };
+}
+
+async function openWithDuck(asNewProject) {
+  const { files, handles } = await pickForDuck();
+  if (files.length) importFiles(files, { asNewProject, viaDuck: true, handles });
+}
+
 function renderImport() {
   const screen = $('#importScreen');
   clear(screen);
   const drop = el('label', { class: 'drop-zone', tabindex: '0', id: 'dropZone' },
-    icon('upload', 26),
-    el('p', { class: 'drop-title' }, 'Drop files or click to browse'),
-    el('p', { class: 'drop-hint' }, 'CSV, TSV, Excel, JSON, JSONL, Parquet'));
+    el('span', { class: 'dz-icon' }, icon('upload', 22)),
+    el('span', { class: 'dz-text' },
+      el('p', { class: 'drop-title' }, 'Drop files here, or click to browse'),
+      el('p', { class: 'drop-hint' }, 'Several at once is fine. Each file becomes a query.'),
+      el('span', { class: 'dz-formats' }, ['CSV', 'TSV', 'XLSX', 'JSON', 'JSONL', 'PARQUET'].map(f => el('span', {}, f)))));
   drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickFiles({ accept: ACCEPT, multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
-  const resume = el('div', { class: 'resume-slot' });
-  const action = (ic, label, hint, fn, id) => el('button', { class: 'import-action', onclick: fn, id: id || null }, icon(ic, 16), el('span', { class: 'ia-text' }, el('span', { class: 'ia-label' }, label), el('span', { class: 'ia-hint' }, hint)));
-  screen.append(el('div', { class: 'import-panel' },
-    el('div', { class: 'import-head' }, el('h2', { class: 'import-title' }, 'New project'), el('div', { class: 'import-sub' }, 'Files are processed in this tab and are not uploaded.')),
-    resume, drop,
-    el('div', { class: 'import-actions' },
-      action('table', 'Sample data', 'Sales orders and regions', loadSample, 'sampleBtn'),
-      action('settings', 'Import with options', 'Delimiter, encoding, header', () => importWithOptions(true)),
-      action('clipboard', 'Open recipe', '.duckbench.json', loadRecipeFile),
-      action('layers', 'Batch apply', 'One recipe, many files', openBatch),
-      action('play', 'Tour', 'Walk through the workbench', () => startTour({ force: true }))),
-    el('div', { class: 'import-foot' }, el('span', {}, `Duckbench 2 · ${engineLabel()}`), el('a', { href: 'tests.html' }, 'Self-test'))));
+  const resume = el('div', { class: 'side-card', id: 'resumeCard' }, el('h3', {}, 'Continue'), el('p', { class: 'resume-empty' }, 'No saved session in this browser yet.'));
+  const action = (ic, label, hint, fn, id) => el('button', { class: 'import-action', onclick: fn, id: id || null }, el('span', { class: 'ia-ico' }, icon(ic, 16)), el('span', { class: 'ia-text' }, el('span', { class: 'ia-label' }, label), el('span', { class: 'ia-hint' }, hint)), icon('arrow-right', 14));
+  const st = duck.duckStatus();
+  screen.append(el('div', { class: 'import-shell' },
+    el('section', { class: 'hero', 'aria-labelledby': 'heroTitle' },
+      el('span', { class: 'hero-eyebrow' }, 'Data prep · in your browser'),
+      el('h2', { class: 'hero-title', id: 'heroTitle' }, 'Shape messy data into ', el('em', {}, 'something useful.')),
+      el('p', { class: 'hero-sub' }, 'Clean, reshape, join and export spreadsheets with recorded steps you can replay on next month’s file. Visual transforms for everyday work, DuckDB SQL when you need the heavy machinery.'),
+      drop,
+      el('div', { class: 'hero-row' },
+        el('button', { class: 'btn btn-primary', id: 'sampleBtn', onclick: loadSample }, icon('sparkles', 14), 'Try the sample project'),
+        el('button', { class: 'btn btn-ghost', onclick: () => importWithOptions(true) }, icon('settings', 14), 'Import with options'),
+        el('button', { class: 'btn btn-ghost', onclick: () => startTour({ force: true }) }, icon('play', 14), 'Take the tour')),
+      el('div', { class: 'hero-foot' }, icon('shield', 14), el('span', {}, 'Nothing leaves this tab. Files are never uploaded.'), el('span', { style: { marginLeft: 'auto' } }, el('a', { href: 'tests.html' }, 'Self-test')))),
+    el('div', { class: 'side-col' },
+      resume,
+      el('div', { class: 'side-card' }, el('h3', {}, 'Start from'),
+        el('div', { class: 'import-actions' },
+          action('clipboard', 'Open recipe', 'Replay a saved .duckbench.json', loadRecipeFile),
+          action('layers', 'Batch apply', 'One recipe, many files → ZIP', openBatch),
+          action('terminal', 'SQL console', 'Query files directly with DuckDB', () => openConsole()))),
+      el('div', { class: 'side-card duck-card' },
+        el('h3', {}, el('span', { class: 'duck-badge' }, icon('zap', 11), 'DuckDB-WASM')),
+        el('p', {}, 'For files from hundreds of MB to many GB. DuckDB reads them in place, with no full copy into memory.'),
+        el('div', { class: 'duck-feats' },
+          [['Pushdown SQL', 'zap'], ['Parquet / CSV / JSON', 'file'], ['Full-file export', 'download'], ['Remembers files', 'pin']].map(([t, i]) => el('span', {}, icon(i, 12), t))),
+        el('button', { class: 'btn btn-ghost btn-sm', onclick: () => openWithDuck(true) }, icon('database', 14), 'Open a large file with DuckDB'),
+        st === 'ready' ? null : el('span', { class: 'f-help', style: { display: 'block', marginTop: '8px' } }, 'Loaded on demand from cdn.jsdelivr.net.')))));
   persist.getSession().then((sess) => {
     if (!sess?.json) return;
     let data; try { data = JSON.parse(sess.json); } catch { return; }
     if (!data.queries?.length) return;
-    resume.appendChild(el('div', { class: 'resume-card' },
+    clear(resume).append(el('h3', {}, 'Continue'), el('div', { class: 'resume-card' },
       icon('database', 18),
-      el('div', { class: 'resume-text' }, el('strong', {}, data.projectName || 'Previous session'), el('span', {}, `${data.queries.length} quer${data.queries.length === 1 ? 'y' : 'ies'} · ${data.queries.reduce((n, q) => n + q.steps.length, 0)} steps · saved ${fmtAgo(sess.at)}`)),
+      el('div', { class: 'resume-text' }, el('strong', {}, data.projectName || 'Previous session'), el('span', {}, `${data.queries.length} quer${data.queries.length === 1 ? 'y' : 'ies'} · ${data.queries.reduce((n, q) => n + q.steps.length, 0)} steps · ${fmtAgo(sess.at)}`)),
       el('button', { class: 'btn btn-primary btn-sm', onclick: () => resumeSession(data) }, 'Resume'),
-      el('button', { class: 'icon-btn', title: 'Forget this session', onclick: async () => { await persist.clearSession(); await persist.clearFiles(); resume.remove(); } }, icon('x', 14))));
+      el('button', { class: 'icon-btn icon-btn-sm', title: 'Forget this session', 'aria-label': 'Forget this session', onclick: async () => { await persist.clearSession(); await persist.clearFiles(); renderImport(); } }, icon('x', 14))));
   });
+}
+
+async function reconnectDuckSource(s) {
+  const h = await persist.getHandle(s.id);
+  if (!h || typeof h.getFile !== 'function') return false;
+  try {
+    let perm = await h.queryPermission?.({ mode: 'read' });
+    if (perm !== 'granted') perm = await h.requestPermission?.({ mode: 'read' });
+    if (perm && perm !== 'granted') return false;
+    const file = await h.getFile();
+    const q = store.state.queries.find(x => x.source?.sourceId === s.id) || null;
+    const fname = (q?.source?.sql || '').match(/'([^']+)'/)?.[1];
+    if (!fname) return false;
+    await duck.registerFile(fname, file);
+    duckFiles.set(s.id, { table: q.source.table, fname, file });
+    s.size = file.size;
+    return true;
+  } catch { return false; }
 }
 
 async function resumeSession(data) {
   const missing = [];
+  const duckSources = [];
   for (const s of data.sources || []) {
-    if (s.duck) { s.missing = true; missing.push(s.name); continue; }
+    if (s.duck) { duckSources.push(s); continue; }
     const blob = await persist.getFile(s.id);
     if (!blob) { s.missing = true; missing.push(s.name); continue; }
     try {
@@ -210,6 +277,12 @@ async function resumeSession(data) {
     } catch (e) { s.missing = true; missing.push(s.name); }
   }
   store.load(JSON.stringify(data));
+  for (const s of duckSources) {
+    const ok = await reconnectDuckSource(s);
+    s.missing = !ok;
+    if (!ok) missing.push(s.name);
+  }
+  if (duckSources.length) store.quiet((st) => { for (const s of duckSources) { const x = st.sources.find(y => y.id === s.id); if (x) Object.assign(x, { missing: s.missing, size: s.size }); } }, 'change');
   showWorkbench();
   if (missing.length) toast(`Reconnect ${missing.join(', ')} — use “Locate file…” on the query.`, { kind: 'error' });
 }
@@ -263,6 +336,7 @@ const refresh = debounce(async () => {
     $('#gridHost').hidden = false;
     grid.setData({ resultId: res.resultId, fields: res.fields, rowCount: res.rowCount, firstPage: res.page, quality: res.quality, changed: res.changed });
     grid.setHints(hintsFor(q, cursor));
+    if (grid.frozen !== frozenFor(q)) grid.setFrozen(frozenFor(q));
     const banner = $('#gridBanner');
     clear(banner);
     const vd = ui.diag[cursor];
@@ -299,18 +373,21 @@ function showGridMessage(title, message, action) {
   $('#gridHost').hidden = true;
   const box = $('#gridEmpty');
   box.hidden = false;
-  clear(box).append(icon('warn', 28), el('h3', {}, title), el('p', {}, message), action ? el('button', { class: 'btn btn-primary', onclick: action.fn }, action.label) : null);
+  put(clear(box), icon('warn', 28), el('h3', {}, title), el('p', {}, message), action ? el('button', { class: 'btn btn-primary', onclick: action.fn }, action.label) : null);
   $('#gridBanner').hidden = true;
 }
 
 async function locateSource(q) {
   const src = store.source(q.source?.sourceId);
-  const [file] = await pickFiles({ accept: ACCEPT });
+  let file, handle = null;
+  if (q.source?.kind === 'duck') { const r = await pickForDuck(); file = r.files[0]; handle = file ? r.handles?.get(file) : null; }
+  else [file] = await pickFiles({ accept: ACCEPT });
   if (!file) return;
   if (q.source?.kind === 'duck') {
     try {
       const d = duckFiles.get(q.source.sourceId) || { table: q.source.table, fname: q.source.sql.match(/'([^']+)'/)?.[1] };
       await duck.registerFile(d.fname, file);
+      if (handle) persist.putHandle(q.source.sourceId, handle);
       duckFiles.set(q.source.sourceId, { ...d, file });
       await client.call('invalidate');
       store.commit('Reconnect file', (s) => { const x = s.sources.find(y => y.id === q.source.sourceId); if (x) { x.missing = false; x.size = file.size; } });
@@ -406,26 +483,45 @@ function renderMast() {
   pn.textContent = store.state.projectName;
   pn.onclick = async () => { const v = await promptDialog('Project name', { value: store.state.projectName }); if (v) store.commit('Rename project', (s) => { s.projectName = v; }); };
   const nav = clear($('#mastActions'));
+  const center = clear($('#mastCenter'));
   const inBench = !$('#workbench').hidden;
+  pn.hidden = !inBench;
   const btn = (ic, title, fn, opts = {}) => el('button', { class: `icon-btn${opts.cls ? ' ' + opts.cls : ''}`, title, 'aria-label': title, disabled: opts.disabled, onclick: fn }, icon(ic, 17));
+  const st = duck.duckStatus();
+  const pill = el('button', { class: `engine-pill is-${st}`, type: 'button', title: st === 'failed' ? duck.duckError() || 'DuckDB failed to load' : 'DuckDB engine', onclick: (e) => duckMenu(e.currentTarget) }, el('span', { class: 'dot' }), engineLabel());
   if (inBench) {
+    center.append(el('button', { class: 'btn btn-ghost btn-sm palette-btn', id: 'paletteBtn', onclick: openPalette, title: 'Command palette' }, icon('search', 14), el('span', {}, 'Search steps & commands'), el('kbd', {}, kbd('⌘K'))));
     nav.append(
       btn('undo', `Undo ${store.undoLabel()} (${kbd('⌘Z')})`, () => doUndo(), { disabled: !store.canUndo() }),
       btn('redo', `Redo ${store.redoLabel()} (${kbd('⌘⇧Z')})`, () => doRedo(), { disabled: !store.canRedo() }),
       el('span', { class: 'mast-sep' }),
-      el('button', { class: 'btn btn-ghost btn-sm palette-btn', id: 'paletteBtn', onclick: openPalette, title: 'Command palette' }, icon('search', 14), el('span', {}, 'Actions'), el('kbd', {}, kbd('⌘K'))),
+      pill,
+      btn('terminal', `SQL console (${kbd('⌘J')})`, () => openConsole()),
       btn('save', `Save recipe (${kbd('⌘S')})`, saveRecipe),
       btn('clipboard', 'Open recipe', loadRecipeFile),
-      el('button', { class: 'btn btn-primary btn-sm', id: 'exportBtn', onclick: (e) => openExportMenu(e.currentTarget) }, icon('download', 14), 'Export'),
       el('span', { class: 'mast-sep' }));
-  }
+  } else nav.append(pill);
   const light = document.documentElement.getAttribute('data-theme') === 'light';
-  nav.append(
+  put(nav,
     btn(light ? 'moon' : 'sun', 'Toggle light / dark', toggleTheme),
     btn('keyboard', 'Keyboard shortcuts (?)', openHelp),
     inBench ? btn('help', 'Tour', () => startTour({ force: true })) : null,
     inBench ? btn('x', 'Close project', closeProject) : null,
-    el('span', { class: 'engine-pill', title: `DuckDB ${duck.duckVersion()} loads on first SQL step or large file` }, el('span', { class: 'dot' }), engineLabel()));
+    inBench ? el('button', { class: 'btn btn-primary btn-sm', id: 'exportBtn', style: { marginLeft: '6px' }, onclick: (e) => openExportMenu(e.currentTarget) }, icon('download', 14), 'Export') : null);
+}
+
+function duckMenu(anchor) {
+  const st = duck.duckStatus();
+  menu(anchor, [
+    { header: st === 'ready' ? `DuckDB ${duck.duckVersion()} · ready` : st === 'loading' ? 'DuckDB · loading' : st === 'failed' ? 'DuckDB · failed to load' : 'DuckDB · not loaded yet' },
+    st !== 'ready' ? { label: st === 'failed' ? 'Retry loading DuckDB' : 'Load DuckDB now', icon: 'zap', disabled: st === 'loading', onClick: async () => { try { await duck.ensureDuck(); toast(`DuckDB ${duck.duckVersion()} ready`, { kind: 'success' }); } catch (e) { toast(e.message, { kind: 'error' }); } } } : null,
+    { label: 'SQL console…', icon: 'terminal', hint: kbd('⌘J'), onClick: () => openConsole() },
+    { label: 'Open a large file with DuckDB…', icon: 'database', onClick: () => openWithDuck(!store.state.queries.length) },
+    store.activeQuery() ? { label: 'Add SQL step', icon: 'plus', onClick: () => { if ($('#workbench').hidden) return; addStep('sql'); } } : null,
+    store.activeQuery() ? { label: 'Summarize this query with DuckDB', icon: 'chart', onClick: () => openSummarize() } : null,
+    '-',
+    { label: 'Runs locally in a Web Worker. Data never leaves the tab.', icon: 'shield', disabled: true },
+  ], { align: 'end' });
 }
 
 function toggleTheme() {
@@ -454,7 +550,9 @@ function renderRibbon() {
     groups.append(
       g('Grid', b('chart', 'Column quality', () => { ui.showQuality = !ui.showQuality; prefs.set('quality', ui.showQuality); grid?.setQualityVisible(ui.showQuality); renderRibbon(); }, ui.showQuality), b('table', 'Reset widths', () => { grid?.clearWidths(); refresh(); })),
       g('Panels', b('panel-right', 'Column profile', () => { const c = ui.selection.columns?.[0] || ui.result?.fields[0]?.name; if (c) openProfile(c); }, ui.rightMode === 'profile')),
-      g('Engine', b('stop', 'Clear cache', async () => { await client.call('invalidate'); refresh(); toast('Step cache cleared'); }), b('database', duck.duckStatus() === 'ready' ? 'DuckDB ready' : 'Load DuckDB', async () => { try { renderMast(); await duck.ensureDuck(); toast(`DuckDB ${duck.duckVersion()} ready`, { kind: 'success' }); } catch (e) { toast(e.message, { kind: 'error' }); } renderMast(); renderRibbon(); }, duck.duckStatus() === 'ready')));
+      g('Freeze', b('pin', frozenFor(store.activeQuery()) ? 'Unfreeze' : 'Freeze first column', () => { setFrozen(frozenFor(store.activeQuery()) ? 0 : 1); renderRibbon(); }, !!frozenFor(store.activeQuery()))),
+      g('DuckDB', b('terminal', 'SQL console', () => openConsole()), b('zap', 'Summarize', () => openSummarize(), ui.rightMode === 'summary'), b('database', duck.duckStatus() === 'ready' ? 'DuckDB ready' : 'Load DuckDB', async () => { try { await duck.ensureDuck(); toast(`DuckDB ${duck.duckVersion()} ready`, { kind: 'success' }); } catch (e) { toast(e.message, { kind: 'error' }); } }, duck.duckStatus() === 'ready')),
+      g('Engine', b('stop', 'Clear cache', async () => { await client.call('invalidate'); await sql.reset(); refresh(); toast('Step cache cleared'); })));
   } else {
     const byGroup = new Map();
     for (const t of transformCatalog()) {
@@ -466,7 +564,8 @@ function renderRibbon() {
       const large = items.filter(t => t.ribbon.size === 'large');
       const small = items.filter(t => t.ribbon.size !== 'large');
       const col = el('div', { class: 'rg-small' }, small.map(t => el('button', { class: 'rb rb-small', title: t.label, onclick: () => addStep(t.type) }, icon(t.icon, 14), el('span', {}, t.label))));
-      groups.appendChild(el('div', { class: 'ribbon-group' }, el('div', { class: 'rg-items' }, large.map(t => el('button', { class: 'rb rb-large', title: t.label, onclick: () => addStep(t.type) }, icon(t.icon, 20), el('span', {}, t.label))), small.length ? col : null), el('div', { class: 'rg-title' }, name)));
+      const extra = name === 'SQL' ? [el('button', { class: 'rb rb-large is-duck', title: 'SQL console', onclick: () => openConsole() }, icon('terminal', 20), el('span', {}, 'Console'))] : [];
+      groups.appendChild(el('div', { class: 'ribbon-group' }, el('div', { class: 'rg-items' }, large.map(t => el('button', { class: `rb rb-large${t.type === 'sql' ? ' is-duck' : ''}`, title: t.label, onclick: () => addStep(t.type) }, icon(t.icon, 20), el('span', {}, t.label))), extra, small.length ? col : null), el('div', { class: 'rg-title' }, name)));
     }
   }
   host.append(tabs, groups);
@@ -480,8 +579,8 @@ function renderQueries() {
     const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
     const on = q.id === store.state.activeQueryId;
     const meta = q.source?.kind === 'reference' ? `→ ${queryName(q.source.parentId)}` : src ? `${src.missing ? 'file missing · ' : ''}${src.duck ? `DuckDB · ${fmtBytes(src.size)}` : `${fmtCount(src.rowCount)} rows`}` : '';
-    const li = el('li', { class: `query-item${on ? ' is-on' : ''}${src?.missing ? ' is-missing' : ''}`, role: 'option', 'aria-selected': String(on), tabindex: '0' },
-      icon(q.source?.kind === 'reference' ? 'ref' : 'table', 15),
+    const li = el('li', { class: `query-item${on ? ' is-on' : ''}${src?.missing ? ' is-missing' : ''}${src?.duck ? ' is-duck' : ''}`, role: 'option', 'aria-selected': String(on), tabindex: '0' },
+      el('span', { class: 'qi-ico' }, icon(q.source?.kind === 'reference' ? 'ref' : src?.duck ? 'zap' : 'table', 14)),
       el('span', { class: 'qi-text' }, el('span', { class: 'qi-name' }, q.name), el('span', { class: 'qi-meta' }, `${meta} · ${q.steps.length} step${q.steps.length === 1 ? '' : 's'}`)),
       el('button', { class: 'icon-btn icon-btn-xs qi-more', 'aria-label': `Actions for ${q.name}`, onclick: (e) => { e.stopPropagation(); queryMenu(q, e.currentTarget); } }, icon('more', 14)));
     li.addEventListener('click', () => activateQuery(q.id));
@@ -533,7 +632,7 @@ function renderSteps() {
     const d = ui.diag[i] || {};
     const status = d.error ? 'error' : d.blocked ? 'blocked' : d.warn?.length ? 'warn' : '';
     const delta = d.rows != null && d.prevRows != null && d.rows !== d.prevRows ? `${d.rows > d.prevRows ? '+' : '−'}${fmtCount(Math.abs(d.rows - d.prevRows))} rows` : '';
-    const li = el('li', { class: `step-item${i === cursor ? ' is-cursor' : ''}${i > cursor ? ' is-after' : ''}${s.disabled ? ' is-disabled' : ''}${status ? ` is-${status}` : ''}${s.id === ui.selectedStep ? ' is-selected' : ''}`, tabindex: '0', draggable: 'true', dataset: { i: String(i) }, title: d.error || (d.warn || []).join('\n') || '' },
+    const li = el('li', { class: `step-item${s.type === 'sql' ? ' step-sql' : ''}${i === cursor ? ' is-cursor' : ''}${i > cursor ? ' is-after' : ''}${s.disabled ? ' is-disabled' : ''}${status ? ` is-${status}` : ''}${s.id === ui.selectedStep ? ' is-selected' : ''}`, tabindex: '0', draggable: 'true', dataset: { i: String(i) }, title: d.error || (d.warn || []).join('\n') || '' },
       el('span', { class: 'step-code' }, t?.code || '??'),
       el('span', { class: 'step-text' },
         el('span', { class: 'step-name' }, s.name || t?.label || s.type),
@@ -592,7 +691,7 @@ function stepMenu(s, i, anchor, pos = {}) {
   ], pos);
 }
 
-function closeRight() { ui.rightMode = null; const r = $('#rightRail'); r.hidden = true; clear(r); }
+function closeRight() { ui.rightMode = null; const r = $('#rightRail'); r.hidden = true; r.classList.remove('is-wide'); clear(r); $('#splitRight').hidden = true; if (!$('#workbench').hidden) renderToolbar(); }
 
 async function openInspector(stepId) {
   const q = store.activeQuery();
@@ -600,8 +699,9 @@ async function openInspector(stepId) {
   if (idx < 0) { closeRight(); return; }
   ui.rightMode = 'inspector';
   const rail = $('#rightRail');
-  rail.hidden = false;
+  rail.hidden = false; $('#splitRight').hidden = false;
   const step = q.steps[idx];
+  rail.classList.toggle('is-wide', step.type === 'sql');
   const t = TRANSFORMS[step.type];
   let input;
   try { input = await sql.evaluate({ queryId: q.id, stepIndex: idx - 1, pageSize: 0 }, { track: false }); } catch { input = {}; }
@@ -618,6 +718,7 @@ async function openInspector(stepId) {
   const sqlTables = step.type === 'sql' ? (step.data?.tables || []).map(id => duck.tableNameFor(queryName(id), sqlTaken)) : [];
   const ctx = {
     fields, rightFields, sqlTables, queryId: q.id, queries: store.state.queries,
+    onRunSql: () => { commit.cancel?.(); updateStep(stepId, (x) => { x.data = JSON.parse(JSON.stringify(data)); }, `Edit ${t.label}`); },
     loadDistinct: (column, search) => (input.resultId ? client.call('distinct', { resultId: input.resultId, column, search, limit: 500 }, { track: false }) : null),
     onAddQuery: async () => { const f = await pickFiles({ accept: ACCEPT }); if (f.length) { const keep = store.state.activeQueryId; await importFiles(f); store.quiet((s) => { s.activeQueryId = keep; }, 'change'); openInspector(stepId); } },
   };
@@ -627,8 +728,8 @@ async function openInspector(stepId) {
   });
   clear(rail).append(
     el('header', { class: 'rail-head' },
-      el('span', { class: 'step-code' }, t?.code || '??'),
-      el('div', { class: 'rail-title' }, el('h2', {}, step.name || t?.label || step.type), el('span', {}, `Step ${idx + 1} · input ${fmtCount(input.rowCount)} rows × ${fields.length} cols`)),
+      el('span', { class: `step-code${step.type === 'sql' ? ' is-sql' : ''}` }, t?.code || '??'),
+      el('div', { class: 'rail-title' }, el('h2', {}, step.name || t?.label || step.type), el('span', {}, `Step ${idx + 1} · input ${input.rowCount == null ? (q.source?.kind === 'duck' ? 'full file' : '—') : `${fmtCount(input.rowCount)} rows`} × ${fields.length} cols${step.type === 'sql' ? ' · DuckDB' : ''}`)),
       el('button', { class: 'icon-btn', 'aria-label': 'Close inspector', onclick: () => { closeRight(); } }, icon('x', 16))),
     errBox,
     t ? el('div', { class: 'rail-body' }, form) : el('p', { class: 'panel-empty' }, `“${step.type}” isn't supported in Duckbench 2.`),
@@ -645,14 +746,17 @@ async function openInspector(stepId) {
 async function openProfile(column) {
   ui.rightMode = 'profile';
   ui.profileColumn = column;
+  $('#rightRail').classList.remove('is-wide');
   renderProfile(column);
+  renderToolbar();
 }
 
 async function renderProfile(column) {
   if (!ui.result) return;
   const rail = $('#rightRail');
-  rail.hidden = false;
+  rail.hidden = false; $('#splitRight').hidden = false;
   const p = await client.call('profile', { resultId: ui.result.resultId, column }, { track: false });
+  if (p.expired || !p.top) return;
   if (ui.rightMode !== 'profile' || p.expired) return;
   const pct = (n) => (p.rows ? `${Math.round((n / p.rows) * 1000) / 10}%` : '0%');
   const stat = (k, v) => el('div', { class: 'stat' }, el('span', {}, k), el('strong', {}, v));
@@ -733,12 +837,15 @@ function headerMenu(field, anchor, pos) {
     { label: 'Unpivot', icon: 'unpivot', onClick: () => quick('unpivot', { columns: cols, mode: 'selected' }) },
     { label: 'Unpivot other columns', icon: 'unpivot', onClick: () => quick('unpivot', { columns: cols, mode: 'others' }) },
     '-',
+    { label: 'Freeze up to this column', icon: 'pin', onClick: () => setFrozen(ui.result.fields.findIndex(f => f.name === field.name) + 1) },
+    frozenFor(store.activeQuery()) ? { label: 'Unfreeze columns', icon: 'pin', onClick: () => setFrozen(0) } : null,
     { label: 'Duplicate column', icon: 'copy', disabled: many, onClick: () => quick('duplicate_column', { column: field.name, name: '' }) },
     { label: 'Keep only selected', icon: 'columns-keep', onClick: () => quick('select_columns', { columns: cols }) },
     { label: 'Move to start', icon: 'chevron-left', onClick: () => quick('move_column', { columns: cols, to: 'start' }) },
     { label: 'Remove', icon: 'columns-remove', danger: true, onClick: () => quick('remove_columns', { columns: cols }) },
     '-',
     { label: 'Profile column', icon: 'chart', onClick: () => openProfile(field.name) },
+    { label: 'Query in SQL console', icon: 'terminal', onClick: () => openConsole(`SELECT ${/^[a-z_][a-z0-9_]*$/.test(field.name) ? field.name : `"${field.name.replace(/"/g, '""')}"`}, COUNT(*) AS n\nFROM input\nGROUP BY ALL\nORDER BY n DESC`) },
   ], pos);
 }
 
@@ -775,11 +882,16 @@ function renderToolbar() {
     if (res.matches?.length) { grid.scrollToCell(res.matches[0][0], res.matches[0][1]); grid.render(true); }
   }, 220);
   search.addEventListener('input', run);
+  const fz = frozenFor(q);
+  const isDuck = q?.source?.kind === 'duck';
   host.append(
-    el('div', { class: 'tb-left' }, el('h2', { class: 'tb-title' }, q?.name || ''), r ? el('span', { class: 'tb-shape' }, `${fmtCount(r.rowCount)} rows × ${r.fields.length} columns`) : null),
+    el('div', { class: 'tb-left' }, el('h2', { class: 'tb-title' }, q?.name || ''), r ? el('span', { class: 'tb-shape' }, `${fmtCount(r.rowCount)} × ${r.fields.length}`) : null, isDuck ? el('span', { class: 'duck-badge' }, icon('zap', 11), 'DuckDB') : null),
     el('div', { class: 'tb-right' }, search, hitLabel,
-      el('button', { class: `btn btn-ghost btn-sm${ui.showQuality ? ' is-on' : ''}`, onclick: () => { ui.showQuality = !ui.showQuality; prefs.set('quality', ui.showQuality); grid.setQualityVisible(ui.showQuality); renderToolbar(); } }, icon('chart', 14), 'Quality'),
-      el('button', { class: `btn btn-ghost btn-sm${ui.rightMode === 'profile' ? ' is-on' : ''}`, onclick: () => { if (ui.rightMode === 'profile') closeRight(); else { const c = ui.selection.columns?.[0] || r?.fields[0]?.name; if (c) openProfile(c); } renderToolbar(); } }, icon('panel-right', 14), 'Profile')));
+      el('div', { class: 'tb-group' },
+        el('button', { class: `btn btn-sm${ui.showQuality ? ' is-on' : ''}`, title: 'Column fill bars', onclick: () => { ui.showQuality = !ui.showQuality; prefs.set('quality', ui.showQuality); grid.setQualityVisible(ui.showQuality); renderToolbar(); } }, icon('chart', 14), 'Quality'),
+        el('button', { class: `btn btn-sm${fz ? ' is-on' : ''}`, title: fz ? `${fz} column${fz === 1 ? '' : 's'} frozen — click to unfreeze` : 'Freeze the selected or first column', onclick: () => { if (fz) setFrozen(0); else { const c = ui.selection.columns?.length ? Math.max(...ui.selection.columns.map(n => r?.fields.findIndex(f => f.name === n) ?? 0)) + 1 : 1; setFrozen(c); } } }, icon('pin', 14), fz ? `Frozen ${fz}` : 'Freeze'),
+        el('button', { class: `btn btn-sm${ui.rightMode === 'profile' ? ' is-on' : ''}`, onclick: () => { if (ui.rightMode === 'profile') closeRight(); else { const c = ui.selection.columns?.[0] || r?.fields[0]?.name; if (c) openProfile(c); } } }, icon('panel-right', 14), 'Profile'),
+        el('button', { class: `btn btn-sm${ui.rightMode === 'summary' ? ' is-on' : ''}`, title: 'Summarize every column with DuckDB', onclick: () => { if (ui.rightMode === 'summary') closeRight(); else openSummarize(); renderToolbar(); } }, icon('zap', 14), 'Summarize'))));
 }
 
 function renderStatus() {
@@ -792,7 +904,7 @@ function renderStatus() {
   const warns = ui.diag.reduce((n, d) => n + (d.warn?.length || 0), 0);
   const sel = ui.selection;
   const item = (t, cls = '') => el('span', { class: `sb-item ${cls}` }, t);
-  host.append(
+  put(host,
     item(r ? `${fmtCount(r.rowCount)} rows` : '— rows'),
     item(r ? `${r.fields.length} columns` : ''),
     item(cursor < 0 ? 'at source' : `step ${cursor + 1}/${q.steps.length}`),
@@ -814,6 +926,11 @@ function openPalette() {
   const list = el('div', { class: 'palette-list', role: 'listbox' });
   const commands = [
     { label: 'Export…', icon: 'download', run: () => openExportDialog() },
+    { label: 'SQL console', icon: 'terminal', kw: 'duckdb query adhoc', run: () => openConsole() },
+    { label: 'Summarize all columns (DuckDB)', icon: 'zap', kw: 'profile stats duckdb summarize', run: () => openSummarize() },
+    { label: 'Open a large file with DuckDB…', icon: 'database', kw: 'big parquet gb', run: () => openWithDuck(false) },
+    { label: 'Freeze first column', icon: 'pin', kw: 'pin lock', run: () => setFrozen(1) },
+    { label: 'Unfreeze columns', icon: 'pin', run: () => setFrozen(0) },
     { label: 'Save recipe', icon: 'save', run: saveRecipe },
     { label: 'Open recipe…', icon: 'clipboard', run: loadRecipeFile },
     { label: 'Batch apply steps to many files…', icon: 'layers', run: openBatch },
@@ -853,7 +970,7 @@ function openPalette() {
 }
 
 function openHelp() {
-  const rows = [['Command palette / add step', '⌘K'], ['Undo', '⌘Z'], ['Redo', '⌘⇧Z'], ['Save recipe', '⌘S'], ['Export', '⌘E'], ['Find in preview', '⌘F'], ['Copy selection', '⌘C'], ['Copy with headers', '⌘⇧C'], ['Edit a cell', 'Enter / type / dbl-click'], ['Rename column', 'dbl-click header'], ['Column menu', 'right-click header'], ['Multi-select columns', '⌘/Shift-click header'], ['Select rows', 'click / Shift-click row number'], ['Delete selected rows', 'Delete'], ['Rename step', 'F2'], ['Delete step', 'Delete (step focused)'], ['This help', '?']];
+  const rows = [['Command palette / add step', '⌘K'], ['SQL console', '⌘J'], ['Run SQL (editor)', '⌘↵'], ['SQL suggestions', 'Ctrl Space'], ['Comment line (SQL)', '⌘/'], ['Undo', '⌘Z'], ['Redo', '⌘⇧Z'], ['Save recipe', '⌘S'], ['Export', '⌘E'], ['Find in preview', '⌘F'], ['Copy selection', '⌘C'], ['Copy with headers', '⌘⇧C'], ['Edit a cell', 'Enter / type / dbl-click'], ['Rename column', 'dbl-click header'], ['Column menu', 'right-click header'], ['Multi-select columns', '⌘/Shift-click header'], ['Select rows', 'click / Shift-click row number'], ['Delete selected rows', 'Delete'], ['Rename step', 'F2'], ['Delete step', 'Delete (step focused)'], ['This help', '?']];
   modal({ title: 'Keyboard shortcuts', icon: 'keyboard', width: 520, body: el('div', { class: 'help-grid' }, rows.map(([a, b]) => el('div', { class: 'help-row' }, el('span', {}, a), el('kbd', {}, kbd(b))))) });
 }
 
@@ -864,6 +981,7 @@ function openExportMenu(anchor) {
     { label: 'Excel workbook', hint: '.xlsx', icon: 'table', onClick: () => quick('xlsx') },
     { label: 'Excel — every query as a sheet', hint: '.xlsx', icon: 'layers', onClick: () => quick('xlsx-all') },
     { label: 'Parquet', hint: '.parquet', icon: 'database', onClick: () => quick('parquet') },
+    { label: 'Parquet via DuckDB (ZSTD)', hint: '.parquet', icon: 'zap', onClick: () => quick('parquet-duck') },
     { label: 'JSON', hint: '.json', icon: 'file', onClick: () => quick('json') },
     { label: 'JSON Lines', hint: '.jsonl', icon: 'file', onClick: () => quick('jsonl') },
     '-',
@@ -902,7 +1020,7 @@ async function exportFullViaDuck() {
     return;
   }
   if (active.some(s => (s.data?.tables || []).length)) { toast('Full-file export can’t combine with other queries.', { kind: 'error' }); return; }
-  const fmtSel = el('select', { class: 'input' }, [['parquet', 'Parquet'], ['csv', 'CSV'], ['json', 'JSON']].map(([v, l]) => el('option', { value: v }, l)));
+  const fmtSel = el('select', { class: 'input' }, [['parquet', 'Parquet (ZSTD)'], ['csv', 'CSV'], ['jsonl', 'JSON Lines'], ['json', 'JSON']].map(([v, l]) => el('option', { value: v }, l)));
   const m = modal({ title: 'Export full file', icon: 'database', width: 440, body: [el('p', { class: 'modal-text' }, `Runs ${active.length ? `${active.length} SQL step${active.length === 1 ? '' : 's'}` : 'the source'} over every row with DuckDB.`), el('label', { class: 'f-row' }, el('span', { class: 'f-label' }, 'Format'), fmtSel)], footer: [
     el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Cancel'),
     el('button', { class: 'btn btn-primary', onclick: async () => {
@@ -943,6 +1061,13 @@ async function runExport(opts) {
       const { buffer } = await xlsx.call('write', { sheets });
       download(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${opts.format === 'xlsx-all' ? store.state.projectName.replace(/[\\/:*?"<>|]+/g, '_') : base}.xlsx`);
       toast(`Exported ${sheets.length} sheet${sheets.length === 1 ? '' : 's'}`, { kind: 'success' });
+      return;
+    }
+    if (opts.format === 'parquet-duck') {
+      const c = await client.call('exportData', { ...args, format: 'columns' }, { label: 'Preparing export' });
+      const buf = await sql.exportViaDuck({ fields: c.fields, columns: c.columns, format: 'parquet', key: null });
+      download(new Blob([buf], { type: 'application/octet-stream' }), `${base}.parquet`);
+      toast(`Exported ${fmtCount(c.rows)} rows with DuckDB`, { kind: 'success' });
       return;
     }
     if (opts.format === 'parquet') {
@@ -1136,6 +1261,151 @@ function chooseQuery(qs, preferred) {
   });
 }
 
+function resultTable(r, { max = 500 } = {}) {
+  if (!r.fields.length) return el('div', { class: 'console-empty' }, 'The query returned no columns.');
+  const n = Math.min(r.rows, max);
+  const thead = el('thead', {}, el('tr', {}, r.fields.map(f => el('th', {}, el('span', { class: `type-badge type-${f.type}` }, TYPE_BADGES[f.type] || ''), f.name))));
+  const tbody = el('tbody');
+  for (let i = 0; i < n; i++) {
+    const tr = document.createElement('tr');
+    r.fields.forEach((f, c) => {
+      const v = r.columns[c][i];
+      const td = document.createElement('td');
+      if (v == null) { td.className = 'is-null'; td.textContent = 'null'; }
+      else { td.textContent = formatValue(v, f.type); if (f.type === 'integer' || f.type === 'number') td.className = 'is-num'; td.title = td.textContent.length > 40 ? td.textContent : ''; }
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+  return el('table', { class: 'console-table' }, thead, tbody);
+}
+
+const CONSOLE_KEY = 'consoleHistory';
+
+function openConsole(initial, { autorun = false } = {}) {
+  const q = store.activeQuery();
+  const taken = new Set(['input']);
+  const tables = store.state.queries.map(x => ({ q: x, name: duck.tableNameFor(x.name, taken) }));
+  const history = prefs.get(CONSOLE_KEY, []);
+  const start = initial || history[0] || (q ? 'SELECT *\nFROM input\nLIMIT 100' : "SELECT 42 AS answer, 'hello duck' AS greeting");
+  let fields = ui.result?.fields || [];
+  const status = el('span', { class: 'console-status' }, duck.duckStatus() === 'ready' ? 'Ready' : 'DuckDB loads on first run');
+  const out = el('div', { class: 'console-result' }, el('div', { class: 'console-empty' }, q ? 'input is the active query at the step you are previewing. Every query is also a table:' : 'No project open. Pure SQL works, for example generate_series(1, 10).', q ? el('div', { class: 'sql-tables', style: { justifyContent: 'center', marginTop: '10px' } }, ['input', ...tables.map(t => t.name)].map(t => el('code', {}, t))) : null));
+  let last = null;
+  const ed = sqlEditor({ value: start, rows: 9, autofocus: true, label: 'SQL query', getContext: () => ({ tables: ['input', ...tables.map(t => t.name)], columns: fields }), onRun: () => run() });
+  const runBtn = el('button', { class: 'btn btn-primary btn-sm', onclick: () => run() }, icon('play', 13), 'Run', el('kbd', {}, kbd('\u2318\u21b5')));
+  const stepBtn = el('button', { class: 'btn btn-ghost btn-sm', disabled: !q, onclick: () => { const sqlText = ed.getValue(); const used = duck.referencedNames(sqlText, tables.map(t => t.name)); const ids = tables.filter(t => used.includes(t.name) && t.q.id !== q.id).map(t => t.q.id); m.close(); addStep('sql', { sql: sqlText, tables: ids }, { label: 'Add SQL step' }); } }, icon('plus', 13), 'Add as step');
+  const dlBtn = el('button', { class: 'btn btn-ghost btn-sm', disabled: true, onclick: (e) => menu(e.currentTarget, [['csv', 'CSV'], ['parquet', 'Parquet'], ['jsonl', 'JSON Lines'], ['json', 'JSON']].map(([f, l]) => ({ label: l, icon: 'download', onClick: () => downloadConsole(f) }))) }, icon('download', 13), 'Download');
+  const snippets = el('select', { class: 'input input-sm sql-snippets', 'aria-label': 'Insert a pattern' }, el('option', { value: '' }, 'Patterns\u2026'), SQL_SNIPPETS.map((s, i) => el('option', { value: String(i) }, s.label)));
+  snippets.addEventListener('change', () => { const s = SQL_SNIPPETS[Number(snippets.value)]; if (s) ed.setValue(s.sql); snippets.value = ''; ed.textarea.focus(); });
+  const hist = el('select', { class: 'input input-sm sql-snippets', 'aria-label': 'History' }, el('option', { value: '' }, `History (${history.length})`), history.map((h, i) => el('option', { value: String(i) }, h.replace(/\s+/g, ' ').slice(0, 60))));
+  hist.addEventListener('change', () => { const h = history[Number(hist.value)]; if (h) ed.setValue(h); hist.value = ''; ed.textarea.focus(); });
+  const runArgs = () => ({ sql: ed.getValue(), queries: tables.map(t => t.q), inputQueryId: q?.id, inputStep: q ? store.cursor() : undefined });
+  async function run() {
+    const sqlText = ed.getValue();
+    if (!sqlText.trim()) return;
+    status.className = 'console-status';
+    status.textContent = duck.duckStatus() === 'ready' ? 'Running\u2026' : 'Loading DuckDB\u2026';
+    runBtn.disabled = true;
+    try {
+      const r = await sql.adhoc({ ...runArgs(), limit: 1000 });
+      last = r;
+      fields = r.fields.length ? r.fields : fields;
+      clear(out).appendChild(r.rows ? resultTable(r) : el('div', { class: 'console-empty' }, 'No rows.'));
+      status.textContent = `${fmtCount(r.rows)}${r.truncated ? '+' : ''} row${r.rows === 1 ? '' : 's'} \u00b7 ${r.fields.length} col${r.fields.length === 1 ? '' : 's'} \u00b7 ${fmtMs(r.ms)}${r.truncated ? ' \u00b7 first 1,000 shown' : ''}`;
+      dlBtn.disabled = false;
+      const h = [sqlText, ...history.filter(x => x !== sqlText)].slice(0, 20);
+      history.splice(0, history.length, ...h);
+      prefs.set(CONSOLE_KEY, h);
+    } catch (e) {
+      status.className = 'console-status is-err';
+      status.textContent = e.message.replace(/^(Binder|Parser|Catalog|Conversion) Error:\s*/i, '').split('\n')[0];
+    } finally { runBtn.disabled = false; }
+  }
+  async function downloadConsole(format) {
+    const dismiss = toast('Exporting with DuckDB\u2026', { duration: 600000 });
+    try {
+      const r = await sql.adhoc({ ...runArgs(), limit: Infinity });
+      const buf = await sql.exportViaDuck({ fields: r.fields, columns: r.columns, format, key: null });
+      download(new Blob([buf]), `query.${format}`);
+      dismiss(); toast(`Exported ${fmtCount(r.rows)} rows`, { kind: 'success' });
+    } catch (e) { dismiss(); toast(`Export failed: ${e.message}`, { kind: 'error' }); }
+  }
+  const m = modal({ title: 'SQL console', icon: 'terminal', width: 980, className: 'console-modal', body: el('div', { class: 'console' },
+    ed,
+    el('div', { class: 'console-bar' }, runBtn, stepBtn, dlBtn, el('span', { class: 'spacer' }), snippets, hist),
+    el('div', { class: 'console-bar' }, el('span', { class: 'duck-badge' }, icon('zap', 11), 'DuckDB'), status),
+    out) });
+  if (autorun) setTimeout(run, 50);
+}
+
+async function openSummarize() {
+  const q = store.activeQuery();
+  if (!q) return;
+  const rail = $('#rightRail');
+  ui.rightMode = 'summary';
+  rail.hidden = false; $('#splitRight').hidden = false;
+  rail.classList.add('is-wide');
+  clear(rail).append(el('header', { class: 'rail-head' }, el('span', { class: 'duck-badge' }, icon('zap', 11), 'SQL'), el('div', { class: 'rail-title' }, el('h2', {}, 'Summarize'), el('span', {}, 'Every column, every row, computed by DuckDB')), el('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: closeRight }, icon('x', 16))), el('div', { class: 'rail-body' }, el('p', { class: 'f-help' }, duck.duckStatus() === 'ready' ? 'Computing\u2026' : 'Loading DuckDB\u2026')));
+  try {
+    const r = await sql.adhoc({ sql: 'SUMMARIZE input', queries: [], inputQueryId: q.id, inputStep: store.cursor(), limit: 5000 });
+    if (ui.rightMode !== 'summary') return;
+    const col = (n) => r.fields.findIndex(f => f.name === n);
+    const keys = ['column_name', 'column_type', 'min', 'max', 'approx_unique', 'avg', 'q50', 'null_percentage'].filter(k => col(k) >= 0);
+    const labels = { column_name: 'Column', column_type: 'Type', min: 'Min', max: 'Max', approx_unique: 'Distinct\u2248', avg: 'Mean', q50: 'Median', null_percentage: 'Null %' };
+    const short = (v) => { const s = v == null ? '\u2014' : String(v); return s.length > 22 ? s.slice(0, 21) + '\u2026' : s; };
+    const table = el('table', { class: 'summ-table' }, el('thead', {}, el('tr', {}, keys.map(k => el('th', {}, labels[k])))), el('tbody', {}, Array.from({ length: r.rows }, (_, i) => el('tr', { style: { cursor: 'pointer' }, title: 'Open column profile', onclick: () => { rail.classList.remove('is-wide'); openProfile(r.columns[col('column_name')][i]); } }, keys.map(k => { const v = r.columns[col(k)][i]; return el('td', { title: v == null ? '' : String(v) }, k === 'avg' && v != null && !isNaN(v) ? String(Math.round(Number(v) * 1000) / 1000) : k === 'null_percentage' && v != null ? `${Math.round(Number(v) * 10) / 10}%` : short(v)); })))));
+    clear(rail.querySelector('.rail-body')).append(el('div', { style: { overflow: 'auto' } }, table), el('p', { class: 'f-help', style: { marginTop: '12px' } }, `${fmtMs(r.ms)} \u00b7 click a row for the detailed profile`),
+      el('button', { class: 'btn btn-ghost btn-sm', style: { marginTop: '8px' }, onclick: () => openConsole('SUMMARIZE input') }, icon('terminal', 13), 'Open in SQL console'));
+  } catch (e) {
+    if (ui.rightMode !== 'summary') return;
+    clear(rail.querySelector('.rail-body')).append(el('div', { class: 'insp-error', style: { margin: 0 } }, e.message));
+  }
+}
+
+function initSplitters() {
+  const root = document.documentElement;
+  const bind = (node, side) => {
+    const key = side === 'left' ? 'leftW' : 'rightW';
+    const min = side === 'left' ? 200 : 300, max = side === 'left' ? 460 : 720;
+    const setW = (w) => { w = Math.round(Math.min(max, Math.max(min, w))); root.style.setProperty(side === 'left' ? '--left-w' : '--right-w', `${w}px`); return w; };
+    node.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      node.setPointerCapture(e.pointerId);
+      node.classList.add('is-drag');
+      document.body.classList.add('is-resizing');
+      const target = side === 'left' ? $('#leftRail') : $('#rightRail');
+      const startX = e.clientX, startW = target.getBoundingClientRect().width;
+      let w = startW;
+      const move = (ev) => { w = setW(side === 'left' ? startW + ev.clientX - startX : startW - (ev.clientX - startX)); };
+      const up = () => { node.removeEventListener('pointermove', move); node.removeEventListener('pointerup', up); node.classList.remove('is-drag'); document.body.classList.remove('is-resizing'); prefs.set(key, w); grid?.schedule(); };
+      node.addEventListener('pointermove', move);
+      node.addEventListener('pointerup', up);
+    });
+    node.addEventListener('dblclick', () => { root.style.removeProperty(side === 'left' ? '--left-w' : '--right-w'); prefs.set(key, null); });
+    node.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const target = side === 'left' ? $('#leftRail') : $('#rightRail');
+      const d = (e.key === 'ArrowRight' ? 16 : -16) * (side === 'left' ? 1 : -1);
+      prefs.set(key, setW(target.getBoundingClientRect().width + d));
+    });
+  };
+  bind($('#splitLeft'), 'left');
+  bind($('#splitRight'), 'right');
+}
+
+function setFrozen(n) {
+  const q = store.activeQuery();
+  if (!q) return;
+  const map = prefs.get('frozen', {});
+  if (n) map[q.id] = n; else delete map[q.id];
+  prefs.set('frozen', map);
+  grid?.setFrozen(n);
+  renderToolbar();
+}
+function frozenFor(q) { return q ? (prefs.get('frozen', {})[q.id] || 0) : 0; }
+
 function doUndo() { const l = store.undo(); if (l) toast(`Undid: ${l}`); }
 function doRedo() { const l = store.redo(); if (l) toast(`Redid: ${l}`); }
 
@@ -1169,7 +1439,7 @@ client.onBusy((n, label) => {
     const t0 = performance.now();
     busyTimer = setTimeout(() => {
       bar.hidden = false;
-      clear(bar).append(el('span', { class: 'job-dot' }), el('span', { class: 'job-label' }, `${label || 'Working'}…`), el('span', { class: 'job-time' }), client.canCancel ? el('button', { class: 'btn btn-ghost btn-xs', onclick: async () => { await client.cancel(); bar.hidden = true; toast('Cancelled'); refresh(); } }, 'Cancel') : null);
+      clear(bar).append(el('span', { class: 'job-dot' }), el('span', { class: 'job-label' }, `${label || 'Working'}…`), el('span', { class: 'job-time' }), client.canCancel ? el('button', { class: 'btn btn-ghost btn-xs', onclick: async () => { await sql.cancel(); await client.cancel(); await sql.reset(); bar.hidden = true; toast('Cancelled'); refresh(); } }, 'Cancel') : null, el('span', { class: 'job-progress', style: { width: '0%' } }));
       bar._tick = setInterval(() => { const t = bar.querySelector('.job-time'); if (t) t.textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`; }, 200);
     }, 450);
   } else {
@@ -1179,10 +1449,13 @@ client.onBusy((n, label) => {
   }
 });
 
+client.onProgress((p) => { const bar = $('#jobBar .job-progress'); if (bar) bar.style.width = `${Math.round(p * 100)}%`; });
+
 document.addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
   const inBench = !$('#workbench').hidden;
   if (modKey(e) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (inBench && !hasOverlay()) openPalette(); return; }
+  if (modKey(e) && e.key.toLowerCase() === 'j') { e.preventDefault(); if (!hasOverlay()) openConsole(); return; }
   if (!inBench || hasOverlay()) return;
   if (modKey(e) && e.key.toLowerCase() === 's') { e.preventDefault(); saveRecipe(); return; }
   if (modKey(e) && e.key.toLowerCase() === 'e') { e.preventDefault(); openExportDialog(); return; }
@@ -1208,11 +1481,12 @@ window.addEventListener('beforeunload', () => { if (store.state.queries.length) 
 
 (async function boot() {
   await client.init();
+  initSplitters();
   renderMast();
   renderImport();
   $('#importScreen').hidden = false;
-  window.duckbench = { store, client, version: '2.0.0' };
+  window.duckbench = { store, client, sql, duck, version: '2.1.0' };
   const params = new URLSearchParams(location.search);
   if (params.has('notour')) prefs.set('tourDone', true);
-  if (params.has('demo')) loadSample();
+  if (params.has('demo')) await loadSample();
 })();

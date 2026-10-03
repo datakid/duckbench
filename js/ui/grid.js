@@ -31,6 +31,7 @@ export class Grid {
     this.sortHint = new Map();
     this.filterHint = new Set();
     this.search = null;
+    this.frozen = 0;
     this.build();
   }
 
@@ -137,7 +138,9 @@ export class Grid {
       c0 = Math.max(0, bisect(this.offsets, sl) - 2);
       c1 = Math.min(this.fields.length, bisect(this.offsets, sl + vw) + 2);
     }
-    return { r0, r1, c0, c1 };
+    const fz = this.frozenCount();
+    if (fz && c0 < fz) c0 = fz;
+    return { r0, r1, c0: Math.min(c0, c1), c1, fz };
   }
 
   renderHeader() {
@@ -148,16 +151,18 @@ export class Grid {
       const q = this.quality[c];
       const total = q ? q.empty + q.valid : 0;
       const pctEmpty = total ? q.empty / total : 0;
+      const fz = this.frozenCount();
       const cell = el('div', {
-        class: `gh-cell${this.selCols.includes(f.name) ? ' is-selected' : ''}${this.changed.has(f.name) ? ' is-changed' : ''}`,
+        class: `gh-cell${this.selCols.includes(f.name) ? ' is-selected' : ''}${this.changed.has(f.name) ? ' is-changed' : ''}${c < fz ? ' is-frozen' : ''}${c === fz - 1 ? ' is-frozen-edge' : ''}`,
         dataset: { c: String(c) },
         role: 'columnheader',
         title: `${f.name}\n${TYPE_LABELS[f.type] || f.type}${q ? `\n${q.valid.toLocaleString()} values · ${q.empty.toLocaleString()} empty` : ''}`,
-        style: { left: `${GUTTER_W + this.offsets[c]}px`, width: `${this.widths.get(f.name)}px` },
+        style: { left: `${GUTTER_W + this.offsets[c] + (c < fz ? this.viewport.scrollLeft : 0)}px`, width: `${this.widths.get(f.name)}px` },
       },
         el('div', { class: 'gh-top' },
           el('span', { class: `type-badge type-${f.type}` }, TYPE_BADGES[f.type] || f.type),
           el('span', { class: 'gh-name' }, f.name),
+          c < fz ? el('span', { class: 'gh-pin', title: 'Frozen' }, icon('pin', 11)) : null,
           this.sortHint.has(f.name) ? el('span', { class: 'gh-flag' }, icon(this.sortHint.get(f.name) === 'desc' ? 'sort-desc' : 'sort-asc', 12)) : null,
           this.filterHint.has(f.name) ? el('span', { class: 'gh-flag' }, icon('filter', 12)) : null,
           el('button', { class: 'gh-menu', tabindex: '-1', 'aria-label': `Column menu for ${f.name}`, dataset: { menu: '1' } }, icon('chevron-down', 13))),
@@ -171,23 +176,29 @@ export class Grid {
 
   render(force = false) {
     if (!this.fields.length) { clear(this.body); clear(this.gutter); return; }
-    const { r0, r1, c0, c1 } = this.visibleRange();
-    const key = `${r0}:${r1}:${c0}:${c1}`;
+    const { r0, r1, c0, c1, fz } = this.visibleRange();
+    const sl = this.viewport.scrollLeft;
+    const key = `${r0}:${r1}:${c0}:${c1}:${fz ? sl : ''}`;
     if (!force && key === this.lastKey) return;
     this.lastKey = key;
     this.ensureRows(r0, r1);
+    if (fz) this.positionFrozenHeader(sl);
+    const cols = [];
+    for (let c = 0; c < fz; c++) cols.push(c);
+    for (let c = c0; c < c1; c++) cols.push(c);
     const frag = document.createDocumentFragment();
     const gfrag = document.createDocumentFragment();
     for (let r = r0; r < r1; r++) {
       const row = this.rowAt(r);
       const top = HEAD_H + r * ROW_H;
       const rowEl = el('div', { class: `g-row${r % 2 ? ' is-alt' : ''}`, style: { top: `${top}px` }, dataset: { r: String(r) }, role: 'row' });
-      for (let c = c0; c < c1; c++) {
+      for (const c of cols) {
         const f = this.fields[c];
         const cell = document.createElement('div');
-        cell.className = 'g-cell';
+        cell.className = c < fz ? (c === fz - 1 ? 'g-cell is-frozen-edge' : 'g-cell') : 'g-cell';
         cell.dataset.c = c;
-        cell.style.left = `${GUTTER_W + this.offsets[c]}px`;
+        cell.style.left = `${GUTTER_W + this.offsets[c] + (c < fz ? sl : 0)}px`;
+        if (c < fz) cell.style.zIndex = '2';
         cell.style.width = `${this.widths.get(f.name)}px`;
         if (!row) { cell.classList.add('is-loading'); rowEl.appendChild(cell); continue; }
         const v = row[c];
@@ -564,6 +575,19 @@ export class Grid {
   }
 
   setQualityVisible(v) { this.showQuality = v; this.renderHeader(); }
+
+  frozenCount() { return Math.min(this.frozen || 0, this.fields.length); }
+
+  setFrozen(n) { this.frozen = Math.max(0, n | 0); this.renderHeader(); this.render(true); }
+
+  positionFrozenHeader(sl) {
+    const fz = this.frozenCount();
+    for (const n of this.header.children) {
+      if (n === this.corner) continue;
+      const c = Number(n.dataset.c);
+      if (c < fz) n.style.left = `${GUTTER_W + this.offsets[c] + sl}px`;
+    }
+  }
 
   clearWidths() { this.widths.clear(); }
 

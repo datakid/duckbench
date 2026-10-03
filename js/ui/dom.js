@@ -29,6 +29,8 @@ function append(n, kids) {
   }
 }
 
+export function put(n, ...kids) { append(n, kids); return n; }
+
 export const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); return n; };
 
 export const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

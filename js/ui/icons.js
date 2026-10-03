@@ -71,6 +71,12 @@ const P = {
   play: `<path ${S} d="M7 5l12 7-12 7z"/>`,
   rows: `<rect ${S} x="3" y="4" width="18" height="4" rx="1"/><rect ${S} x="3" y="10" width="18" height="4" rx="1"/><rect ${S} x="3" y="16" width="18" height="4" rx="1"/>`,
   ref: `<path ${S} d="M7 7h10v10M17 7L7 17"/>`,
+  terminal: `<rect ${S} x="3" y="4.5" width="18" height="15" rx="2"/><path ${S} d="M7 9.5l3 2.5-3 2.5M12.5 15H17"/>`,
+  pin: `<path ${S} d="M9 4h6l-1 5 3 3v2H7v-2l3-3zM12 14v6"/>`,
+  zap: `<path ${S} d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/>`,
+  shield: `<path ${S} d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/>`,
+  'arrow-up-right': `<path ${S} d="M7 17L17 7M8 7h9v9"/>`,
+  folder: `<path ${S} d="M3.5 7.5A2 2 0 0 1 5.5 5.5h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>`,
   settings: `<circle ${S} cx="12" cy="12" r="3"/><path ${S} d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>`,
 };
 
@@ -84,4 +90,4 @@ export function icon(name, size = 16, cls = '') {
   return t.content.firstChild;
 }
 
-export const LOGO = `<svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><rect width="64" height="64" rx="16" fill="var(--accent)"/><g fill="var(--accent-ink)"><rect x="11" y="40" width="8" height="13" rx="4"/><rect x="23" y="32" width="8" height="21" rx="4"/><path d="M35 49V30.5A10 10 0 1 1 48.6 18L55 19.1Q57.4 21.3 54.7 23.7L47.9 26.2A10 10 0 0 1 43 30.5V49A4 4 0 0 1 35 49Z"/></g><circle cx="44" cy="18" r="2.4" fill="var(--accent)"/></svg>`;
+export const LOGO = `<svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#c6cc9e"/><g fill="#181a11"><rect x="11" y="40" width="8" height="13" rx="4"/><rect x="23" y="32" width="8" height="21" rx="4"/><path d="M35 49V30.5A10 10 0 1 1 48.6 18L55 19.1Q57.4 21.3 54.7 23.7L47.9 26.2A10 10 0 0 1 43 30.5V49A4 4 0 0 1 35 49Z"/></g><circle cx="44" cy="18" r="2.4" fill="#c6cc9e"/></svg>`;

@@ -1,7 +1,8 @@
-import { el, clear } from './dom.js';
+import { el, clear, put } from './dom.js';
 import { icon } from './icons.js';
 import { TYPE_BADGES, isNumeric, isTemporal } from '../core/types.js';
 import { FORMULA_FUNCTIONS } from '../core/formula.js';
+import { sqlEditor, SQL_SNIPPETS } from './sqleditor.js';
 
 export function buildForm(params, data, ctx, onChange) {
   const root = el('div', { class: 'form' });
@@ -57,36 +58,36 @@ function field(p, data, ctx, set, rerender) {
       const filter = p.numeric ? (f) => isNumeric(f.type) : p.temporal ? null : null;
       const sel = columnSelect(fields, v, { optional: p.type === 'columnOptional', filter: p.numeric ? null : filter, fkey: p.key });
       sel.addEventListener('change', () => set(sel.value, { structural: true }));
-      wrap.append(label(p), sel, help);
+      put(wrap, label(p), sel, help);
       break;
     }
     case 'rightColumn': {
       const sel = columnSelect(ctx.rightFields || [], v, { fkey: p.key });
       sel.addEventListener('change', () => set(sel.value, { structural: true }));
-      wrap.append(label(p), sel);
+      put(wrap, label(p), sel);
       break;
     }
     case 'columns': case 'rightColumns': {
       const src = p.type === 'rightColumns' ? (ctx.rightFields || []) : fields;
-      wrap.append(label(p, el('span', { class: 'f-count' }, `${(v || []).length} selected`)), columnPicker(src, v || [], (nv) => set(nv, { structural: true }), { ordered: p.ordered }));
+      put(wrap, label(p, el('span', { class: 'f-count' }, `${(v || []).length} selected`)), columnPicker(src, v || [], (nv) => set(nv, { structural: true }), { ordered: p.ordered }));
       break;
     }
     case 'text': {
       const input = el('input', { class: 'input', type: 'text', value: v ?? '', placeholder: p.placeholder || '', dataset: { fkey: p.key }, spellcheck: 'false' });
       input.addEventListener('input', () => set(input.value));
-      wrap.append(label(p), input, help);
+      put(wrap, label(p), input, help);
       break;
     }
     case 'number': {
       const input = el('input', { class: 'input', type: 'number', value: v ?? '', min: p.min ?? null, step: 'any', dataset: { fkey: p.key } });
       input.addEventListener('input', () => set(input.value === '' ? '' : Number(input.value)));
-      wrap.append(label(p), input, help);
+      put(wrap, label(p), input, help);
       break;
     }
     case 'toggle': {
       const cb = el('input', { type: 'checkbox', checked: !!v, dataset: { fkey: p.key } });
       cb.addEventListener('change', () => set(cb.checked));
-      wrap.append(el('label', { class: 'f-toggle' }, cb, el('span', { class: 'toggle-ui' }), el('span', {}, p.label)));
+      put(wrap, el('label', { class: 'f-toggle' }, cb, el('span', { class: 'toggle-ui' }), el('span', {}, p.label)));
       break;
     }
     case 'enum': {
@@ -94,7 +95,7 @@ function field(p, data, ctx, set, rerender) {
       for (const o of p.options) sel.appendChild(el('option', { value: o.value }, o.label));
       sel.value = v ?? p.options[0]?.value;
       sel.addEventListener('change', () => set(sel.value));
-      wrap.append(label(p), sel, help);
+      put(wrap, label(p), sel, help);
       break;
     }
     case 'segmented': {
@@ -102,22 +103,26 @@ function field(p, data, ctx, set, rerender) {
       for (const o of p.options) {
         seg.appendChild(el('button', { type: 'button', class: `seg${(v ?? p.options[0].value) === o.value ? ' is-on' : ''}`, role: 'radio', 'aria-checked': String((v ?? p.options[0].value) === o.value), onclick: () => set(o.value) }, o.label));
       }
-      wrap.append(label(p), seg);
+      put(wrap, label(p), seg);
       break;
     }
     case 'code': {
-      const ta = el('textarea', { class: 'input code-input', rows: '8', spellcheck: 'false', dataset: { fkey: p.key } });
-      ta.value = v ?? '';
-      ta.addEventListener('input', () => set(ta.value));
-      ta.addEventListener('keydown', (e) => {
-        if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); const s = ta.selectionStart; ta.value = ta.value.slice(0, s) + '  ' + ta.value.slice(ta.selectionEnd); ta.setSelectionRange(s + 2, s + 2); set(ta.value); }
-      });
-      const cols = el('div', { class: 'sql-cols' }, fields.slice(0, 60).map(f => el('button', { type: 'button', class: 'chip chip-btn', title: `Insert "${f.name}"`, onclick: () => { const s = ta.selectionStart ?? ta.value.length; const ins = `"${f.name.replace(/"/g, '""')}"`; ta.value = ta.value.slice(0, s) + ins + ta.value.slice(ta.selectionEnd ?? s); ta.focus(); ta.setSelectionRange(s + ins.length, s + ins.length); set(ta.value); } }, f.name)));
-      wrap.append(label(p), ta, el('div', { class: 'sql-info' }, el('span', {}, p.help || ''), ctx.sqlTables?.length ? el('span', {}, `Tables: input, ${ctx.sqlTables.join(', ')}`) : el('span', {}, 'Tables: input'), cols));
+      const tables = ['input', ...(ctx.sqlTables || [])];
+      const ed = sqlEditor({ value: v ?? '', rows: 10, fkey: p.key, label: p.label, getContext: () => ({ tables, columns: fields }), onChange: (val) => set(val), onRun: () => ctx.onRunSql?.() });
+      const snippets = el('select', { class: 'input input-sm sql-snippets', 'aria-label': 'Insert a pattern' }, el('option', { value: '' }, 'Insert a pattern…'), SQL_SNIPPETS.map((s, i) => el('option', { value: String(i) }, s.label)));
+      snippets.addEventListener('change', () => { const s = SQL_SNIPPETS[Number(snippets.value)]; if (s) ed.setValue(s.sql); snippets.value = ''; });
+      const cols = el('div', { class: 'sql-cols' }, fields.slice(0, 80).map(f => el('button', { type: 'button', class: 'chip chip-btn', title: `Insert "${f.name}"`, onclick: () => ed.insert(/^[a-z_][a-z0-9_]*$/.test(f.name) ? f.name : `"${f.name.replace(/"/g, '""')}"`) }, el('span', { class: `chip-type type-${f.type}` }, TYPE_BADGES[f.type] || ''), f.name)));
+      put(wrap, 
+        el('div', { class: 'f-label' }, el('span', {}, p.label), el('span', { class: 'f-count' }, 'Ctrl/⌘ Enter runs · Ctrl Space suggests')),
+        ed,
+        el('div', { class: 'sql-info' },
+          el('div', { class: 'sql-info-row' }, el('span', { class: 'sql-tables' }, tables.map(t => el('code', {}, t))), snippets),
+          p.help ? el('span', { class: 'f-help' }, p.help) : null,
+          cols));
       break;
     }
     case 'formula': {
-      wrap.append(label(p), formulaEditor(v || '', p, fields, (nv) => set(nv)));
+      put(wrap, label(p), formulaEditor(v || '', p, fields, (nv) => set(nv)));
       break;
     }
     case 'query': {
@@ -127,7 +132,7 @@ function field(p, data, ctx, set, rerender) {
       for (const q of options) sel.appendChild(el('option', { value: q.id }, q.name));
       if (v) sel.value = v;
       sel.addEventListener('change', () => set(sel.value, { structural: true }));
-      wrap.append(label(p), sel, ctx.onAddQuery ? el('button', { class: 'btn btn-ghost btn-xs f-inline-btn', type: 'button', onclick: () => ctx.onAddQuery() }, icon('plus', 12), 'Import another file') : null);
+      put(wrap, label(p), sel, ctx.onAddQuery ? el('button', { class: 'btn btn-ghost btn-xs f-inline-btn', type: 'button', onclick: () => ctx.onAddQuery() }, icon('plus', 12), 'Import another file') : null);
       break;
     }
     case 'queries': {
@@ -140,11 +145,11 @@ function field(p, data, ctx, set, rerender) {
         cb.addEventListener('change', () => { if (cb.checked) cur.add(q.id); else cur.delete(q.id); set(opts.filter(o => cur.has(o.id)).map(o => o.id), { structural: true }); });
         list.appendChild(el('label', { class: 'check-item' }, cb, el('span', {}, q.name)));
       }
-      wrap.append(label(p), list, ctx.onAddQuery ? el('button', { class: 'btn btn-ghost btn-xs f-inline-btn', type: 'button', onclick: () => ctx.onAddQuery() }, icon('plus', 12), 'Import another file') : null);
+      put(wrap, label(p), list, ctx.onAddQuery ? el('button', { class: 'btn btn-ghost btn-xs f-inline-btn', type: 'button', onclick: () => ctx.onAddQuery() }, icon('plus', 12), 'Import another file') : null);
       break;
     }
     case 'valueset': {
-      wrap.append(label(p), valueSet(v || { include: true, list: [] }, data[p.column], ctx, (nv) => set(nv)));
+      put(wrap, label(p), valueSet(v || { include: true, list: [] }, data[p.column], ctx, (nv) => set(nv)));
       break;
     }
     case 'rename': {
@@ -163,15 +168,15 @@ function field(p, data, ctx, set, rerender) {
       };
       filterInput.addEventListener('input', draw);
       draw();
-      wrap.append(label(p), fields.length > 8 ? filterInput : null, box);
+      put(wrap, label(p), fields.length > 8 ? filterInput : null, box);
       break;
     }
     case 'repeater': {
-      wrap.append(label(p), repeater(p, v || [], ctx, (nv, structural) => set(nv, { structural })));
+      put(wrap, label(p), repeater(p, v || [], ctx, (nv, structural) => set(nv, { structural })));
       break;
     }
     default:
-      wrap.append(label(p), el('span', {}, String(v)));
+      put(wrap, label(p), el('span', {}, String(v)));
   }
   return wrap;
 }

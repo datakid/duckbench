@@ -1,92 +1,90 @@
-# Duckbench 2
+# Duckbench 2.1
 
-A data-prep workbench that runs entirely in the browser, written in plain JavaScript. It cleans, reshapes, joins and exports CSV, TSV, Excel, JSON, JSONL and Parquet files. Data stays in the browser tab and is never uploaded.
+A data-prep workbench that runs entirely in the browser, written in plain JavaScript. It cleans, reshapes, joins and exports CSV, TSV, Excel, JSON, JSONL and Parquet files. Visual steps cover everyday work; DuckDB-WASM handles SQL, large files and fast exports. Data stays in the browser tab and is never uploaded.
+
+## Entry points
+| Path | Purpose |
+|---|---|
+| `index.html` | The app. `?demo` loads the sample project, `?notour` skips the tour |
+| `demo.html` | Opens the demo. `?theme=light` and `?tour` are optional |
+| `tests.html` / `selftest.html` | Self-test suite (**81/81** passing) |
+
+No backend, no build step, no data tables. Hosting is static.
 
 ## Architecture
-- **No build step, no framework.** It uses native ES modules. Add `/fonts/files/*.woff2` from the v1 project (`fonts/fonts.css` points to them).
-- **One engine.** A pure-JS columnar `Frame` engine runs in a module Web Worker (`js/engine/worker.js`). If workers are unavailable, it falls back to running inline on the main thread. This replaces v1's two engines, DuckDB-WASM and Arquero, so there are no longer differences between two engines to keep in sync.
-- **Step cache.** Each step's output is cached under a hash of everything before it. Editing step N recomputes from step N onward only.
-- **Cancel.** A running job is cancelled by terminating the worker. The engine then restarts and reloads its sources and queries.
-- **Excel** runs in its own classic worker using the bundled `vendor/xlsx-0.20.3.full.min.js`.
-- **Parquet** uses `hyparquet` and `hyparquet-writer`, loaded from jsDelivr only the first time Parquet is used.
-- **DuckDB is optional.** `@duckdb/duckdb-wasm@1.32.0` (version 1.29.2 is blocked) is loaded from jsDelivr only when a SQL step runs or a file is opened with DuckDB. The engine reports a SQL step as `needsSql` along with a cache key. `js/app/sqlrunner.js` then copies the step's input into DuckDB, runs the query, and stores the result in the engine under that key. Any steps after it keep using the normal engine and cache.
+- **Native ES modules, no framework.** Fonts are self-hosted in `fonts/files/`.
+- **Two engines, one cache.**
+  - A pure-JS columnar `Frame` engine in a module Web Worker runs the visual steps. Each step is cached under a hash of everything before it.
+  - **DuckDB-WASM 1.32** (version 1.29.2 is blocked) runs SQL steps, the SQL console, Summarize, large files and DuckDB exports. It loads from jsDelivr on first use.
+  - SQL results are written back into the step cache, so any visual steps after a SQL step stay cached.
+- **The CSP now allows `'wasm-unsafe-eval'`.** Without it the browser refuses to compile DuckDB's WebAssembly, so DuckDB could never start. This was a latent bug in the previous version.
+- **Cancel** terminates the worker, interrupts DuckDB (`cancelSent`), drops DuckDB temp tables, then replays sources.
+
+## How DuckDB is used
+- **Single pass.** SQL results are capped with a `LIMIT n+1` probe. The old version ran `COUNT(*)` and then the full query, which executed every query twice.
+- **Table reuse.** A step's input and the queries it references are materialised into DuckDB once, keyed by the step-cache hash. The 8 most recent are kept (LRU), so editing a SQL step doesn't re-copy its data.
+- **Pushdown chains.**
+  - On a DuckDB-backed file, every leading SQL step (not just the first) is composed into one CTE chain and runs against the whole file.
+  - Visual steps run on a slice of the first 1,000,000 rows.
+- **Correct type mapping.** DECIMAL (128-bit words with scale), BIGINT, TIMESTAMP units (s/ms/µs/ns), DATE32, TIME, STRUCT/LIST/MAP (as JSON) and BLOB all convert correctly. Integer columns with values outside JS's safe range fall back to DOUBLE when sent to DuckDB.
+- **SQL console** (`⌘J`):
+  - Ad-hoc read-only queries over `input` (the active query at the previewed step) and every other query, exposed by name.
+  - Only tables the query actually references are copied into DuckDB.
+  - Results appear in a table. You can download them as CSV, Parquet, JSONL or JSON via DuckDB `COPY`, or turn the query into a step.
+  - Query history (last 20) and a pattern library: QUALIFY top-N, DISTINCT ON, PIVOT/UNPIVOT, SUMMARIZE, window running totals, fuzzy joins.
+- **Summarize panel.** DuckDB `SUMMARIZE` over every row. Click a row to open the detailed profile.
+- **Exports.**
+  - "Parquet via DuckDB (ZSTD)" from the Export menu.
+  - Full-file DuckDB export writes Parquet, CSV, JSONL or JSON.
+- **Large files.**
+  - Files over 1 GB, or any file opened with "Open with DuckDB", are queried in place.
+  - Import options (delimiter, header, skip rows, all-text) are passed to `read_csv`.
+- **Remembered files.** With the File System Access API (Chromium), DuckDB files are stored as handles and reconnected on resume after a single permission prompt. Other browsers use "Locate file…".
+- **Validator.**
+  - Read-only, one statement.
+  - Now also allows `SUMMARIZE` and `DESCRIBE`.
+  - Now also rejects `FROM 'file.csv'`, quoted file paths, `query()`, `query_table()`, `getenv()` and `parquet_metadata()`.
+
+## SQL editor
+- A highlighted overlay editor with line numbers. It colours keywords, functions, strings, numbers, comments, tables and known columns.
+- Autocomplete (and `Ctrl Space`) suggests columns with their type, tables, about 110 DuckDB functions with signatures, and keywords.
+- `⌘↵` runs, `⌘/` toggles comments, Tab indents, and Enter keeps the current indentation.
+- Used in SQL steps (the inspector widens to 520 px) and in the console.
+
+## Other additions
+- **Streaming CSV reader.**
+  - CSV/TSV files are streamed into the worker with `File.stream()` through a chunk-safe state-machine parser (`CsvStream`).
+  - The whole file is never held as one string, so files up to about 1 GB load without DuckDB.
+  - The job bar shows progress.
+  - Encoding detection is safe across UTF-8 boundaries.
+- **Freeze columns** from the toolbar, the header menu, the View tab or the palette. Remembered per query.
+- **Resizable side panels.** Drag, use the arrow keys, or double-click to reset. Widths are remembered.
+
+## Visual system: "Night Moss & Bill"
+- **Dark.** Near-black olive surfaces (`#0c0d0b` canvas, `#151713` panels). A chartreuse accent `#d2e46e` that echoes the sage logo tile, but with more energy. A warm duck-bill orange `#f2a65a` marks SQL/DuckDB, changes and warnings. Sky, orchid and mint distinguish numbers, dates and true/false.
+- **Light.** Warm paper `#ecebe3` with a deep moss accent `#4f6a12` and burnt-orange `#c4621a`.
+- **Type.** Bricolage Grotesque for display, Instrument Sans for UI, JetBrains Mono for data and code.
+- **Surfaces.** Soft radial glows, layered shadows, 14–20 px radii, uppercase mono section labels, and a centred command bar.
+- **Logo.** The uploaded sage duck tile is used as both logo and favicon.
+- **Start screen.** A hero with the drop zone and quick actions, plus side cards for resume, recipes/batch/console and DuckDB.
 
 ## Files
 | Path | Purpose |
 |---|---|
-| `index.html` | App shell (strict Content Security Policy) |
-| `demo.html` | Opens the app with the sample data loaded (`index.html?demo`) |
-| `css/app.css` | All styles: dark and light themes, responsive layout |
-| `js/core/` | `types` (inference and conversion), `csv`, `frame`, `formula` (expression language), `normalize` (loose and Arabic matching), `profile`, `transforms` (the step registry), `util` |
-| `js/engine/` | `engine.js` (pipeline, cache, export), `worker.js`, `client.js` (RPC, cancel, inline fallback), `parquet.js`, `xlsx-worker.js`, `duck.js` (DuckDB loader, SQL validator, table loading, export via `COPY`) |
-| `js/io/` | `xlsx-core.js` (Excel read and write), `zip.js` (ZIP writer and reader, CRC-32, deflate via `CompressionStream`) |
-| `js/app/sqlrunner.js` | Runs SQL steps and DuckDB-backed file sources |
-| `js/app/tour.js` | Six-step onboarding tour |
-| `tests.html`, `js/tests/` | Self-test suite |
-| `js/ui/` | `grid` (virtual grid), `forms` (inspector built from step parameter definitions), `overlay` (modal, menu, toast), `dom`, `icons` |
-| `js/app/` | `main.js` (wires everything together), `store.js` (state, undo/redo, IndexedDB), `samples.js` |
-
-## Features
-- **Import:** several files at once, drag-and-drop anywhere, an options dialog (delimiter, encoding, rows to skip, header row, type detection), a sheet picker for Excel, and nested JSON flattened into columns.
-- **Queries:** multiple queries per project. Each can be duplicated, renamed or deleted, or used as the starting point of a new query ("Reference"). Circular references are detected. You can swap in a new data file and keep the steps, or reconnect a missing file with "Locate file…".
-- **Steps (about 45):**
-  - Rows: filter (multiple conditions with AND/OR, pick values, or a formula), multi-column sort, remove duplicates (exact, loose or Arabic matching; keep first or last), remove blank rows, keep/remove rows (top, bottom, range, every Nth, seeded sample).
-  - Table: promote/demote headers, transpose.
-  - Columns: choose, remove, rename (several at once), move, duplicate, change type (lenient number parsing, day-first or month-first dates, Excel date serials), detect types, fill down/up, replace empty values.
-  - Text: split (by delimiter, positions or digit/letter boundary; into columns or rows), merge, extract, replace (whole value, part of text, regex), change case, trim and clean, pad.
-  - Numbers and dates: math, round, date parts (about 20), format date.
-  - New columns: formula column, conditional column, index column (optionally restarting per group), rank, running total, percent of total.
-  - Summarize, reshape and combine: group by (12 aggregations), pivot, unpivot (or unpivot the other columns), join (7 join types, several key pairs, loose matching, match count), append several queries.
-  - Grid edits are recorded as steps: cell edits and row deletes.
-- **Formula language:** `[Column]` references, arithmetic and text operators, about 60 functions, and autocomplete for column and function names.
-- **Grid:** virtualized rows and columns, cell, range, column and row selection, keyboard navigation, copy as TSV, inline editing, column resizing (double-click to auto-fit), a fill-rate bar under each header, highlighting of changed columns, and find in preview.
-- **Column profile:** fill rate, distinct and unique counts, min/max/mean/median/std, a histogram, and the most common values (click a value to filter to it). It covers every row, not a sample.
-- **Steps panel:** per-step row change, duration, cache indicator, errors and warnings, preview at any step, drag to reorder, disable, duplicate, notes, and an action to delete everything after a step.
-- **Command palette** (⌘K), a ribbon with Home, Transform, Add column and View tabs, header and cell context menus, and keyboard shortcuts (press `?`).
-- **Undo/redo** covers every change, up to 150 steps.
-- **Session:** saved automatically to IndexedDB, including the data files, and offered for resume on the next visit.
-- **Export:** CSV or TSV (with BOM and protection against spreadsheet formula injection), Excel (one query, or every query as its own sheet), Parquet, JSON, JSONL, Markdown and SQL INSERT. You can choose columns and a row range, and export from the step you are previewing.
-- **Recipes:** v2 recipes (`.duckbench.json`) store all queries. Duckbench 1 recipes can be opened, and their steps are converted to v2 steps.
-
-## Visual system: Slate & Lichen
-- **Dark theme:** a graphite canvas `#131417`, panels `#1a1b1f`, and a pale lichen accent `#c3c992`.
-- **Light theme:** a fog canvas `#e9e8e2`, panels `#f8f7f3`, and a moss accent `#5c6a2d`.
-- **Data colours:** mist blue for numbers, heather for dates, clay for true/false. Clay also marks changed cells, empty values and warnings.
-- **Layout:** panels float on the canvas with rounded corners and 6 px gaps. The interface uses IBM Plex Sans, and numbers use Plex Mono with tabular figures. No display typeface, no textures, no marketing copy.
-
-## SQL and large files
-- **SQL step:** Transform → SQL. It's a read-only SELECT over `input`, plus any other queries you select, which appear as tables. One statement only. Writes, `COPY`, `ATTACH`, `INSTALL`, `PRAGMA` and direct file reads are rejected. Results are capped at 2 million rows. Duckbench 1 `raw_sql` steps are converted to this step.
-- **Files over 1 GB** (or any file, by ticking "Open with DuckDB" in Import with options) are registered with DuckDB without being read into memory.
-  - If the first step is a SQL step, it runs directly against the whole file.
-  - Other steps work on the first 1,000,000 rows, and a banner says so.
-  - "Export full file via DuckDB" runs a chain of SQL-only steps over every row and writes Parquet, CSV or JSON.
-  - Files opened this way must be located again after a reload.
-
-## Batch apply
-Available from the import screen or the command palette. Choose a recipe (with a query picker for multi-query recipes) or use the current query's steps. Add files, pick an output format, and download one ZIP or the individual files. Steps that join or append other queries are flagged before the run.
-
-## Onboarding tour
-Six spotlight steps covering Queries, Applied steps, the ribbon, the preview grid, Actions (⌘K) and Export. It runs once automatically, and can be started again from the masthead or the import screen. Keyboard: arrow keys, Enter, Esc. `?notour` skips it.
-
-## Self-test
-`tests.html` (or `selftest.html`) runs **72/72** tests. In addition to the transform, migration, formula, join, cache and export tests, it covers:
-- the SQL validator
-- how `WITH` clauses are combined
-- DuckDB table naming
-- the full SQL-step lifecycle: pending → resolved → error, including cache invalidation
-- pushdown to DuckDB-backed sources and the row-slice fallback
-- batch queries surviving a `setQueries` call
-- a ZIP round trip with CRC-32 checks
-- undo/redo and the step cursor
-
-The DuckDB-WASM download itself is not covered by tests.
+| `css/app.css` | All styles |
+| `js/core/` | types, csv (+ `CsvStream`), frame, formula, normalize, profile, transforms, util |
+| `js/engine/` | `engine.js` (pipeline, cache, `loadFile`, `queryData`), `worker.js` (progress messages), `client.js`, `parquet.js`, `xlsx-worker.js`, `duck.js` (loader, status events, Arrow conversion, single-pass `runQuery`, `COPY`, validator) |
+| `js/app/sqlrunner.js` | DuckDB orchestration: serialised jobs, materialisation LRU, pushdown, console, summarize, exports |
+| `js/ui/sqleditor.js` | SQL editor, highlighter, function and pattern catalog |
+| `js/ui/` | grid (virtual, frozen columns), forms, overlay, dom, icons |
+| `js/tests/` | Self-test suite (the folder was previously misnamed `js/test/`, so `tests.html` failed to load) |
 
 ## Not yet done
-- Freezing columns and resizing panels.
-- A SQL editor with syntax highlighting.
-- Remembering large DuckDB-backed files across reloads.
+- DuckDB-side execution of visual steps (translating steps to SQL) for whole-file previews.
+- Persisting DuckDB-backed files in Firefox and Safari (no File System Access API).
+- Opening Excel files with DuckDB (requires the `excel` extension).
 
 ## Next steps
-1. Add a column-freeze option and resizable side panels.
-2. Add a SQL editor with highlighting and column autocomplete.
-3. Add a streaming CSV reader, so files around 300 MB to 1 GB don't need DuckDB.
+1. Compile common visual steps (filter, sort, group by, select) to SQL so DuckDB files can be cleaned without the 1M-row slice.
+2. Use DuckDB OPFS storage for very large intermediate results.
+3. Add an EXPLAIN view and a query-time breakdown in the console.

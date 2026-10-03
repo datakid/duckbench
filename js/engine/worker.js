@@ -14,14 +14,15 @@ const handlers = {
     return { buffer: buf, mime: 'application/vnd.apache.parquet' };
   },
 };
-for (const m of ENGINE_METHODS) handlers[m] = (args) => engine[m](args || {});
+for (const m of ENGINE_METHODS) handlers[m] = (args, progress) => engine[m](args || {}, progress);
 
 self.onmessage = async (e) => {
   const { id, method, args } = e.data;
   try {
     const fn = handlers[method];
     if (!fn) throw new Error(`Unknown engine method ${method}`);
-    const result = await fn(args);
+    const progress = (p) => self.postMessage({ id, progress: p });
+    const result = await fn(args, progress);
     const transfer = result && result.buffer instanceof ArrayBuffer ? [result.buffer] : [];
     self.postMessage({ id, ok: true, result }, transfer);
   } catch (err) {

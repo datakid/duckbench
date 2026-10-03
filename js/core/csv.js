@@ -117,6 +117,73 @@ export function parseCSV(text, opts = {}) {
   return { rows, delimiter: delim };
 }
 
+export class CsvStream {
+  constructor(delimiter, onRow, quote = '"') {
+    this.d = delimiter;
+    this.q = quote;
+    this.onRow = onRow;
+    this.row = [];
+    this.field = '';
+    this.mode = 0;
+    this.pendingCR = false;
+    this.rows = 0;
+  }
+
+  _endField() { this.row.push(this.field); this.field = ''; this.mode = 0; }
+  _endRow() { this._endField(); const r = this.row; this.row = []; this.rows++; this.onRow(r); }
+
+  push(text) {
+    const d = this.d, q = this.q;
+    const n = text.length;
+    let i = 0;
+    if (this.pendingCR) { this.pendingCR = false; if (n && text[0] === '\n') i = 1; }
+    while (i < n) {
+      if (this.mode === 2) {
+        const j = text.indexOf(q, i);
+        if (j < 0) { this.field += text.slice(i); return; }
+        this.field += text.slice(i, j);
+        this.mode = 3;
+        i = j + 1;
+        continue;
+      }
+      const ch = text[i];
+      if (this.mode === 3) {
+        if (ch === q) { this.field += q; this.mode = 2; i++; continue; }
+        this.mode = 4;
+      }
+      if (ch === d) { this._endField(); i++; continue; }
+      if (ch === '\n') { this._endRow(); i++; continue; }
+      if (ch === '\r') {
+        this._endRow();
+        if (i + 1 < n) { if (text[i + 1] === '\n') i++; } else this.pendingCR = true;
+        i++;
+        continue;
+      }
+      if (ch === q && this.mode === 0 && this.field === '') { this.mode = 2; i++; continue; }
+      let j = i + 1;
+      while (j < n) { const c = text[j]; if (c === d || c === '\n' || c === '\r') break; j++; }
+      this.field += text.slice(i, j);
+      if (this.mode === 0) this.mode = 1;
+      i = j;
+    }
+  }
+
+  end() {
+    if (this.field !== '' || this.row.length || this.mode >= 2) this._endRow();
+  }
+}
+
+export function detectEncoding(bytes) {
+  if (bytes[0] === 0xFF && bytes[1] === 0xFE) return 'utf-16le';
+  if (bytes[0] === 0xFE && bytes[1] === 0xFF) return 'utf-16be';
+  let end = bytes.length;
+  let k = 0;
+  while (k < 4 && end - k - 1 >= 0 && (bytes[end - k - 1] & 0xC0) === 0x80) k++;
+  if (end - k - 1 >= 0 && bytes[end - k - 1] >= 0xC0) end = end - k - 1;
+  try { new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, end)); return 'utf-8'; }
+  catch { return 'windows-1252'; }
+}
+
 export function decodeBuffer(buffer, encoding = 'auto') {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   if (encoding === 'auto') {

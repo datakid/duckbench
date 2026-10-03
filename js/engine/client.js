@@ -13,19 +13,20 @@ function makeWorkerRpc(url, { module = true, timeout = 0 } = {}) {
       worker.addEventListener('error', (e) => { clearTimeout(t); reject(new Error(e.message || 'Worker failed to load')); }, { once: true });
     });
     worker.onmessage = (e) => {
-      const { id, ok, result, error } = e.data || {};
+      const { id, ok, result, error, progress } = e.data || {};
       if (id == null) return;
       const p = pending.get(id);
       if (!p) return;
+      if (progress != null) { p.onProgress?.(progress); return; }
       pending.delete(id);
       ok ? p.resolve(result) : p.reject(new Error(error));
     };
   };
-  const call = (method, args, transfer = []) => {
+  const call = (method, args, transfer = [], onProgress) => {
     if (!worker) start();
     const id = ++seq;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      pending.set(id, { resolve, reject, onProgress });
       worker.postMessage({ id, method, args }, transfer);
     });
   };
@@ -44,7 +45,7 @@ class InlineEngine {
     if (!this.enginePromise) this.enginePromise = import('./engine.js').then(m => new m.Engine());
     return this.enginePromise;
   }
-  async call(method, args) {
+  async call(method, args, onProgress) {
     const e = await this._engine();
     if (method === 'loadParquet' || method === 'exportParquet') {
       this.parquet = this.parquet || await import('./parquet.js');
@@ -56,7 +57,7 @@ class InlineEngine {
       return { buffer: await this.parquet.writeParquet(fields, columns) };
     }
     await new Promise(r => setTimeout(r, 0));
-    return e[method](args || {});
+    return e[method](args || {}, onProgress);
   }
 }
 
@@ -88,16 +89,18 @@ export class EngineClient {
   }
 
   onBusy(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
+  onProgress(fn) { this.progressListeners = this.progressListeners || new Set(); this.progressListeners.add(fn); return () => this.progressListeners.delete(fn); }
   _busy(delta, label) {
-    this.inflight += delta;
+    this.inflight = Math.max(0, this.inflight + delta);
     for (const fn of this.listeners) fn(this.inflight, label);
   }
 
   async call(method, args = {}, { transfer = [], label = '', track = true } = {}) {
     if (track) this._busy(1, label);
+    const onProgress = (p) => { if (this.progressListeners) for (const fn of this.progressListeners) fn(p, label); };
     try {
-      if (this.rpc) return await this.rpc.call(method, args, transfer);
-      return await this.inline.call(method, args);
+      if (this.rpc) return await this.rpc.call(method, args, transfer, onProgress);
+      return await this.inline.call(method, args, onProgress);
     } finally {
       if (track) this._busy(-1, label);
     }

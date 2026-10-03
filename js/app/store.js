@@ -120,6 +120,8 @@ export const persist = {
   async putSession(json) { try { await tx('kv', 'readwrite', s => s.put({ json, at: Date.now() }, 'session')); return true; } catch { return false; } },
   async getSession() { try { const db = await openDb(); return await reqP(db.transaction('kv').objectStore('kv').get('session')); } catch { return null; } },
   async clearSession() { try { await tx('kv', 'readwrite', s => s.delete('session')); } catch {} },
+  async putHandle(id, handle) { try { await tx('kv', 'readwrite', s => s.put(handle, 'h:' + id)); return true; } catch { return false; } },
+  async getHandle(id) { try { const db = await openDb(); return await reqP(db.transaction('kv').objectStore('kv').get('h:' + id)); } catch { return null; } },
   async listFileKeys() { try { const db = await openDb(); return await reqP(db.transaction('files').objectStore('files').getAllKeys()); } catch { return []; } },
 };
 

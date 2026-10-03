@@ -1,9 +1,10 @@
 import { Frame } from '../core/frame.js';
 import { TRANSFORMS, migrateStep, validateStep } from '../core/transforms.js';
-import { parseCSV, decodeBuffer, rowsToColumns, csvEscape, sniffDelimiter } from '../core/csv.js';
+import { parseCSV, decodeBuffer, rowsToColumns, csvEscape, sniffDelimiter, CsvStream, detectEncoding } from '../core/csv.js';
 import { columnQuality, profileColumn, distinctValues } from '../core/profile.js';
 import { formatValue, convertValue } from '../core/types.js';
 import { hashString, dedupeNames, now } from '../core/util.js';
+import { validateSql, withInput } from './duck.js';
 
 const CACHE_LIMIT = 64;
 
@@ -28,7 +29,8 @@ export class Engine {
     const q = this.queries.get(queryId);
     if (!q) throw new Error('No such query.');
     const step = q.steps[index];
-    const leading = q.source?.kind === 'duck' && step?.type === 'sql' && q.steps.slice(0, index).every(s => s.disabled);
+    const chain = q.source?.kind === 'duck' && step?.type === 'sql' ? this._duckChain(q, index) : null;
+    const leading = chain != null;
     let r = null;
     if (!leading) {
       r = this._run(q, index - 1, null);
@@ -42,10 +44,41 @@ export class Engine {
       const dr = this._run(dq, dq.steps.length - 1, null);
       if (dr.needsSql) return { pending: dr.needsSql };
       if (dr.error) throw new Error(`“${dq.name}” has an error: ${dr.error}`);
-      tables.push({ id, name: dq.name, fields: dr.frame.fields, columns: dr.frame.columns });
+      tables.push({ id, name: dq.name, key: dr.key, fields: dr.frame.fields, columns: dr.frame.columns });
     }
-    if (leading) return { pushdown: q.source.sql, limit: q.source.limit, fields: [], columns: [], sql: step.data?.sql || '', tables };
-    return { fields: r.frame.fields, columns: r.frame.columns, sql: step.data?.sql || '', tables };
+    if (leading) return { pushdown: chain, limit: q.source.limit, fields: [], columns: [], sql: step.data?.sql || '', tables };
+    return { inputKey: r.key, fields: r.frame.fields, columns: r.frame.columns, sql: step.data?.sql || '', tables };
+  }
+
+  _duckChain(q, index) {
+    let sql = q.source.sql;
+    for (let i = 0; i < index; i++) {
+      const s = q.steps[i];
+      if (s.disabled) continue;
+      if (s.type !== 'sql' || (s.data?.tables || []).length) return null;
+      const v = validateSql(s.data?.sql);
+      if (v.error) return null;
+      sql = withInput(sql, v.sql);
+    }
+    return sql;
+  }
+
+  queryData({ queryId, stepIndex }) {
+    const q = this.queries.get(queryId);
+    if (!q) return { error: 'No such query.' };
+    const upto = stepIndex == null ? q.steps.length - 1 : stepIndex;
+    if (q.source?.kind === 'duck') { const chain = this._duckChain(q, upto + 1); if (chain) return { pushdown: chain }; }
+    const r = this._run(q, upto, null);
+    if (r.needsSql) return { needsSql: r.needsSql };
+    if (r.error) return { error: r.errorIndex >= 0 ? `Step ${r.errorIndex + 1}: ${r.error}` : r.error };
+    return { key: r.key, fields: r.frame.fields, columns: r.frame.columns };
+  }
+
+  async loadFile({ id, name, file, format, options = {} }, progress) {
+    const t0 = now();
+    const res = await streamCsvFile(file, format, options, progress);
+    const frame = Frame.fromText(dedupeNames(res.names), res.cols, { infer: options.detectTypes !== false });
+    return this._storeSource(id, name, format, frame, { delimiter: res.delimiter, encoding: res.encoding, ms: now() - t0 });
   }
 
   ping() { return { ok: true, at: Date.now() }; }
@@ -460,4 +493,48 @@ function flatten(o, prefix = '', out = {}, depth = 0) {
   return out;
 }
 
-export const ENGINE_METHODS = ['dropQuery', 'putSqlResult', 'sqlInput', 'pendingSql', 'ping', 'loadText', 'loadColumns', 'peekText', 'removeSource', 'setQueries', 'sourceInfo', 'evaluate', 'rows', 'profile', 'distinct', 'queryColumns', 'findRows', 'exportData', 'runSteps', 'invalidate'];
+async function streamCsvFile(file, format, options, progress) {
+  const head = new Uint8Array(await file.slice(0, 1 << 20).arrayBuffer());
+  const encoding = options.encoding && options.encoding !== 'auto' ? options.encoding : detectEncoding(head);
+  const sample = new TextDecoder(encoding).decode(head.subarray(0, 256 * 1024));
+  const delimiter = options.delimiter && options.delimiter !== 'auto' ? options.delimiter.replace('\\t', '\t') : (format === 'tsv' ? '\t' : sniffDelimiter(sample));
+  const skip = Math.max(0, Number(options.skipRows) || 0);
+  const header = options.header !== false;
+  let names = null;
+  let cols = [];
+  let seen = 0, n = 0;
+  const onRow = (row) => {
+    if (seen++ < skip) return;
+    if (!names) {
+      if (header) { names = row.map(s => String(s ?? '').trim()); cols = names.map(() => []); return; }
+      names = row.map(() => ''); cols = names.map(() => []);
+    }
+    if (row.length === 1 && row[0] === '' && names.length > 1) return;
+    if (row.length > names.length) {
+      for (let c = names.length; c < row.length; c++) { names.push(''); const col = new Array(n).fill(null); cols.push(col); }
+    }
+    for (let c = 0; c < names.length; c++) cols[c].push(c < row.length ? row[c] : null);
+    n++;
+  };
+  const parser = new CsvStream(delimiter, onRow);
+  const decoder = new TextDecoder(encoding);
+  const reader = file.stream().getReader();
+  let read = 0, first = true, lastReport = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    read += value.byteLength;
+    let text = decoder.decode(value, { stream: true });
+    if (first) { if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); first = false; }
+    parser.push(text);
+    if (progress && read - lastReport > (4 << 20)) { lastReport = read; progress(read / (file.size || 1)); }
+  }
+  const tail = decoder.decode();
+  if (tail) parser.push(tail);
+  parser.end();
+  progress?.(1);
+  if (!names) { names = []; cols = []; }
+  return { names, cols, delimiter, encoding };
+}
+
+export const ENGINE_METHODS = ['queryData', 'loadFile', 'dropQuery', 'putSqlResult', 'sqlInput', 'pendingSql', 'ping', 'loadText', 'loadColumns', 'peekText', 'removeSource', 'setQueries', 'sourceInfo', 'evaluate', 'rows', 'profile', 'distinct', 'queryColumns', 'findRows', 'exportData', 'runSteps', 'invalidate'];
