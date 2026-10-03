@@ -117,7 +117,7 @@ async function importFiles(files, { asNewProject = false, options, viaDuck = fal
     try {
       const handle = handles?.get(file) || null;
       if (viaDuck || file.size > LARGE_FILE_BYTES) {
-        if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB, downloaded once from cdn.jsdelivr.net. The file is queried in place; the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows are loaded for visual steps, SQL steps at the top run on every row.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
+        if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB, loaded once from cdn.jsdelivr.net. The first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows are loaded for steps; leading SQL steps and exports use every row.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
         await importLargeViaDuck(file, { asNewProject, handle, options: viaDuck ? options || {} : {} });
         asNewProject = false;
         continue;
@@ -198,46 +198,38 @@ function renderImport() {
   const screen = $('#importScreen');
   clear(screen);
   const drop = el('label', { class: 'drop-zone', tabindex: '0', id: 'dropZone' },
-    el('span', { class: 'dz-icon' }, icon('upload', 22)),
+    el('span', { class: 'dz-icon' }, icon('upload', 18)),
     el('span', { class: 'dz-text' },
-      el('p', { class: 'drop-title' }, 'Drop files here, or click to browse'),
-      el('p', { class: 'drop-hint' }, 'Several at once is fine. Each file becomes a query.'),
+      el('p', { class: 'drop-title' }, 'Drop files or click to browse'),
       el('span', { class: 'dz-formats' }, ['CSV', 'TSV', 'XLSX', 'JSON', 'JSONL', 'PARQUET'].map(f => el('span', {}, f)))));
   drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickFiles({ accept: ACCEPT, multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
-  const resume = el('div', { class: 'side-card', id: 'resumeCard' }, el('h3', {}, 'Continue'), el('p', { class: 'resume-empty' }, 'No saved session in this browser yet.'));
+  const resume = el('div', { class: 'side-card', id: 'resumeCard' }, el('h3', {}, 'Resume'), el('p', { class: 'resume-empty' }, 'No saved session.'));
   const action = (ic, label, hint, fn, id) => el('button', { class: 'import-action', onclick: fn, id: id || null }, el('span', { class: 'ia-ico' }, icon(ic, 16)), el('span', { class: 'ia-text' }, el('span', { class: 'ia-label' }, label), el('span', { class: 'ia-hint' }, hint)), icon('arrow-right', 14));
   const st = duck.duckStatus();
   screen.append(el('div', { class: 'import-shell' },
     el('section', { class: 'hero', 'aria-labelledby': 'heroTitle' },
-      el('span', { class: 'hero-eyebrow' }, 'Data prep · in your browser'),
-      el('h2', { class: 'hero-title', id: 'heroTitle' }, 'Shape messy data into ', el('em', {}, 'something useful.')),
-      el('p', { class: 'hero-sub' }, 'Clean, reshape, join and export spreadsheets with recorded steps you can replay on next month’s file. Visual transforms for everyday work, DuckDB SQL when you need the heavy machinery.'),
+      el('h2', { class: 'hero-title', id: 'heroTitle' }, 'New project'),
+      el('p', { class: 'hero-sub' }, 'Files are processed in this tab and are not uploaded.'),
       drop,
       el('div', { class: 'hero-row' },
-        el('button', { class: 'btn btn-primary', id: 'sampleBtn', onclick: loadSample }, icon('sparkles', 14), 'Try the sample project'),
+        el('button', { class: 'btn btn-primary', id: 'sampleBtn', onclick: loadSample }, icon('table', 14), 'Sample data'),
         el('button', { class: 'btn btn-ghost', onclick: () => importWithOptions(true) }, icon('settings', 14), 'Import with options'),
-        el('button', { class: 'btn btn-ghost', onclick: () => startTour({ force: true }) }, icon('play', 14), 'Take the tour')),
-      el('div', { class: 'hero-foot' }, icon('shield', 14), el('span', {}, 'Nothing leaves this tab. Files are never uploaded.'), el('span', { style: { marginLeft: 'auto' } }, el('a', { href: 'tests.html' }, 'Self-test')))),
+        el('button', { class: 'btn btn-ghost', onclick: () => startTour({ force: true }) }, icon('play', 14), 'Tour')),
+      el('div', { class: 'hero-foot' }, el('span', {}, `Duckbench 2 · ${engineLabel()}`), el('span', { style: { marginLeft: 'auto' } }, el('a', { href: 'tests.html' }, 'Self-test')))),
     el('div', { class: 'side-col' },
       resume,
-      el('div', { class: 'side-card' }, el('h3', {}, 'Start from'),
+      el('div', { class: 'side-card' }, el('h3', {}, 'Open'),
         el('div', { class: 'import-actions' },
-          action('clipboard', 'Open recipe', 'Replay a saved .duckbench.json', loadRecipeFile),
-          action('layers', 'Batch apply', 'One recipe, many files → ZIP', openBatch),
-          action('terminal', 'SQL console', 'Query files directly with DuckDB', () => openConsole()))),
-      el('div', { class: 'side-card duck-card' },
-        el('h3', {}, el('span', { class: 'duck-badge' }, icon('zap', 11), 'DuckDB-WASM')),
-        el('p', {}, 'For files from hundreds of MB to many GB. DuckDB reads them in place, with no full copy into memory.'),
-        el('div', { class: 'duck-feats' },
-          [['Pushdown SQL', 'zap'], ['Parquet / CSV / JSON', 'file'], ['Full-file export', 'download'], ['Remembers files', 'pin']].map(([t, i]) => el('span', {}, icon(i, 12), t))),
-        el('button', { class: 'btn btn-ghost btn-sm', onclick: () => openWithDuck(true) }, icon('database', 14), 'Open a large file with DuckDB'),
-        st === 'ready' ? null : el('span', { class: 'f-help', style: { display: 'block', marginTop: '8px' } }, 'Loaded on demand from cdn.jsdelivr.net.')))));
+          action('clipboard', 'Recipe', '.duckbench.json', loadRecipeFile),
+          action('layers', 'Batch apply', 'One recipe, many files', openBatch),
+          action('terminal', 'SQL console', 'DuckDB', () => openConsole()),
+          action('database', 'Large file', 'Opened with DuckDB, read in place', () => openWithDuck(true)))))));
   persist.getSession().then((sess) => {
     if (!sess?.json) return;
     let data; try { data = JSON.parse(sess.json); } catch { return; }
     if (!data.queries?.length) return;
-    clear(resume).append(el('h3', {}, 'Continue'), el('div', { class: 'resume-card' },
+    clear(resume).append(el('h3', {}, 'Resume'), el('div', { class: 'resume-card' },
       icon('database', 18),
       el('div', { class: 'resume-text' }, el('strong', {}, data.projectName || 'Previous session'), el('span', {}, `${data.queries.length} quer${data.queries.length === 1 ? 'y' : 'ies'} · ${data.queries.reduce((n, q) => n + q.steps.length, 0)} steps · ${fmtAgo(sess.at)}`)),
       el('button', { class: 'btn btn-primary btn-sm', onclick: () => resumeSession(data) }, 'Resume'),
@@ -490,7 +482,7 @@ function renderMast() {
   const st = duck.duckStatus();
   const pill = el('button', { class: `engine-pill is-${st}`, type: 'button', title: st === 'failed' ? duck.duckError() || 'DuckDB failed to load' : 'DuckDB engine', onclick: (e) => duckMenu(e.currentTarget) }, el('span', { class: 'dot' }), engineLabel());
   if (inBench) {
-    center.append(el('button', { class: 'btn btn-ghost btn-sm palette-btn', id: 'paletteBtn', onclick: openPalette, title: 'Command palette' }, icon('search', 14), el('span', {}, 'Search steps & commands'), el('kbd', {}, kbd('⌘K'))));
+    center.append(el('button', { class: 'btn btn-ghost btn-sm palette-btn', id: 'paletteBtn', onclick: openPalette, title: 'Command palette' }, icon('search', 14), el('span', {}, 'Actions'), el('kbd', {}, kbd('⌘K'))));
     nav.append(
       btn('undo', `Undo ${store.undoLabel()} (${kbd('⌘Z')})`, () => doUndo(), { disabled: !store.canUndo() }),
       btn('redo', `Redo ${store.redoLabel()} (${kbd('⌘⇧Z')})`, () => doRedo(), { disabled: !store.canRedo() }),
@@ -513,14 +505,12 @@ function renderMast() {
 function duckMenu(anchor) {
   const st = duck.duckStatus();
   menu(anchor, [
-    { header: st === 'ready' ? `DuckDB ${duck.duckVersion()} · ready` : st === 'loading' ? 'DuckDB · loading' : st === 'failed' ? 'DuckDB · failed to load' : 'DuckDB · not loaded yet' },
-    st !== 'ready' ? { label: st === 'failed' ? 'Retry loading DuckDB' : 'Load DuckDB now', icon: 'zap', disabled: st === 'loading', onClick: async () => { try { await duck.ensureDuck(); toast(`DuckDB ${duck.duckVersion()} ready`, { kind: 'success' }); } catch (e) { toast(e.message, { kind: 'error' }); } } } : null,
+    { header: st === 'ready' ? `DuckDB ${duck.duckVersion()} · ready` : st === 'loading' ? 'DuckDB · loading' : st === 'failed' ? 'DuckDB · failed to load' : 'DuckDB · not loaded' },
+    st !== 'ready' ? { label: st === 'failed' ? 'Retry' : 'Load DuckDB', icon: 'zap', disabled: st === 'loading', onClick: async () => { try { await duck.ensureDuck(); toast(`DuckDB ${duck.duckVersion()} ready`, { kind: 'success' }); } catch (e) { toast(e.message, { kind: 'error' }); } } } : null,
     { label: 'SQL console…', icon: 'terminal', hint: kbd('⌘J'), onClick: () => openConsole() },
-    { label: 'Open a large file with DuckDB…', icon: 'database', onClick: () => openWithDuck(!store.state.queries.length) },
+    { label: 'Open large file…', icon: 'database', onClick: () => openWithDuck(!store.state.queries.length) },
     store.activeQuery() ? { label: 'Add SQL step', icon: 'plus', onClick: () => { if ($('#workbench').hidden) return; addStep('sql'); } } : null,
     store.activeQuery() ? { label: 'Summarize this query with DuckDB', icon: 'chart', onClick: () => openSummarize() } : null,
-    '-',
-    { label: 'Runs locally in a Web Worker. Data never leaves the tab.', icon: 'shield', disabled: true },
   ], { align: 'end' });
 }
 
@@ -837,7 +827,7 @@ function headerMenu(field, anchor, pos) {
     { label: 'Unpivot', icon: 'unpivot', onClick: () => quick('unpivot', { columns: cols, mode: 'selected' }) },
     { label: 'Unpivot other columns', icon: 'unpivot', onClick: () => quick('unpivot', { columns: cols, mode: 'others' }) },
     '-',
-    { label: 'Freeze up to this column', icon: 'pin', onClick: () => setFrozen(ui.result.fields.findIndex(f => f.name === field.name) + 1) },
+    { label: 'Freeze to here', icon: 'pin', onClick: () => setFrozen(ui.result.fields.findIndex(f => f.name === field.name) + 1) },
     frozenFor(store.activeQuery()) ? { label: 'Unfreeze columns', icon: 'pin', onClick: () => setFrozen(0) } : null,
     { label: 'Duplicate column', icon: 'copy', disabled: many, onClick: () => quick('duplicate_column', { column: field.name, name: '' }) },
     { label: 'Keep only selected', icon: 'columns-keep', onClick: () => quick('select_columns', { columns: cols }) },
@@ -927,8 +917,8 @@ function openPalette() {
   const commands = [
     { label: 'Export…', icon: 'download', run: () => openExportDialog() },
     { label: 'SQL console', icon: 'terminal', kw: 'duckdb query adhoc', run: () => openConsole() },
-    { label: 'Summarize all columns (DuckDB)', icon: 'zap', kw: 'profile stats duckdb summarize', run: () => openSummarize() },
-    { label: 'Open a large file with DuckDB…', icon: 'database', kw: 'big parquet gb', run: () => openWithDuck(false) },
+    { label: 'Summarize columns', icon: 'zap', kw: 'profile stats duckdb summarize', run: () => openSummarize() },
+    { label: 'Open large file…', icon: 'database', kw: 'big parquet gb', run: () => openWithDuck(false) },
     { label: 'Freeze first column', icon: 'pin', kw: 'pin lock', run: () => setFrozen(1) },
     { label: 'Unfreeze columns', icon: 'pin', run: () => setFrozen(0) },
     { label: 'Save recipe', icon: 'save', run: saveRecipe },
@@ -981,7 +971,7 @@ function openExportMenu(anchor) {
     { label: 'Excel workbook', hint: '.xlsx', icon: 'table', onClick: () => quick('xlsx') },
     { label: 'Excel — every query as a sheet', hint: '.xlsx', icon: 'layers', onClick: () => quick('xlsx-all') },
     { label: 'Parquet', hint: '.parquet', icon: 'database', onClick: () => quick('parquet') },
-    { label: 'Parquet via DuckDB (ZSTD)', hint: '.parquet', icon: 'zap', onClick: () => quick('parquet-duck') },
+    { label: 'Parquet (DuckDB, ZSTD)', hint: '.parquet', icon: 'zap', onClick: () => quick('parquet-duck') },
     { label: 'JSON', hint: '.json', icon: 'file', onClick: () => quick('json') },
     { label: 'JSON Lines', hint: '.jsonl', icon: 'file', onClick: () => quick('jsonl') },
     '-',
@@ -989,7 +979,7 @@ function openExportMenu(anchor) {
     { label: 'Copy as SQL INSERT', icon: 'clipboard', onClick: () => runExport({ format: 'sql', clipboard: true, rowEnd: 1000 }) },
     '-',
     { label: 'Export options…', icon: 'settings', onClick: () => openExportDialog() },
-    store.activeQuery()?.source?.kind === 'duck' ? { label: 'Export full file via DuckDB…', icon: 'database', onClick: () => exportFullViaDuck() } : null,
+    store.activeQuery()?.source?.kind === 'duck' ? { label: 'Export full file…', icon: 'database', onClick: () => exportFullViaDuck() } : null,
   ], { align: 'end' });
 }
 
@@ -1290,7 +1280,7 @@ function openConsole(initial, { autorun = false } = {}) {
   const start = initial || history[0] || (q ? 'SELECT *\nFROM input\nLIMIT 100' : "SELECT 42 AS answer, 'hello duck' AS greeting");
   let fields = ui.result?.fields || [];
   const status = el('span', { class: 'console-status' }, duck.duckStatus() === 'ready' ? 'Ready' : 'DuckDB loads on first run');
-  const out = el('div', { class: 'console-result' }, el('div', { class: 'console-empty' }, q ? 'input is the active query at the step you are previewing. Every query is also a table:' : 'No project open. Pure SQL works, for example generate_series(1, 10).', q ? el('div', { class: 'sql-tables', style: { justifyContent: 'center', marginTop: '10px' } }, ['input', ...tables.map(t => t.name)].map(t => el('code', {}, t))) : null));
+  const out = el('div', { class: 'console-result' }, el('div', { class: 'console-empty' }, q ? 'Tables:' : 'No project open.', q ? el('div', { class: 'sql-tables', style: { justifyContent: 'center', marginTop: '10px' } }, ['input', ...tables.map(t => t.name)].map(t => el('code', {}, t))) : null));
   let last = null;
   const ed = sqlEditor({ value: start, rows: 9, autofocus: true, label: 'SQL query', getContext: () => ({ tables: ['input', ...tables.map(t => t.name)], columns: fields }), onRun: () => run() });
   const runBtn = el('button', { class: 'btn btn-primary btn-sm', onclick: () => run() }, icon('play', 13), 'Run', el('kbd', {}, kbd('\u2318\u21b5')));
@@ -1312,7 +1302,7 @@ function openConsole(initial, { autorun = false } = {}) {
       last = r;
       fields = r.fields.length ? r.fields : fields;
       clear(out).appendChild(r.rows ? resultTable(r) : el('div', { class: 'console-empty' }, 'No rows.'));
-      status.textContent = `${fmtCount(r.rows)}${r.truncated ? '+' : ''} row${r.rows === 1 ? '' : 's'} \u00b7 ${r.fields.length} col${r.fields.length === 1 ? '' : 's'} \u00b7 ${fmtMs(r.ms)}${r.truncated ? ' \u00b7 first 1,000 shown' : ''}`;
+      status.textContent = `${fmtCount(r.rows)}${r.truncated ? '+' : ''} row${r.rows === 1 ? '' : 's'} \u00b7 ${r.fields.length} col${r.fields.length === 1 ? '' : 's'} \u00b7 ${fmtMs(r.ms)}`;
       dlBtn.disabled = false;
       const h = [sqlText, ...history.filter(x => x !== sqlText)].slice(0, 20);
       history.splice(0, history.length, ...h);
@@ -1346,7 +1336,7 @@ async function openSummarize() {
   ui.rightMode = 'summary';
   rail.hidden = false; $('#splitRight').hidden = false;
   rail.classList.add('is-wide');
-  clear(rail).append(el('header', { class: 'rail-head' }, el('span', { class: 'duck-badge' }, icon('zap', 11), 'SQL'), el('div', { class: 'rail-title' }, el('h2', {}, 'Summarize'), el('span', {}, 'Every column, every row, computed by DuckDB')), el('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: closeRight }, icon('x', 16))), el('div', { class: 'rail-body' }, el('p', { class: 'f-help' }, duck.duckStatus() === 'ready' ? 'Computing\u2026' : 'Loading DuckDB\u2026')));
+  clear(rail).append(el('header', { class: 'rail-head' }, el('span', { class: 'duck-badge' }, icon('zap', 11), 'SQL'), el('div', { class: 'rail-title' }, el('h2', {}, 'Summarize'), el('span', {}, 'All rows · DuckDB')), el('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: closeRight }, icon('x', 16))), el('div', { class: 'rail-body' }, el('p', { class: 'f-help' }, duck.duckStatus() === 'ready' ? 'Running\u2026' : 'Loading DuckDB\u2026')));
   try {
     const r = await sql.adhoc({ sql: 'SUMMARIZE input', queries: [], inputQueryId: q.id, inputStep: store.cursor(), limit: 5000 });
     if (ui.rightMode !== 'summary') return;
@@ -1355,7 +1345,7 @@ async function openSummarize() {
     const labels = { column_name: 'Column', column_type: 'Type', min: 'Min', max: 'Max', approx_unique: 'Distinct\u2248', avg: 'Mean', q50: 'Median', null_percentage: 'Null %' };
     const short = (v) => { const s = v == null ? '\u2014' : String(v); return s.length > 22 ? s.slice(0, 21) + '\u2026' : s; };
     const table = el('table', { class: 'summ-table' }, el('thead', {}, el('tr', {}, keys.map(k => el('th', {}, labels[k])))), el('tbody', {}, Array.from({ length: r.rows }, (_, i) => el('tr', { style: { cursor: 'pointer' }, title: 'Open column profile', onclick: () => { rail.classList.remove('is-wide'); openProfile(r.columns[col('column_name')][i]); } }, keys.map(k => { const v = r.columns[col(k)][i]; return el('td', { title: v == null ? '' : String(v) }, k === 'avg' && v != null && !isNaN(v) ? String(Math.round(Number(v) * 1000) / 1000) : k === 'null_percentage' && v != null ? `${Math.round(Number(v) * 10) / 10}%` : short(v)); })))));
-    clear(rail.querySelector('.rail-body')).append(el('div', { style: { overflow: 'auto' } }, table), el('p', { class: 'f-help', style: { marginTop: '12px' } }, `${fmtMs(r.ms)} \u00b7 click a row for the detailed profile`),
+    clear(rail.querySelector('.rail-body')).append(el('div', { style: { overflow: 'auto' } }, table), el('p', { class: 'f-help', style: { marginTop: '12px' } }, fmtMs(r.ms)),
       el('button', { class: 'btn btn-ghost btn-sm', style: { marginTop: '8px' }, onclick: () => openConsole('SUMMARIZE input') }, icon('terminal', 13), 'Open in SQL console'));
   } catch (e) {
     if (ui.rightMode !== 'summary') return;

@@ -60,13 +60,20 @@ No backend, no build step, no data tables. Hosting is static.
 - **Freeze columns** from the toolbar, the header menu, the View tab or the palette. Remembered per query.
 - **Resizable side panels.** Drag, use the arrow keys, or double-click to reset. Widths are remembered.
 
-## Visual system: "Night Moss & Bill"
-- **Dark.** Near-black olive surfaces (`#0c0d0b` canvas, `#151713` panels). A chartreuse accent `#d2e46e` that echoes the sage logo tile, but with more energy. A warm duck-bill orange `#f2a65a` marks SQL/DuckDB, changes and warnings. Sky, orchid and mint distinguish numbers, dates and true/false.
-- **Light.** Warm paper `#ecebe3` with a deep moss accent `#4f6a12` and burnt-orange `#c4621a`.
-- **Type.** Bricolage Grotesque for display, Instrument Sans for UI, JetBrains Mono for data and code.
-- **Surfaces.** Soft radial glows, layered shadows, 14–20 px radii, uppercase mono section labels, and a centred command bar.
-- **Logo.** The uploaded sage duck tile is used as both logo and favicon.
-- **Start screen.** A hero with the drop zone and quick actions, plus side cards for resume, recipes/batch/console and DuckDB.
+## Visual system: Raycast neutrals + coral
+- **One accent.** Coral `#F76061` marks primary actions, the selection, the active step and errors. Nothing else uses it.
+- **Neutrals.**
+  - Dark: `#111111` canvas, `#1a1a1a` panels, `#F7F7F7` text.
+  - Light: `#F7F7F7` canvas, `#ffffff` panels, `#1b1b1b` text.
+- **Data colours** are low-chroma, so the grid stays calm:
+  - numbers: mist blue `#9dbbe0`
+  - dates and SQL/DuckDB: lavender `#c9b7e6`
+  - true: sage `#a3d1b0`
+  - changed cells, untrimmed text and warnings: sand `#e3b98f`
+- **No glows, gradients or display type.** Instrument Sans for UI, JetBrains Mono for data and code. Labels are sentence case.
+- **Copy** is short and functional: labels name the thing, with no taglines.
+- **Logo and favicon:** the duck mark in `#F7F7F7` on a coral `#F76061` tile.
+- **Icons:** neutral grey at rest; coral on hover and when active. Data-type colours appear only on type badges and cell values.
 
 ## Files
 | Path | Purpose |

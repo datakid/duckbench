@@ -90,4 +90,4 @@ export function icon(name, size = 16, cls = '') {
   return t.content.firstChild;
 }
 
-export const LOGO = `<svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#c6cc9e"/><g fill="#181a11"><rect x="11" y="40" width="8" height="13" rx="4"/><rect x="23" y="32" width="8" height="21" rx="4"/><path d="M35 49V30.5A10 10 0 1 1 48.6 18L55 19.1Q57.4 21.3 54.7 23.7L47.9 26.2A10 10 0 0 1 43 30.5V49A4 4 0 0 1 35 49Z"/></g><circle cx="44" cy="18" r="2.4" fill="#c6cc9e"/></svg>`;
+export const LOGO = `<svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#F76061"/><g fill="#F7F7F7"><rect x="11" y="40" width="8" height="13" rx="4"/><rect x="23" y="32" width="8" height="21" rx="4"/><path d="M35 49V30.5A10 10 0 1 1 48.6 18L55 19.1Q57.4 21.3 54.7 23.7L47.9 26.2A10 10 0 0 1 43 30.5V49A4 4 0 0 1 35 49Z"/></g><circle cx="44" cy="18" r="2.4" fill="#F76061"/></svg>`;

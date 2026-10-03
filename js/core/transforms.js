@@ -1606,7 +1606,7 @@ def('sql', {
   ribbon: { tab: 'transform', group: 'SQL', size: 'large' },
   keywords: 'sql duckdb select query custom raw_sql',
   params: [
-    { key: 'sql', type: 'code', label: 'Query', default: 'SELECT *\nFROM input', help: 'Runs in DuckDB. The current data is the table input. Other queries listed below are available by name.' },
+    { key: 'sql', type: 'code', label: 'Query', default: 'SELECT *\nFROM input', help: 'DuckDB. The current data is input.' },
     { key: 'tables', type: 'queries', label: 'Also expose these queries as tables', default: () => [] },
   ],
   migrate(d) { return d.sql != null ? { sql: d.sql, tables: d.tables || [] } : { sql: d.query || d.raw || 'SELECT * FROM input', tables: [] }; },

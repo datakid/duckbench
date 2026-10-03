@@ -84,7 +84,7 @@ export function createSqlRunner(client, { onStatus } = {}) {
     try {
       const { sql } = await buildSql(input, v.sql);
       const r = await duck.runQuery(sql, { maxRows: MAX_ROWS_BACK + 1 });
-      if (r.truncated || r.rows > MAX_ROWS_BACK) throw new Error(`The query returns more than ${MAX_ROWS_BACK.toLocaleString()} rows. Add a filter or aggregation, or use “Export full file via DuckDB”.`);
+      if (r.truncated || r.rows > MAX_ROWS_BACK) throw new Error(`The query returns more than ${MAX_ROWS_BACK.toLocaleString()} rows. Add a filter or aggregation.`);
       await client.call('putSqlResult', { key: need.key, fields: dedupe(r.fields), columns: r.columns, note: null }, { track: false, label: 'Running SQL' });
     } catch (e) {
       await client.call('putSqlResult', { key: need.key, error: cleanError(e) }, { track: false });
@@ -101,7 +101,7 @@ export function createSqlRunner(client, { onStatus } = {}) {
       if (r.truncated) {
         let total = null;
         try { total = await duck.countRows(sql); } catch {}
-        note = `Large file: showing the first ${take.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''} rows. Steps run on this slice; SQL steps at the top run on every row, and “Export full file via DuckDB” writes all of them.`;
+        note = `First ${take.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''} rows. Leading SQL steps and full-file export use every row.`;
       }
       await client.call('putSqlResult', { key: need.key, fields: dedupe(r.fields), columns: r.columns, note }, { track: false });
     } catch (e) {

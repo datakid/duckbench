@@ -1,4 +1,4 @@
-import { el, clear, put } from './dom.js';
+import { el, clear, put, kbd } from './dom.js';
 import { icon } from './icons.js';
 import { TYPE_BADGES, isNumeric, isTemporal } from '../core/types.js';
 import { FORMULA_FUNCTIONS } from '../core/formula.js';
@@ -109,11 +109,11 @@ function field(p, data, ctx, set, rerender) {
     case 'code': {
       const tables = ['input', ...(ctx.sqlTables || [])];
       const ed = sqlEditor({ value: v ?? '', rows: 10, fkey: p.key, label: p.label, getContext: () => ({ tables, columns: fields }), onChange: (val) => set(val), onRun: () => ctx.onRunSql?.() });
-      const snippets = el('select', { class: 'input input-sm sql-snippets', 'aria-label': 'Insert a pattern' }, el('option', { value: '' }, 'Insert a pattern…'), SQL_SNIPPETS.map((s, i) => el('option', { value: String(i) }, s.label)));
+      const snippets = el('select', { class: 'input input-sm sql-snippets', 'aria-label': 'Insert a pattern' }, el('option', { value: '' }, 'Patterns…'), SQL_SNIPPETS.map((s, i) => el('option', { value: String(i) }, s.label)));
       snippets.addEventListener('change', () => { const s = SQL_SNIPPETS[Number(snippets.value)]; if (s) ed.setValue(s.sql); snippets.value = ''; });
       const cols = el('div', { class: 'sql-cols' }, fields.slice(0, 80).map(f => el('button', { type: 'button', class: 'chip chip-btn', title: `Insert "${f.name}"`, onclick: () => ed.insert(/^[a-z_][a-z0-9_]*$/.test(f.name) ? f.name : `"${f.name.replace(/"/g, '""')}"`) }, el('span', { class: `chip-type type-${f.type}` }, TYPE_BADGES[f.type] || ''), f.name)));
       put(wrap, 
-        el('div', { class: 'f-label' }, el('span', {}, p.label), el('span', { class: 'f-count' }, 'Ctrl/⌘ Enter runs · Ctrl Space suggests')),
+        el('div', { class: 'f-label' }, el('span', {}, p.label), el('span', { class: 'f-count' }, kbd('⌘↵'))),
         ed,
         el('div', { class: 'sql-info' },
           el('div', { class: 'sql-info-row' }, el('span', { class: 'sql-tables' }, tables.map(t => el('code', {}, t))), snippets),
