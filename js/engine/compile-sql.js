@@ -384,7 +384,46 @@ function pivot(d, fields, types, ctx) {
   return { sql, fields: [...gcols.map(n => ({ name: n, type: types.get(n) })), ...names.map(n => ({ name: n, type: outType }))] };
 }
 
+const TEXTABLE = new Set(['text', 'integer', 'boolean', 'date']);
+const asText = (c, t) => (t === 'text' ? c : `CAST(${c} AS VARCHAR)`);
+const blankOf = (c, t) => (t === 'text' ? `(${c} IS NULL OR trim(${c}) = '')` : `(${c} IS NULL)`);
+
+function mergeColumns(d, fields, types) {
+  const cols = d.columns || [];
+  if (cols.length < 2 || !d.name?.trim() || cols.some(c => !types.has(c) || !TEXTABLE.has(types.get(c)))) return null;
+  const sep = sqlStr(unescapeDelimiter(d.separator ?? ''));
+  const skip = d.skipEmpty !== false;
+  const parts = cols.map(c => { const q = qi(c), t = types.get(c); return skip ? `CASE WHEN ${blankOf(q, t)} THEN NULL ELSE ${asText(q, t)} END` : `coalesce(${asText(q, t)}, '')`; });
+  const expr = bind(`list_filter([${parts.join(', ')}], __db_m -> __db_m IS NOT NULL)`, (l) => `CASE WHEN len(${l}) = 0 THEN NULL ELSE array_to_string(${l}, ${sep}) END`);
+  const rest = d.keepOriginal ? fields : fields.filter(f => !cols.includes(f.name));
+  const name = uniqueName(d.name.trim(), rest.map(f => f.name), ' ');
+  const at = d.keepOriginal ? fields.length : Math.min(...cols.map(c => fields.findIndex(f => f.name === c)));
+  const out = rest.map(f => ({ sel: qi(f.name), f }));
+  out.splice(at, 0, { sel: `${expr} AS ${qi(name)}`, f: { name, type: 'text' } });
+  return { sql: `SELECT ${out.map(o => o.sel).join(', ')} FROM input`, fields: out.map(o => o.f) };
+}
+
+function unpivotStep(d, fields, types) {
+  if (!d.columns?.length || d.columns.some(c => !types.has(c))) return null;
+  const melt = d.mode === 'others' ? fields.map(f => f.name).filter(n => !d.columns.includes(n)) : d.columns;
+  if (!melt.length) return null;
+  const keep = fields.map(f => f.name).filter(n => !melt.includes(n));
+  const nameCol = d.nameColumn?.trim(), valCol = d.valueColumn?.trim();
+  if (!nameCol || !valCol || nameCol === valCol || keep.includes(nameCol) || keep.includes(valCol)) return null;
+  let vt = null;
+  for (const m of melt) { const t = types.get(m); vt = vt == null || vt === t ? t : isNumeric(vt) && isNumeric(t) ? 'number' : (vt === 'date' || vt === 'datetime') && (t === 'date' || t === 'datetime') ? 'datetime' : 'text'; }
+  const sqlT = { text: 'VARCHAR', integer: 'BIGINT', number: 'DOUBLE', boolean: 'BOOLEAN', date: 'DATE', datetime: 'TIMESTAMP' }[vt];
+  if (vt === 'text' && melt.some(m => !TEXTABLE.has(types.get(m)))) return null;
+  const k = keep.map(qi).join(', ');
+  const arms = melt.map((m, i) => `SELECT ${k ? k + ', ' : ''}${sqlStr(m)} AS ${qi(nameCol)}, CAST(${qi(m)} AS ${sqlT}) AS ${qi(valCol)}, __db_rn, ${i} AS __db_k FROM __db_b${d.keepEmpty ? '' : ` WHERE NOT ${blankOf(qi(m), types.get(m))}`}`);
+  const outCols = [...keep.map(qi), qi(nameCol), qi(valCol)].join(', ');
+  return {
+    sql: `WITH __db_b AS (SELECT *, row_number() OVER () AS __db_rn FROM input) SELECT ${outCols} FROM (${arms.join(' UNION ALL ')}) u ORDER BY __db_rn, __db_k`,
+    fields: [...keep.map(n => ({ name: n, type: types.get(n) })), { name: nameCol, type: 'text' }, { name: valCol, type: vt }],
+  };
+}
+
 const resetting = (fn) => (...a) => { seq = 0; return fn(...a); };
-export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot }).map(([k, f]) => [k, resetting(f)]));
+export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep }).map(([k, f]) => [k, resetting(f)]));
 export const MORE_HELPERS = { bind, project, WS, NUM };
 

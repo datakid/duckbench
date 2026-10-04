@@ -31,7 +31,7 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 **Large files**
 - CSV files up to about 1 GB are streamed into memory
 - Larger files, or any file opened with "Open with DuckDB", are queried in place
-- On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, group by, joins and pivots
+- On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, merge, group by, joins, pivots and unpivots
 - Steps that can't be translated exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB.
 - Full-file export to Parquet (ZSTD), CSV, JSON or JSONL
 
@@ -154,7 +154,7 @@ cd desktop && cargo test --manifest-path src-tauri/Cargo.toml
 
 ## Roadmap
 
-- Translate unpivot, merge columns, extract text and date parts to SQL
+- Translate extract text, date parts and window columns to SQL
 - Full and right joins, and loose key matching, in SQL
 - Open `.xls` and `.ods` files with DuckDB
 - Recent files on desktop

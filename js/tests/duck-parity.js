@@ -37,6 +37,11 @@ const CASES = [
   ['join semi', 's', { type: 'join', data: { rightSource: 'r', joinType: 'left_semi', keys: [{ left: 'region', right: 'region' }] } }],
   ['pivot sum by quantity', 's', { type: 'pivot', data: { onColumn: 'quantity', valueColumn: 'unit_price', fn: 'sum', groupColumns: ['region'] } }],
   ['pivot count fill 0', 's', { type: 'pivot', data: { onColumn: 'quantity', valueColumn: 'order_id', fn: 'count', groupColumns: ['category'], fillZero: true } }],
+  ['merge columns skip empty', 's', { type: 'merge_columns', data: { columns: ['customer', 'region', 'quantity'], separator: ' / ', name: 'label', skipEmpty: true } }],
+  ['merge columns keep original', 's', { type: 'merge_columns', data: { columns: ['order_date', 'status'], separator: '-', name: 'status', skipEmpty: false, keepOriginal: true } }],
+  ['merge decimal refuses', 's', { type: 'merge_columns', data: { columns: ['customer', 'unit_price'], separator: ' ', name: 'x' } }, 'refuse'],
+  ['unpivot selected', 's', { type: 'unpivot', data: { mode: 'selected', columns: ['quantity', 'unit_price', 'discount'], nameColumn: 'Attribute', valueColumn: 'Value' } }],
+  ['unpivot others keep empty', 'x', { type: 'unpivot', data: { mode: 'others', columns: ['id'], nameColumn: 'Attribute', valueColumn: 'Value', keepEmpty: true } }],
   ['pivot first', 's', { type: 'pivot', data: { onColumn: 'quantity', valueColumn: 'customer', fn: 'first', groupColumns: ['region'] } }],
 ];
 
