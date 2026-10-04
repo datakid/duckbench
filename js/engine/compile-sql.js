@@ -423,7 +423,32 @@ function unpivotStep(d, fields, types) {
   };
 }
 
+const DATE_SQL = {
+  year: ['integer', c => `year(${c})`], quarter: ['integer', c => `quarter(${c})`], month: ['integer', c => `month(${c})`],
+  day: ['integer', c => `day(${c})`], weekday: ['integer', c => `isodow(${c})`], day_of_year: ['integer', c => `dayofyear(${c})`],
+  week: ['integer', c => `weekofyear(${c})`], hour: ['integer', c => `hour(${c})`], minute: ['integer', c => `minute(${c})`],
+  month_name: ['text', c => `monthname(${c})`], day_name: ['text', c => `dayname(${c})`],
+  year_month: ['text', c => `CAST(year(${c}) AS VARCHAR) || '-' || lpad(CAST(month(${c}) AS VARCHAR), 2, '0')`],
+  date_only: ['date', c => `CAST(${c} AS DATE)`], start_of_week: ['date', c => `CAST(date_trunc('week', ${c}) AS DATE)`],
+  start_of_month: ['date', c => `CAST(date_trunc('month', ${c}) AS DATE)`], end_of_month: ['date', c => `last_day(${c})`],
+  start_of_quarter: ['date', c => `CAST(date_trunc('quarter', ${c}) AS DATE)`], start_of_year: ['date', c => `CAST(date_trunc('year', ${c}) AS DATE)`],
+};
+
+function datePartStep(d, fields, types) {
+  const t = types.get(d.column), spec = DATE_SQL[d.part || 'year'];
+  if (!spec || (t !== 'date' && t !== 'datetime')) return null;
+  const [type, fn] = spec;
+  const e = type === 'integer' ? `CAST(${fn(qi(d.column))} AS BIGINT)` : fn(qi(d.column));
+  const name = d.name?.trim();
+  if (!name) return { sql: `SELECT ${project(fields, new Map([[d.column, e]]))} FROM input`, fields: fields.map(f => (f.name === d.column ? { name: f.name, type } : f)) };
+  const nn = uniqueName(name, fields.map(f => f.name), ' ');
+  const at = fields.findIndex(f => f.name === d.column) + 1;
+  const out = fields.map(f => ({ sel: qi(f.name), f }));
+  out.splice(at, 0, { sel: `${e} AS ${qi(nn)}`, f: { name: nn, type } });
+  return { sql: `SELECT ${out.map(o => o.sel).join(', ')} FROM input`, fields: out.map(o => o.f) };
+}
+
 const resetting = (fn) => (...a) => { seq = 0; return fn(...a); };
-export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep }).map(([k, f]) => [k, resetting(f)]));
+export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep }).map(([k, f]) => [k, resetting(f)]));
 export const MORE_HELPERS = { bind, project, WS, NUM };
 

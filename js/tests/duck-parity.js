@@ -42,6 +42,8 @@ const CASES = [
   ['merge decimal refuses', 's', { type: 'merge_columns', data: { columns: ['customer', 'unit_price'], separator: ' ', name: 'x' } }, 'refuse'],
   ['unpivot selected', 's', { type: 'unpivot', data: { mode: 'selected', columns: ['quantity', 'unit_price', 'discount'], nameColumn: 'Attribute', valueColumn: 'Value' } }],
   ['unpivot others keep empty', 'x', { type: 'unpivot', data: { mode: 'others', columns: ['id'], nameColumn: 'Attribute', valueColumn: 'Value', keepEmpty: true } }],
+  ...['year', 'quarter', 'month', 'day', 'weekday', 'day_of_year', 'week', 'month_name', 'day_name', 'year_month', 'start_of_week', 'start_of_month', 'end_of_month', 'start_of_quarter', 'start_of_year'].map(p => [`date_part ${p}`, 's', { type: 'date_part', data: { column: 'order_date', part: p, name: p === 'month' ? '' : `${p}_x` } }]),
+  ['date_part on text refuses', 'x', { type: 'date_part', data: { column: 'when_txt', part: 'year' } }, 'refuse'],
   ['pivot first', 's', { type: 'pivot', data: { onColumn: 'quantity', valueColumn: 'customer', fn: 'first', groupColumns: ['region'] } }],
 ];
 
