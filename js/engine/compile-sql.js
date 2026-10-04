@@ -448,7 +448,40 @@ function datePartStep(d, fields, types) {
   return { sql: `SELECT ${out.map(o => o.sel).join(', ')} FROM input`, fields: out.map(o => o.f) };
 }
 
+function indexColumn(d, fields, types) {
+  const name = d.name?.trim();
+  if (!name || types.has(name) || (d.partitionBy || []).some(p => !types.has(p))) return null;
+  const start = Number(d.start ?? 1), step = Number(d.step ?? 1) || 1;
+  if (!Number.isFinite(start) || !Number.isFinite(step)) return null;
+  const isInt = Number.isInteger(start) && Number.isInteger(step);
+  const part = d.partitionBy?.length ? `PARTITION BY ${d.partitionBy.map(qi).join(', ')} ` : '';
+  const e = `CAST(${start} + (row_number() OVER (${part}ORDER BY __db_rn) - 1) * ${step} AS ${isInt ? 'BIGINT' : 'DOUBLE'})`;
+  return {
+    sql: `SELECT ${e} AS ${qi(name)}, ${fields.map(f => qi(f.name)).join(', ')} FROM (SELECT *, row_number() OVER () AS __db_rn FROM input) t ORDER BY __db_rn`,
+    fields: [{ name, type: isInt ? 'integer' : 'number' }, ...fields],
+  };
+}
+
+function duplicateColumn(d, fields, types) {
+  if (!types.has(d.column)) return null;
+  const name = uniqueName(d.name?.trim() || `${d.column} (copy)`, fields.map(f => f.name), ' ');
+  const at = fields.findIndex(f => f.name === d.column) + 1;
+  const out = fields.map(f => ({ sel: qi(f.name), f }));
+  out.splice(at, 0, { sel: `${qi(d.column)} AS ${qi(name)}`, f: { name, type: types.get(d.column) } });
+  return { sql: `SELECT ${out.map(o => o.sel).join(', ')} FROM input`, fields: out.map(o => o.f) };
+}
+
+function moveColumn(d, fields, types) {
+  const cols = d.columns || [];
+  if (!cols.length || cols.some(c => !types.has(c))) return null;
+  if ((d.to === 'before' || d.to === 'after') && (!types.has(d.target) || cols.includes(d.target))) return null;
+  const rest = fields.map(f => f.name).filter(n => !cols.includes(n));
+  const at = d.to === 'start' ? 0 : d.to === 'end' ? rest.length : rest.indexOf(d.target) + (d.to === 'after' ? 1 : 0);
+  rest.splice(at, 0, ...cols);
+  return { sql: `SELECT ${rest.map(qi).join(', ')} FROM input`, fields: rest.map(n => ({ name: n, type: types.get(n) })) };
+}
+
 const resetting = (fn) => (...a) => { seq = 0; return fn(...a); };
-export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep }).map(([k, f]) => [k, resetting(f)]));
+export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep, index_column: indexColumn, duplicate_column: duplicateColumn, move_column: moveColumn }).map(([k, f]) => [k, resetting(f)]));
 export const MORE_HELPERS = { bind, project, WS, NUM };
 

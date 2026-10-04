@@ -44,6 +44,11 @@ const CASES = [
   ['unpivot others keep empty', 'x', { type: 'unpivot', data: { mode: 'others', columns: ['id'], nameColumn: 'Attribute', valueColumn: 'Value', keepEmpty: true } }],
   ...['year', 'quarter', 'month', 'day', 'weekday', 'day_of_year', 'week', 'month_name', 'day_name', 'year_month', 'start_of_week', 'start_of_month', 'end_of_month', 'start_of_quarter', 'start_of_year'].map(p => [`date_part ${p}`, 's', { type: 'date_part', data: { column: 'order_date', part: p, name: p === 'month' ? '' : `${p}_x` } }]),
   ['date_part on text refuses', 'x', { type: 'date_part', data: { column: 'when_txt', part: 'year' } }, 'refuse'],
+  ['index column', 's', { type: 'index_column', data: { name: 'Index', start: 1, step: 1 } }],
+  ['index column per region, step 0.5', 's', { type: 'index_column', data: { name: 'n', start: 10, step: 0.5, partitionBy: ['region'] } }],
+  ['duplicate column', 's', { type: 'duplicate_column', data: { column: 'quantity' } }],
+  ['move columns after', 's', { type: 'move_column', data: { columns: ['status', 'discount'], to: 'after', target: 'customer' } }],
+  ['move column to end', 's', { type: 'move_column', data: { columns: ['order_id'], to: 'end' } }],
   ['pivot first', 's', { type: 'pivot', data: { onColumn: 'quantity', valueColumn: 'customer', fn: 'first', groupColumns: ['region'] } }],
 ];
 
