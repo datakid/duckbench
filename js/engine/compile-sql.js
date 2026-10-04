@@ -481,7 +481,24 @@ function moveColumn(d, fields, types) {
   return { sql: `SELECT ${rest.map(qi).join(', ')} FROM input`, fields: rest.map(n => ({ name: n, type: types.get(n) })) };
 }
 
+function replaceNulls(d, fields, types) {
+  if (!d.columns?.length || d.columns.some(c => !types.has(c))) return null;
+  const raw = d.value ?? '';
+  const map = new Map();
+  for (const name of d.columns) {
+    const c = qi(name), t = types.get(name);
+    if (t === 'text') { map.set(name, `CASE WHEN ${c} IS NULL OR ${jsTrim(c)} = '' THEN ${sqlStr(raw)} ELSE ${c} END`); continue; }
+    if (raw === '') continue;
+    const v = literalFor(raw, t);
+    if (v === undefined || (t === 'integer' && !Number.isInteger(v))) return null;
+    const L = lit(v, t);
+    if (L == null) return null;
+    map.set(name, `coalesce(${c}, ${L})`);
+  }
+  return { sql: map.size ? `SELECT ${project(fields, map)} FROM input` : 'SELECT * FROM input', fields };
+}
+
 const resetting = (fn) => (...a) => { seq = 0; return fn(...a); };
-export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep, index_column: indexColumn, duplicate_column: duplicateColumn, move_column: moveColumn }).map(([k, f]) => [k, resetting(f)]));
+export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep, index_column: indexColumn, duplicate_column: duplicateColumn, move_column: moveColumn, replace_nulls: replaceNulls }).map(([k, f]) => [k, resetting(f)]));
 export const MORE_HELPERS = { bind, project, WS, NUM };
 

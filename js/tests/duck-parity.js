@@ -49,6 +49,9 @@ const CASES = [
   ['duplicate column', 's', { type: 'duplicate_column', data: { column: 'quantity' } }],
   ['move columns after', 's', { type: 'move_column', data: { columns: ['status', 'discount'], to: 'after', target: 'customer' } }],
   ['move column to end', 's', { type: 'move_column', data: { columns: ['order_id'], to: 'end' } }],
+  ['replace empty text + number', 's', { type: 'replace_nulls', data: { columns: ['customer', 'discount'], value: '0' } }],
+  ['replace empty with blank', 'x', { type: 'replace_nulls', data: { columns: ['name', 'id'], value: '' } }],
+  ['replace empty invalid number refuses', 's', { type: 'replace_nulls', data: { columns: ['discount'], value: 'n/a' } }, 'refuse'],
   ['pivot first', 's', { type: 'pivot', data: { onColumn: 'quantity', valueColumn: 'customer', fn: 'first', groupColumns: ['region'] } }],
 ];
 

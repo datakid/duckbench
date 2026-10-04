@@ -31,7 +31,7 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 **Large files**
 - CSV files up to about 1 GB are streamed into memory
 - Larger files, or any file opened with "Open with DuckDB", are queried in place
-- On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, merge, date parts, group by, joins, pivots and unpivots
+- On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, merge, date parts, index/duplicate/move columns, fill empty values, group by, joins, pivots and unpivots
 - Steps that can't be translated exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB.
 - Full-file export to Parquet (ZSTD), CSV, JSON or JSONL
 
