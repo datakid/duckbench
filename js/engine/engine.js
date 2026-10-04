@@ -20,8 +20,8 @@ export class Engine {
     this.duckSchemas = new Map();
   }
 
-  putDuckSchema({ key, fields, error }) {
-    this.duckSchemas.set(key, error ? { error } : { fields });
+  putDuckSchema({ key, fields, error, value }) {
+    this.duckSchemas.set(key, error ? { error } : value !== undefined ? { value } : { fields });
     while (this.duckSchemas.size > 64) this.duckSchemas.delete(this.duckSchemas.keys().next().value);
     return true;
   }
@@ -30,7 +30,16 @@ export class Engine {
     return this.duckSchemas.get('schema:' + hashString(sql)) || null;
   }
 
-  _duckPlan(q, upto, stopAt = Infinity) {
+  _depPlan(id, depth) {
+    const dq = this.queries.get(id);
+    if (!dq || dq.source?.kind !== 'duck' || depth > 4) return { none: true };
+    const p = this._duckPlan(dq, dq.steps.length - 1, Infinity, depth + 1);
+    if (p.needsSchema) return { need: p.needsSchema };
+    if (p.count < dq.steps.length || !p.schema?.fields) return { none: true };
+    return { sql: p.sql, fields: p.schema.fields };
+  }
+
+  _duckPlan(q, upto, stopAt = Infinity, depth = 0) {
     let sql = q.source.sql;
     let schema = this._schemaFor(sql);
     let count = 0, pushed = 0;
@@ -51,17 +60,33 @@ export class Engine {
       if (!mayCompile(s)) break;
       if (!schema) return { needsSchema: sql, sql, count, pushed };
       if (schema.error) break;
-      const c = compileStep(s, schema.fields);
+      let missing = null;
+      const ctx = {
+        probe: (p) => {
+          const full = withInput(sql, p);
+          const hit = this.duckSchemas.get('probe:' + hashString(full));
+          if (!hit) { missing = missing || { probe: full }; return null; }
+          return hit.error ? null : hit.value;
+        },
+        dep: (id) => {
+          const d = this._depPlan(id, depth);
+          if (d.need) { missing = missing || { schema: d.need }; return null; }
+          return d.none ? null : d;
+        },
+      };
+      const c = compileStep(s, schema.fields, ctx);
+      if (missing) return missing.probe ? { needsProbe: missing.probe, sql, count, pushed } : { needsSchema: missing.schema, sql, count, pushed };
       if (!c) break;
       sql = withInput(sql, c.sql);
       schema = { fields: c.fields };
       count = i + 1; pushed++;
     }
     while (count > 0 && q.steps[count - 1].disabled) count--;
-    return { sql, count, pushed };
+    return { sql, count, pushed, schema };
   }
 
-  _schemaNeed(q, sql) {
+  _schemaNeed(q, sql, probe) {
+    if (probe) return { key: 'probe:' + hashString(probe), queryId: q.id, probe };
     return { key: 'schema:' + hashString(sql), queryId: q.id, schema: sql };
   }
 
@@ -70,7 +95,7 @@ export class Engine {
     if (!q || q.source?.kind !== 'duck') return { error: 'This query is not backed by DuckDB.' };
     const upto = stepIndex == null ? q.steps.length - 1 : stepIndex;
     const plan = this._duckPlan(q, upto);
-    if (plan.needsSchema) return { needsSql: this._schemaNeed(q, plan.needsSchema) };
+    if (plan.needsSchema || plan.needsProbe) return { needsSql: this._schemaNeed(q, plan.needsSchema, plan.needsProbe) };
     const active = q.steps.slice(0, upto + 1).filter(s => !s.disabled).length;
     const rest = q.steps.slice(plan.count, upto + 1).filter(s => !s.disabled);
     return { sql: plan.sql, pushed: plan.pushed, active, complete: rest.length === 0, blockedAt: rest.length ? q.steps.indexOf(rest[0]) : -1 };
@@ -108,7 +133,7 @@ export class Engine {
     const upto = stepIndex == null ? q.steps.length - 1 : stepIndex;
     if (q.source?.kind === 'duck') {
       const plan = this._duckPlan(q, upto);
-      if (plan.needsSchema) return { needsSql: this._schemaNeed(q, plan.needsSchema) };
+      if (plan.needsSchema || plan.needsProbe) return { needsSql: this._schemaNeed(q, plan.needsSchema, plan.needsProbe) };
       if (!q.steps.slice(plan.count, upto + 1).some(s => !s.disabled)) return { pushdown: plan.sql };
     }
     const r = this._run(q, upto, null);
@@ -236,7 +261,7 @@ export class Engine {
     if (q.source?.kind === 'duck') {
       const stop = override ? Math.min(override.index ?? Infinity, override.insertAt ?? Infinity) : Infinity;
       const plan = this._duckPlan(q, upto, stop);
-      if (plan.needsSchema) return { error: 'Reading the file schema…', errorIndex: -1, diag, frame: null, key: null, needsSql: this._schemaNeed(q, plan.needsSchema) };
+      if (plan.needsSchema || plan.needsProbe) return { error: 'Reading the file schema…', errorIndex: -1, diag, frame: null, key: null, needsSql: this._schemaNeed(q, plan.needsSchema, plan.needsProbe) };
       try { base = this._duckBase(q, plan); } catch (e) {
         const at = e.pushedError ? plan.count - 1 : -1;
         for (let i = 0; i < plan.count; i++) diag.push(i === at ? { error: e.message, pushed: true } : { pushed: true });

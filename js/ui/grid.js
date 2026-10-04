@@ -93,18 +93,18 @@ export class Grid {
 
   autoWidths(page) {
     const ctx = Grid.measureCtx || (Grid.measureCtx = document.createElement('canvas').getContext('2d'));
-    ctx.font = '13px "IBM Plex Sans", system-ui, sans-serif';
+    ctx.font = '12.5px "Instrument Sans", system-ui, sans-serif';
     this.fields.forEach((f, c) => {
       if (this.widths.has(f.name)) return;
-      ctx.font = '600 12.5px "IBM Plex Sans", system-ui, sans-serif';
-      let w = ctx.measureText(f.name).width + 64;
-      ctx.font = (isNumeric(f.type) ? '12.5px "IBM Plex Mono", monospace' : '13px "IBM Plex Sans", system-ui, sans-serif');
+      ctx.font = '600 12px "Instrument Sans", system-ui, sans-serif';
+      let w = ctx.measureText(f.name).width + 90;
+      ctx.font = (isNumeric(f.type) ? '12px "JetBrains Mono", monospace' : '12.5px "Instrument Sans", system-ui, sans-serif');
       const rows = page?.rows || [];
       for (let r = 0; r < Math.min(rows.length, 80); r++) {
         const v = rows[r][c];
         if (v == null) continue;
         const s = formatValue(v, f.type);
-        w = Math.max(w, ctx.measureText(s.length > 60 ? s.slice(0, 60) : s).width + 24);
+        w = Math.max(w, ctx.measureText(s.length > 60 ? s.slice(0, 60) : s).width + 28);
       }
       this.widths.set(f.name, Math.round(Math.min(MAX_AUTO_W, Math.max(MIN_W + 20, w))));
     });

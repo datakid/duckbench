@@ -10,7 +10,9 @@ const web = resolve(desktop, '..');
 const dist = join(desktop, 'dist');
 const require = createRequire(join(desktop, 'package.json'));
 
-const WEB_ENTRIES = ['index.html', 'demo.html', 'tests.html', 'selftest.html', 'favicon.svg', 'css', 'fonts', 'js', 'vendor'];
+const WEB_ENTRIES = ['index.html', 'demo.html', 'tests.html', 'parity.html', 'selftest.html', 'favicon.svg', 'css', 'fonts', 'js', 'vendor'];
+const DUCKDB_VERSION = '1.4.3';
+const EXCEL_EXT = ['wasm_mvp', 'wasm_eh'].map(p => ({ p, url: `https://extensions.duckdb.org/v${DUCKDB_VERSION}/${p}/excel.duckdb_extension.wasm` }));
 
 function fail(msg) {
   console.error(`prepare: ${msg}`);
@@ -47,7 +49,8 @@ function patchCsp() {
     if (!src.includes('Content-Security-Policy')) continue;
     const out = src
       .replace(/ https:\/\/cdn\.jsdelivr\.net/g, '')
-      .replace("connect-src 'self' blob: data:", "connect-src 'self' blob: data: ipc: http://ipc.localhost");
+      .replace(/ https:\/\/extensions\.duckdb\.org/g, '')
+      .replace("connect-src 'self' blob: data:", "connect-src 'self' blob: data: ipc: http://ipc.localhost dbfile: http://dbfile.localhost");
     if (!out.includes('ipc: http://ipc.localhost')) fail(`could not patch the CSP in ${name}`);
     writeFileSync(file, out);
   }
@@ -77,6 +80,19 @@ async function bundleLibs() {
   await bundle("export * from 'hyparquet-writer';", join(hpOut, 'hyparquet-writer.mjs'));
 }
 
+async function bundleExcelExtension() {
+  const out = join(dist, 'vendor/duckdb/extensions');
+  for (const { p, url } of EXCEL_EXT) {
+    const dir = join(out, `v${DUCKDB_VERSION}`, p);
+    mkdirSync(dir, { recursive: true });
+    const target = join(dir, 'excel.duckdb_extension.wasm');
+    if (existsSync(target)) continue;
+    const res = await fetch(url).catch(() => null);
+    if (!res?.ok) { console.warn(`prepare: could not fetch ${url}; Excel-in-DuckDB will be unavailable offline`); continue; }
+    writeFileSync(target, Buffer.from(await res.arrayBuffer()));
+  }
+}
+
 function ensureIcons() {
   const icons = join(desktop, 'src-tauri/icons');
   const needed = ['32x32.png', '128x128.png', '128x128@2x.png', 'icon.icns', 'icon.ico'];
@@ -100,5 +116,6 @@ copyWeb();
 patchLibs();
 patchCsp();
 await bundleLibs();
+await bundleExcelExtension();
 ensureIcons();
 console.log(`prepare: desktop/dist ready (${(sizeOf(dist) / 1048576).toFixed(1)} MB, libraries bundled for offline use)`);

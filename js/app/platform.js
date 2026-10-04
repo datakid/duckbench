@@ -36,6 +36,45 @@ export async function revealNative(path) {
   try { await tauri().core.invoke('reveal_path', { path }); return true; } catch { return false; }
 }
 
+const DATA_EXT = ['csv', 'tsv', 'txt', 'parquet', 'json', 'jsonl', 'ndjson', 'xlsx'];
+
+export function nativeFileUrl(path) {
+  const os = navigator.userAgent.includes('Windows') ? 'win' : 'unix';
+  return os === 'win' ? `http://dbfile.localhost/${encodeURIComponent(path)}` : `dbfile://localhost/${encodeURIComponent(path)}`;
+}
+
+export async function pickNativeFiles() {
+  const t = tauri();
+  if (!t) return null;
+  const sel = await t.core.invoke('plugin:dialog|open', { options: { multiple: true, filters: [{ name: 'Data files', extensions: DATA_EXT }] } });
+  const paths = !sel ? [] : Array.isArray(sel) ? sel : [sel];
+  const out = [];
+  for (const path of paths) {
+    const meta = await t.core.invoke('file_meta', { path });
+    const name = path.split(/[\\/]/).pop();
+    const file = new File([], name);
+    Object.defineProperty(file, 'size', { value: meta.size });
+    out.push({ path, file });
+  }
+  return out;
+}
+
+export async function checkForUpdate() {
+  const t = tauri();
+  if (!t?.core?.invoke) return null;
+  try {
+    const u = await t.core.invoke('plugin:updater|check', {});
+    if (!u || !u.available) return null;
+    return {
+      version: u.version,
+      async install() {
+        await t.core.invoke('plugin:updater|download_and_install', { rid: u.rid, onEvent: new t.core.Channel() });
+        await t.core.invoke('plugin:process|restart');
+      },
+    };
+  } catch { return null; }
+}
+
 export function appInfo() {
   return { desktop: isDesktop(), platform: isDesktop() ? 'desktop' : 'web' };
 }

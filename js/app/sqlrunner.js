@@ -119,7 +119,19 @@ export function createSqlRunner(client, { onStatus } = {}) {
     }
   }
 
+  async function resolveProbe(need) {
+    await ensureDuckReady();
+    try {
+      const r = await duck.runQuery(need.probe, { maxRows: 1 });
+      const v = r.columns[0]?.[0];
+      await client.call('putDuckSchema', { key: need.key, value: typeof v === 'string' && /^\[/.test(v) ? JSON.parse(v) : v ?? null }, { track: false });
+    } catch (e) {
+      await client.call('putDuckSchema', { key: need.key, error: cleanError(e) }, { track: false });
+    }
+  }
+
   function resolve(need, depth = 0) {
+    if (need.probe) return resolveProbe(need);
     if (need.schema) return resolveSchema(need);
     if (need.source) return resolveSource(need);
     return resolveStep(need, depth);

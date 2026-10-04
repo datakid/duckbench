@@ -147,12 +147,35 @@ export async function registerFile(name, file) {
   await s.db.registerFileHandle(name, file, s.duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
 }
 
+export async function registerUrl(name, url) {
+  const s = await ensureDuck();
+  await s.db.registerFileURL(name, url, s.duckdb.DuckDBDataProtocol.HTTP, false);
+}
+
 export async function dropFile(name) {
   if (!state?.ready) return;
   try { await state.db.dropFile(name); } catch {}
 }
 
+let excelReady = null;
+export function ensureExcel() {
+  if (!excelReady) excelReady = (async () => {
+    if (LOCAL_LIBS) await exec(`SET custom_extension_repository = ${sqlStr(new URL('../../vendor/duckdb/extensions', import.meta.url).href)}`);
+    await exec('INSTALL excel'); await exec('LOAD excel'); return true;
+  })().catch((e) => { excelReady = null; throw new Error(`The DuckDB Excel extension could not be loaded (${e.message.split('\n')[0]}). Import the file normally, or save the sheet as CSV.`); });
+  return excelReady;
+}
+
 export function readerFor(name, format, options = {}) {
+  if (format === 'excel') {
+    const args = [sqlStr(name)];
+    if (options.sheet) args.push(`sheet=${sqlStr(options.sheet)}`);
+    if (options.header === false) args.push('header=false');
+    if (options.detectTypes === false) args.push('all_varchar=true');
+    if (Number(options.skipRows) > 0) args.push(`range=${sqlStr(`A${Math.floor(Number(options.skipRows)) + 1}:ZZZ1048576`)}`);
+    args.push('ignore_errors=true', 'empty_as_varchar=true');
+    return `read_xlsx(${args.join(', ')})`;
+  }
   if (format === 'parquet') return `read_parquet(${sqlStr(name)})`;
   if (format === 'jsonl') return `read_json_auto(${sqlStr(name)}, format='newline_delimited')`;
   if (format === 'json') return `read_json_auto(${sqlStr(name)})`;
@@ -416,7 +439,7 @@ export function validateSql(sql) {
   if (!START.test(masked)) return { error: 'The query must start with SELECT, WITH, FROM, VALUES, PIVOT, UNPIVOT, SUMMARIZE or DESCRIBE.' };
   const m = FORBIDDEN.exec(masked);
   if (m) return { error: `“${m[1].toUpperCase()}” is not allowed in a SQL step. Steps are read-only.` };
-  if (/\b(read_\w+|glob|parquet_scan|parquet_metadata|parquet_schema|sniff_csv|query|query_table|getenv)\s*\(/i.test(masked)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
+  if (/\b(read_\w+|glob|load_extension|parquet_scan|parquet_metadata|parquet_schema|sniff_csv|query|query_table|getenv)\s*\(/i.test(masked)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
   if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"[^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|gz|zst)"/i.test(s)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
   return { sql: s };
 }

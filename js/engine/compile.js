@@ -2,8 +2,9 @@ import { qi, sqlStr } from './duck.js';
 import { formatDate, formatDateTime, parseNumberString, parseBoolString, convertValue, isNumeric, isTemporal } from '../core/types.js';
 import { aggType, aggDefaultName } from '../core/transforms.js';
 import { parseList } from '../core/util.js';
+import { MORE } from './compile-sql.js';
 
-const PUSHABLE = new Set(['filter', 'sort', 'select_columns', 'remove_columns', 'rename_columns', 'keep_rows', 'remove_blank_rows', 'remove_duplicates', 'group_by']);
+const PUSHABLE = new Set(['filter', 'sort', 'select_columns', 'remove_columns', 'rename_columns', 'keep_rows', 'remove_blank_rows', 'remove_duplicates', 'group_by', 'trim_clean', 'replace_values', 'change_type', 'change_case', 'split_column', 'join', 'pivot']);
 const RN = '__duckbench_rn';
 const TEXT_OPS = new Set(['contains', 'not_contains', 'starts_with', 'ends_with']);
 
@@ -20,7 +21,7 @@ export function mayCompile(step) {
   }
 }
 
-function lit(v, type) {
+export function lit(v, type) {
   if (v == null) return 'NULL';
   if (type === 'date') return `DATE ${sqlStr(formatDate(v))}`;
   if (type === 'datetime') return `TIMESTAMP ${sqlStr(formatDateTime(v))}`;
@@ -29,7 +30,7 @@ function lit(v, type) {
   return sqlStr(v);
 }
 
-function literalFor(raw, type) {
+export function literalFor(raw, type) {
   if (raw == null || raw === '') return undefined;
   if (type === 'text') return String(raw);
   if (isNumeric(type)) { const n = parseNumberString(raw, true); return n == null ? undefined : n; }
@@ -213,11 +214,12 @@ const COMPILERS = {
   },
 };
 
-export function compileStep(step, fields) {
+export function compileStep(step, fields, ctx = {}) {
   if (!mayCompile(step) || !Array.isArray(fields) || !fields.length) return null;
   const types = new Map(fields.map(f => [f.name, f.type]));
+  const c = { probe: () => null, dep: () => null, ...ctx };
   let r;
-  try { r = COMPILERS[step.type](step.data || {}, fields, types); } catch { return null; }
+  try { r = (COMPILERS[step.type] || MORE[step.type])(step.data || {}, fields, types, c); } catch { return null; }
   if (!r) return null;
   if (r.where != null) return { sql: `SELECT * FROM input WHERE ${r.where}`, fields: r.fields.map(f => ({ ...f })) };
   return { sql: r.sql, fields: r.fields.map(f => ({ ...f })) };

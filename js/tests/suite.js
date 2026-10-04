@@ -246,7 +246,11 @@ export const TESTS = [
     eq(compileStep({ type: 'keep_rows', data: { mode: 'sample', count: 5 } }, SALES_FIELDS), null);
     eq(compileStep({ type: 'remove_duplicates', data: { columns: ['customer'], matchMode: 'loose' } }, SALES_FIELDS), null);
     eq(compileStep({ type: 'group_by', data: { groupColumns: ['region'], aggregations: [{ fn: 'concat', column: 'customer', name: 'c' }] } }, SALES_FIELDS), null);
-    eq(compileStep({ type: 'split_column', data: {} }, SALES_FIELDS), null);
+    eq(compileStep({ type: 'split_column', data: { column: 'region', delimiter: ' ' } }, SALES_FIELDS), null, 'split needs a probe');
+    eq(compileStep({ type: 'join', data: { rightSource: 'x', joinType: 'full', keys: [{ left: 'region', right: 'region' }] } }, SALES_FIELDS), null, 'full join stays in JS');
+    eq(compileStep({ type: 'replace_values', data: { columns: ['region'], match: 'regex', find: 'x', replace: 'y' } }, SALES_FIELDS), null, 'regex replace stays in JS');
+    ok(/upper\("customer"\)/.test(compileStep({ type: 'change_case', data: { columns: ['customer'], mode: 'upper' } }, SALES_FIELDS, { probe: () => false }).sql), 'case compiles when probe says safe');
+    eq(compileStep({ type: 'change_case', data: { columns: ['customer'], mode: 'upper' } }, SALES_FIELDS, { probe: () => true }), null, 'case refuses unsafe characters');
     ok(!mayCompile({ type: 'sort', disabled: true }));
   }],
   ['compile — columns, sort, limits, dedupe, group by', () => {
@@ -265,7 +269,8 @@ export const TESTS = [
   }],
   ['engine — visual steps push down on DuckDB files', () => {
     const e = duckEngine([{ type: 'filter', data: { rules: [{ column: 'quantity', operator: '>', value: '2' }] } }, { type: 'select_columns', data: { columns: ['region', 'quantity'] } }, { type: 'split_column', data: { column: 'region', delimiter: ' ', mode: 'columns' } }]);
-    const r = e.evaluate({ queryId: 'd' });
+    let r = e.evaluate({ queryId: 'd' });
+    for (let g = 0; g < 4 && r.needsSql?.probe; g++) { e.putDuckSchema({ key: r.needsSql.key, error: 'probe declined in test' }); r = e.evaluate({ queryId: 'd' }); }
     ok(r.needsSql?.source, 'asks for the pushed source');
     ok(/WHERE \("quantity" > 2\)/.test(r.needsSql.source.sql) && /SELECT "region", "quantity" FROM input/.test(r.needsSql.source.sql));
     eq(r.needsSql.source.pushed, 2);

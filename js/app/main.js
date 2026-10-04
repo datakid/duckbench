@@ -16,6 +16,9 @@ import { zipFiles } from '../io/zip.js';
 import * as duck from '../engine/duck.js';
 import { sqlEditor, SQL_SNIPPETS } from '../ui/sqleditor.js';
 import { TYPE_BADGES } from '../core/types.js';
+import { keepCopy, getCopy, opfsFilesAvailable, listSheets } from './filestore.js';
+import { pickNativeFiles, nativeFileUrl, checkForUpdate } from './platform.js';
+if (isDesktop()) setTimeout(async () => { const u = await checkForUpdate(); if (u) toast(`Duckbench ${u.version} is available`, { action: 'Install & restart', onAction: () => u.install() }); }, 4000);
 
 const store = createStore();
 const client = new EngineClient();
@@ -92,19 +95,29 @@ function chooseSheet(name, sheets) {
   });
 }
 
-async function importLargeViaDuck(file, { asNewProject, handle, options = {} }) {
+async function importLargeViaDuck(file, { asNewProject, handle, options = {}, nativePath = null }) {
   const format = formatOf(file.name);
-  if (format === 'excel') throw new Error('Excel files can’t be opened with DuckDB. Save the sheet as CSV or Parquet first.');
+  if (format === 'excel') {
+    if (!/\.xlsx$/i.test(file.name)) throw new Error('DuckDB reads .xlsx only. Import .xls/.ods files normally.');
+    await duck.ensureExcel();
+    if (!options.sheet) {
+      const sheets = await listSheets(file).catch(() => []);
+      if (sheets.length > 1) { options = { ...options, sheet: await chooseSheet(file.name, sheets) }; if (!options.sheet) return; }
+    }
+  }
   const table = duck.tableNameFor(file.name.replace(/\.[^.]+$/, ''), new Set([...duckFiles.values()].map(d => d.table)));
-  const fname = `${table}.${format === 'parquet' ? 'parquet' : format === 'jsonl' ? 'jsonl' : format === 'json' ? 'json' : format === 'tsv' ? 'tsv' : 'csv'}`;
-  await duck.registerFile(fname, file);
+  const fname = `${table}.${format === 'excel' ? 'xlsx' : format === 'parquet' ? 'parquet' : format === 'jsonl' ? 'jsonl' : format === 'json' ? 'json' : format === 'tsv' ? 'tsv' : 'csv'}`;
+  if (nativePath) await duck.registerUrl(fname, nativeFileUrl(nativePath));
+  else await duck.registerFile(fname, file);
   const srcSql = `SELECT * FROM ${duck.readerFor(fname, format, options)}`;
   const sid = uid('d');
   duckFiles.set(sid, { table, fname, file });
   if (handle) persist.putHandle(sid, handle);
+  else if (nativePath) persist.putHandle(sid, { nativePath, name: file.name });
+  else if (opfsFilesAvailable()) keepCopy(sid, file).then(ok => { if (ok) persist.putHandle(sid, { opfs: true, name: file.name }); });
   const qname = uniqueName(file.name.replace(/\.[^.]+$/, ''), store.state.queries.map(q => q.name), ' ');
   const q = newQuery(qname, { kind: 'duck', sourceId: sid, table, sql: srcSql, limit: DUCK_PREVIEW_ROWS });
-  const src = { id: sid, name: file.name, format, options: { duck: true }, rowCount: null, size: file.size, fields: [], duck: true };
+  const src = { id: sid, name: file.name, format, options: { ...options, duck: true }, rowCount: null, size: file.size, fields: [], duck: true };
   store.commit(`Import ${file.name}`, (s) => {
     if (asNewProject) { s.queries = []; s.sources = []; s.projectName = qname; }
     s.sources.push(src); s.queries.push(q); s.activeQueryId = q.id;
@@ -112,14 +125,14 @@ async function importLargeViaDuck(file, { asNewProject, handle, options = {} }) 
   toast(`${file.name} opened with DuckDB`, { kind: 'success' });
 }
 
-async function importFiles(files, { asNewProject = false, options, viaDuck = false, handles } = {}) {
+async function importFiles(files, { asNewProject = false, options, viaDuck = false, handles, native } = {}) {
   const done = [];
   for (const file of files) {
     try {
       const handle = handles?.get(file) || null;
       if (viaDuck || file.size > LARGE_FILE_BYTES) {
         if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB. Filters, sorts, column changes, group by and SQL steps run over every row; other steps work on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
-        await importLargeViaDuck(file, { asNewProject, handle, options: viaDuck ? options || {} : {} });
+        await importLargeViaDuck(file, { asNewProject, handle, nativePath: native?.get(file) || null, options: viaDuck ? { ...(options || {}) } : {} });
         asNewProject = false;
         continue;
       }
@@ -163,7 +176,7 @@ async function importWithOptions(asNewProject) {
   }
   body.push(el('label', { class: 'f-toggle' }, el('input', { type: 'checkbox', checked: true, onchange: (e) => { opts.detectTypes = e.target.checked; } }), el('span', { class: 'toggle-ui' }), el('span', {}, 'Detect column types')));
   let viaDuck = false;
-  if (format !== 'excel') body.push(el('label', { class: 'f-toggle' }, el('input', { type: 'checkbox', onchange: (e) => { viaDuck = e.target.checked; } }), el('span', { class: 'toggle-ui' }), el('span', {}, 'Open with DuckDB (for very large files; delimiter and type options are detected by DuckDB)')));
+  if (format !== 'excel' || /\.xlsx$/i.test(file.name)) body.push(el('label', { class: 'f-toggle' }, el('input', { type: 'checkbox', onchange: (e) => { viaDuck = e.target.checked; } }), el('span', { class: 'toggle-ui' }), el('span', {}, format === 'excel' ? 'Open with DuckDB (large workbooks; uses the DuckDB Excel extension)' : 'Open with DuckDB (for very large files; delimiter and type options are detected by DuckDB)')));
   const m = modal({ title: `Import ${file.name}`, icon: 'file', body: el('div', { class: 'form' }, body), footer: [
     el('span', { class: 'f-help' }, fmtBytes(file.size)), el('span', { class: 'spacer' }),
     el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Cancel'),
@@ -179,20 +192,24 @@ async function loadSample() {
 }
 
 async function pickForDuck() {
+  if (isDesktop()) {
+    const picked = await pickNativeFiles();
+    if (picked) return { files: picked.map(p => p.file), handles: null, native: new Map(picked.map(p => [p.file, p.path])) };
+  }
   if (typeof window.showOpenFilePicker === 'function') {
     try {
-      const hs = await window.showOpenFilePicker({ multiple: true, types: [{ description: 'Data files', accept: { 'application/octet-stream': ['.csv', '.tsv', '.txt', '.parquet', '.json', '.jsonl', '.ndjson'] } }] });
+      const hs = await window.showOpenFilePicker({ multiple: true, types: [{ description: 'Data files', accept: { 'application/octet-stream': ['.csv', '.tsv', '.txt', '.parquet', '.json', '.jsonl', '.ndjson', '.xlsx'] } }] });
       const files = [], handles = new Map();
       for (const h of hs) { const f = await h.getFile(); files.push(f); handles.set(f, h); }
       return { files, handles };
     } catch (e) { if (e?.name === 'AbortError') return { files: [], handles: null }; }
   }
-  return { files: await pickFiles({ accept: '.csv,.tsv,.txt,.parquet,.json,.jsonl,.ndjson', multiple: true }), handles: null };
+  return { files: await pickFiles({ accept: '.csv,.tsv,.txt,.parquet,.json,.jsonl,.ndjson,.xlsx', multiple: true }), handles: null };
 }
 
 async function openWithDuck(asNewProject) {
-  const { files, handles } = await pickForDuck();
-  if (files.length) importFiles(files, { asNewProject, viaDuck: true, handles });
+  const { files, handles, native } = await pickForDuck();
+  if (files.length) importFiles(files, { asNewProject, viaDuck: true, handles, native });
 }
 
 function renderImport() {
@@ -240,8 +257,25 @@ function renderImport() {
 
 async function reconnectDuckSource(s) {
   const h = await persist.getHandle(s.id);
-  if (!h || typeof h.getFile !== 'function') return false;
+  if (!h) return false;
+  if (h.opfs || h.nativePath) {
+    const q = store.state.queries.find(x => x.source?.sourceId === s.id) || null;
+    const fname = (q?.source?.sql || '').match(/'([^']+)'/)?.[1];
+    if (!fname) return false;
+    try {
+      if (s.format === 'excel') await duck.ensureExcel();
+      if (h.nativePath) { await duck.registerUrl(fname, nativeFileUrl(h.nativePath)); duckFiles.set(s.id, { table: q.source.table, fname, file: null }); return true; }
+      const file = await getCopy(s.id, h.name);
+      if (!file) return false;
+      await duck.registerFile(fname, file);
+      duckFiles.set(s.id, { table: q.source.table, fname, file });
+      s.size = file.size;
+      return true;
+    } catch { return false; }
+  }
+  if (typeof h.getFile !== 'function') return false;
   try {
+    if (s.format === 'excel') await duck.ensureExcel();
     let perm = await h.queryPermission?.({ mode: 'read' });
     if (perm !== 'granted') perm = await h.requestPermission?.({ mode: 'read' });
     if (perm && perm !== 'granted') return false;
@@ -489,16 +523,16 @@ function renderMast() {
       btn('redo', `Redo ${store.redoLabel()} (${kbd('⌘⇧Z')})`, () => doRedo(), { disabled: !store.canRedo() }),
       el('span', { class: 'mast-sep' }),
       pill,
-      btn('terminal', `SQL console (${kbd('⌘J')})`, () => openConsole()),
-      btn('save', `Save recipe (${kbd('⌘S')})`, saveRecipe),
-      btn('clipboard', 'Open recipe', loadRecipeFile),
+      btn('terminal', `SQL console (${kbd('⌘J')})`, () => openConsole(), { cls: 'mast-opt' }),
+      btn('save', `Save recipe (${kbd('⌘S')})`, saveRecipe, { cls: 'mast-opt' }),
+      btn('clipboard', 'Open recipe', loadRecipeFile, { cls: 'mast-opt' }),
       el('span', { class: 'mast-sep' }));
   } else nav.append(pill);
   const light = document.documentElement.getAttribute('data-theme') === 'light';
   put(nav,
     btn(light ? 'moon' : 'sun', 'Toggle light / dark', toggleTheme),
-    btn('keyboard', 'Keyboard shortcuts (?)', openHelp),
-    inBench ? btn('help', 'Tour', () => startTour({ force: true })) : null,
+    btn('keyboard', 'Keyboard shortcuts (?)', openHelp, { cls: 'mast-opt' }),
+    inBench ? btn('help', 'Tour', () => startTour({ force: true }), { cls: 'mast-opt' }) : null,
     inBench ? btn('x', 'Close project', closeProject) : null,
     inBench ? el('button', { class: 'btn btn-primary btn-sm', id: 'exportBtn', style: { marginLeft: '6px' }, onclick: (e) => openExportMenu(e.currentTarget) }, icon('download', 14), 'Export') : null);
 }
@@ -614,7 +648,7 @@ function renderSteps() {
   if (!q) return;
   const cursor = store.cursor();
   host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Applied steps'), el('span', { class: 'panel-count' }, String(q.steps.length))));
-  host.appendChild(el('button', { class: 'btn btn-primary btn-block add-step-btn', id: 'addStepBtn', onclick: openPalette }, icon('plus', 15), 'Add step', el('kbd', {}, kbd('⌘K'))));
+  host.appendChild(el('button', { class: 'btn btn-ghost btn-block add-step-btn', id: 'addStepBtn', onclick: openPalette }, icon('plus', 15), 'Add step', el('kbd', {}, kbd('⌘K'))));
   const list = el('ol', { class: 'step-list', id: 'stepList' });
   const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
   const srcItem = el('li', { class: `step-item step-source${cursor === -1 ? ' is-cursor' : ''}`, tabindex: '0', onclick: () => setCursor(-1) },
