@@ -8,7 +8,9 @@ const GUTTER_W = 56;
 const PAGE = 200;
 const OVERSCAN_ROWS = 12;
 const MIN_W = 60;
-const MAX_AUTO_W = 320;
+const MIN_AUTO_W = 112;
+const MAX_AUTO_W = 360;
+const MAX_FILL_W = 560;
 
 export class Grid {
   constructor(host, handlers = {}) {
@@ -49,7 +51,14 @@ export class Grid {
     this.editor = null;
     this.host.append(this.viewport);
     this.viewport.addEventListener('scroll', () => this.schedule(), { passive: true });
-    this.ro = new ResizeObserver(() => this.schedule());
+    this.manual = new Set();
+    this.display = new Map();
+    this.lastVW = 0;
+    this.ro = new ResizeObserver(() => {
+      const vw = this.viewport.clientWidth;
+      if (vw !== this.lastVW && this.fields.length) { this.computeOffsets(); this.renderHeader(); this.render(true); }
+      else this.schedule();
+    });
     this.ro.observe(this.viewport);
     this.viewport.addEventListener('keydown', (e) => this.onKey(e));
     this.body.addEventListener('mousedown', (e) => this.onCellDown(e));
@@ -95,23 +104,51 @@ export class Grid {
     const ctx = Grid.measureCtx || (Grid.measureCtx = document.createElement('canvas').getContext('2d'));
     this.fields.forEach((f, c) => {
       if (this.widths.has(f.name)) return;
-      ctx.font = '600 12px Geist, "Instrument Sans", system-ui, sans-serif';
-      let w = ctx.measureText(f.name).width + 94;
-      ctx.font = (isNumeric(f.type) || f.type === 'date' || f.type === 'datetime' ? '12px "Geist Mono", "JetBrains Mono", monospace' : '12.5px Geist, "Instrument Sans", system-ui, sans-serif');
+      ctx.font = '600 12.5px Geist, "Instrument Sans", system-ui, "Segoe UI", Tahoma, sans-serif';
+      let w = ctx.measureText(f.name).width * (/[^\u0000-\u024F]/.test(f.name) ? 1.15 : 1) + 96;
+      ctx.font = (isNumeric(f.type) || f.type === 'date' || f.type === 'datetime' ? '12px "Geist Mono", "JetBrains Mono", monospace' : '13px Geist, "Instrument Sans", system-ui, "Segoe UI", Tahoma, sans-serif');
       const rows = page?.rows || [];
       for (let r = 0; r < Math.min(rows.length, 80); r++) {
         const v = rows[r][c];
         if (v == null) continue;
         const s = formatValue(v, f.type);
-        w = Math.max(w, ctx.measureText(s.length > 60 ? s.slice(0, 60) : s).width + 32);
+        const t = s.length > 60 ? s.slice(0, 60) : s;
+        w = Math.max(w, ctx.measureText(t).width * (/[^\u0000-\u024F]/.test(t) ? 1.15 : 1) + 36);
       }
-      this.widths.set(f.name, Math.round(Math.min(MAX_AUTO_W, Math.max(MIN_W + 20, w))));
+      this.widths.set(f.name, Math.round(Math.min(MAX_AUTO_W, Math.max(MIN_AUTO_W, w))));
     });
   }
 
+  colW(name) { return this.display.get(name) ?? this.widths.get(name); }
+
   computeOffsets() {
+    const vw = this.viewport.clientWidth;
+    this.lastVW = vw;
+    this.display.clear();
+    const natural = this.fields.reduce((a, f) => a + this.widths.get(f.name), 0);
+    const room = vw - GUTTER_W - natural - 2;
+    const flex = this.fields.filter(f => !this.manual.has(f.name));
+    if (room > 0 && flex.length) {
+      let left = room;
+      let pool = flex.slice();
+      for (let pass = 0; pass < 4 && left > 0.5 && pool.length; pass++) {
+        const base = pool.reduce((a, f) => a + this.colW(f.name), 0);
+        const next = [];
+        let used = 0;
+        for (const f of pool) {
+          const cur = this.colW(f.name);
+          const add = Math.min(left * (cur / base), MAX_FILL_W - cur);
+          this.display.set(f.name, cur + add);
+          used += add;
+          if (cur + add < MAX_FILL_W) next.push(f);
+        }
+        left -= used;
+        pool = next;
+      }
+      for (const [k, v] of this.display) this.display.set(k, Math.floor(v));
+    }
     this.offsets = [0];
-    for (const f of this.fields) this.offsets.push(this.offsets[this.offsets.length - 1] + this.widths.get(f.name));
+    for (const f of this.fields) this.offsets.push(this.offsets[this.offsets.length - 1] + this.colW(f.name));
     const totalW = this.offsets[this.offsets.length - 1] + GUTTER_W;
     const totalH = HEAD_H + this.rowCount * ROW_H;
     this.sizer.style.width = `${totalW}px`;
@@ -156,11 +193,11 @@ export class Grid {
         dataset: { c: String(c) },
         role: 'columnheader',
         title: `${f.name}\n${TYPE_LABELS[f.type] || f.type}${q ? `\n${q.valid.toLocaleString()} values · ${q.empty.toLocaleString()} empty` : ''}`,
-        style: { left: `${GUTTER_W + this.offsets[c] + (c < fz ? this.viewport.scrollLeft : 0)}px`, width: `${this.widths.get(f.name)}px` },
+        style: { left: `${GUTTER_W + this.offsets[c] + (c < fz ? this.viewport.scrollLeft : 0)}px`, width: `${this.colW(f.name)}px` },
       },
         el('div', { class: 'gh-top' },
           el('span', { class: `type-badge type-${f.type}` }, TYPE_BADGES[f.type] || f.type),
-          el('span', { class: 'gh-name' }, f.name),
+          el('span', { class: 'gh-name', dir: 'auto' }, f.name),
           c < fz ? el('span', { class: 'gh-pin', title: 'Frozen' }, icon('pin', 11)) : null,
           this.sortHint.has(f.name) ? el('span', { class: 'gh-flag' }, icon(this.sortHint.get(f.name) === 'desc' ? 'sort-desc' : 'sort-asc', 12)) : null,
           this.filterHint.has(f.name) ? el('span', { class: 'gh-flag' }, icon('filter', 12)) : null,
@@ -198,7 +235,7 @@ export class Grid {
         cell.dataset.c = c;
         cell.style.left = `${GUTTER_W + this.offsets[c] + (c < fz ? sl : 0)}px`;
         if (c < fz) cell.style.zIndex = '2';
-        cell.style.width = `${this.widths.get(f.name)}px`;
+        cell.style.width = `${this.colW(f.name)}px`;
         if (!row) { cell.classList.add('is-loading'); rowEl.appendChild(cell); continue; }
         const v = row[c];
         if (v == null) { cell.classList.add('is-null'); cell.textContent = 'null'; }
@@ -208,6 +245,7 @@ export class Grid {
           else if (f.type === 'boolean') cell.classList.add(v ? 'is-true' : 'is-false');
           else if (f.type === 'date' || f.type === 'datetime') cell.classList.add('is-date');
           if (typeof v === 'string' && v !== v.trim()) cell.classList.add('has-ws');
+          if (typeof v === 'string') cell.dir = 'auto';
           cell.textContent = s.length > 400 ? s.slice(0, 400) + '…' : s;
         }
         if (this.changed.has(f.name)) cell.classList.add('is-changed');
@@ -365,7 +403,7 @@ export class Grid {
 
   onHeaderDbl(e) {
     const rz = e.target.closest('.gh-resize');
-    if (rz) { const c = Number(rz.dataset.resize); this.widths.delete(this.fields[c].name); this.autoWidths(this.pages.get(0)); this.computeOffsets(); this.renderHeader(); this.render(true); return; }
+    if (rz) { const c = Number(rz.dataset.resize); this.widths.delete(this.fields[c].name); this.manual.delete(this.fields[c].name); this.autoWidths(this.pages.get(0)); this.computeOffsets(); this.renderHeader(); this.render(true); return; }
     const cell = e.target.closest('.gh-cell');
     if (!cell || e.target.closest('[data-menu]')) return;
     this.h.onHeaderRename?.({ field: this.fields[Number(cell.dataset.c)], node: cell });
@@ -385,9 +423,10 @@ export class Grid {
     e.preventDefault();
     e.stopPropagation();
     const name = this.fields[c].name;
-    const startX = e.clientX, startW = this.widths.get(name);
+    const startX = e.clientX, startW = this.colW(name);
     document.body.classList.add('is-resizing');
     const move = (ev) => {
+      this.manual.add(name);
       this.widths.set(name, Math.max(MIN_W, startW + ev.clientX - startX));
       this.computeOffsets();
       this.renderHeader();
@@ -527,7 +566,8 @@ export class Grid {
     const input = el('input', { class: 'g-editor', type: 'text', value: initial ?? (v == null ? '' : formatValue(v, f.type)) });
     input.style.top = `${HEAD_H + p.r * ROW_H}px`;
     input.style.left = `${GUTTER_W + this.offsets[p.c]}px`;
-    input.style.width = `${Math.max(140, this.widths.get(f.name))}px`;
+    input.style.width = `${Math.max(140, this.colW(f.name))}px`;
+    if (/[\u0590-\u08FF]/.test(input.value)) input.dir = 'rtl';
     this.sizer.appendChild(input);
     this.editor = input;
     input.focus();
@@ -588,7 +628,7 @@ export class Grid {
     }
   }
 
-  clearWidths() { this.widths.clear(); }
+  clearWidths() { this.widths.clear(); this.manual.clear(); this.display.clear(); }
 
   destroy() { this.ro.disconnect(); }
 }
