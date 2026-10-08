@@ -15,6 +15,7 @@ import { startTour, maybeAutoTour, resumePendingTour } from './tour.js';
 import { zipFiles } from '../io/zip.js';
 import * as duck from '../engine/duck.js';
 import { sqlEditor, SQL_SNIPPETS } from '../ui/sqleditor.js';
+import { enhanceSelects } from '../ui/select.js';
 import { TYPE_BADGES } from '../core/types.js';
 import { keepCopy, getCopy, opfsFilesAvailable, listSheets } from './filestore.js';
 import { pickNativeFiles, nativeFileUrl, checkForUpdate } from './platform.js';
@@ -215,29 +216,46 @@ async function openWithDuck(asNewProject) {
 function renderImport() {
   const screen = $('#importScreen');
   clear(screen);
+  const sheet = (cls, tag) => el('span', { class: `dz-sheet ${cls}` }, el('span', { class: 'dz-sheet-tag' }, tag), el('span', { class: 'dz-sheet-lines' }, el('i'), el('i'), el('i')));
   const drop = el('label', { class: 'drop-zone', tabindex: '0', id: 'dropZone' },
-    el('span', { class: 'dz-icon' }, icon('upload', 22)),
+    el('span', { class: 'dz-art', 'aria-hidden': 'true' }, sheet('dz-s1', 'CSV'), sheet('dz-s2', 'XLSX'), sheet('dz-s3', 'PQ'), el('span', { class: 'dz-icon' }, icon('upload', 20))),
     el('span', { class: 'dz-text' },
-      el('span', { class: 'drop-title' }, 'Drop files or browse'),
+      el('span', { class: 'drop-title' }, 'Drop files to start'),
+      el('span', { class: 'drop-hint' }, 'or ', el('span', { class: 'drop-link' }, 'browse your computer')),
       el('span', { class: 'dz-formats' }, ['CSV', 'TSV', 'XLSX', 'JSON', 'JSONL', 'PARQUET'].map(f => el('span', {}, f)))));
   drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickFiles({ accept: ACCEPT, multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
   const resume = el('section', { class: 'resume-slot', id: 'resumeCard', hidden: true, 'aria-label': 'Resume session' });
-  const act = (ic, label, fn, id) => el('button', { class: 'launch-act', type: 'button', onclick: fn, id: id || null, title: label }, icon(ic, 15), el('span', {}, label));
+  const act = (ic, label, hint, fn, id, key) => el('button', { class: 'launch-act', type: 'button', onclick: fn, id: id || null },
+    el('span', { class: 'la-ico' }, icon(ic, 16)),
+    el('span', { class: 'la-text' }, el('span', { class: 'la-label' }, label), el('span', { class: 'la-hint' }, hint)),
+    key ? el('kbd', {}, kbd(key)) : el('span', { class: 'la-go' }, icon('chevron-right', 13)));
+  const st = duck.duckStatus();
+  const brand = el('span', { class: 'launch-mark', 'aria-hidden': 'true' });
+  brand.innerHTML = LOGO;
   screen.append(el('div', { class: 'launch' },
+    el('header', { class: 'launch-head' },
+      brand,
+      el('div', { class: 'launch-head-text' },
+        el('h2', { class: 'launch-title', id: 'heroTitle' }, 'New project'),
+        el('p', { class: 'launch-sub' }, icon('shield', 12), isDesktop() ? 'Files stay on this computer' : 'Files stay in this tab — nothing is uploaded'))),
     drop,
     resume,
-    el('nav', { class: 'launch-acts', 'aria-label': 'Start' },
-      act('table', 'Sample', loadSample, 'sampleBtn'),
-      act('settings', 'Options', () => importWithOptions(true)),
-      act('clipboard', 'Recipe', loadRecipeFile),
-      act('layers', 'Batch', openBatch),
-      act('terminal', 'SQL', () => openConsole()),
-      act('database', 'Large file', () => openWithDuck(true))),
+    el('div', { class: 'launch-section' },
+      el('span', { class: 'launch-label' }, 'Or start with'),
+      el('nav', { class: 'launch-acts', 'aria-label': 'Start' },
+        act('table', 'Sample data', 'Two linked tables', loadSample, 'sampleBtn'),
+        act('settings', 'Import options', 'Delimiter, encoding', () => importWithOptions(true)),
+        act('clipboard', 'Open recipe', '.duckbench.json', loadRecipeFile),
+        act('layers', 'Batch apply', 'One recipe, many files', openBatch),
+        act('terminal', 'SQL console', 'DuckDB', () => openConsole(), null, '⌘J'),
+        act('database', 'Large file', 'Read in place', () => openWithDuck(true)))),
     el('footer', { class: 'hero-foot' },
-      el('span', {}, `2.3${isDesktop() ? ' desktop' : ''}`),
+      el('span', { class: `hf-engine is-${st}` }, el('span', { class: 'le-dot' }), engineLabel()),
       el('span', { class: 'hf-sep' }),
-      el('button', { class: 'hf-link', type: 'button', onclick: () => startTour({ force: true }) }, 'Tour'),
+      el('span', {}, `v2.3${isDesktop() ? ' desktop' : ''}`),
+      el('span', { class: 'hf-sep' }),
+      el('button', { class: 'hf-link', type: 'button', onclick: () => startTour({ force: true }) }, icon('play', 11), 'Tour'),
       el('span', { class: 'hf-sep' }),
       el('a', { class: 'hf-link', href: 'tests.html' }, 'Self-test'))));
   persist.getSession().then((sess) => {
@@ -246,8 +264,8 @@ function renderImport() {
     if (!data.queries?.length) return;
     resume.hidden = false;
     clear(resume).append(el('div', { class: 'resume-card' },
-      el('span', { class: 'resume-ico' }, icon('database', 18)),
-      el('div', { class: 'resume-text' }, el('strong', {}, data.projectName || 'Previous session'), el('span', {}, `${data.queries.length} quer${data.queries.length === 1 ? 'y' : 'ies'} · ${data.queries.reduce((n, q) => n + q.steps.length, 0)} steps · ${fmtAgo(sess.at)}`)),
+      el('span', { class: 'resume-ico' }, icon('undo', 17)),
+      el('div', { class: 'resume-text' }, el('span', { class: 'resume-kicker' }, 'Last session'), el('strong', {}, data.projectName || 'Previous session'), el('span', {}, `${data.queries.length} quer${data.queries.length === 1 ? 'y' : 'ies'} · ${data.queries.reduce((n, q) => n + q.steps.length, 0)} steps · ${fmtAgo(sess.at)}`)),
       el('button', { class: 'btn btn-primary btn-sm', onclick: () => resumeSession(data) }, 'Resume', icon('arrow-right', 13)),
       el('button', { class: 'icon-btn icon-btn-sm', title: 'Forget this session', 'aria-label': 'Forget this session', onclick: async () => { await persist.clearSession(); await persist.clearFiles(); renderImport(); } }, icon('x', 14))));
   });
@@ -1556,6 +1574,7 @@ function installDesktop() {
 
 (async function boot() {
   installDesktop();
+  enhanceSelects();
   await client.init();
   initSplitters();
   renderMast();
