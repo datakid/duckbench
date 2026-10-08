@@ -5,8 +5,8 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://extensions.duckdb.org; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="description" content="Duckbench: a browser-only data-prep workbench powered by DuckDB-WASM. Clean, reshape, join and export CSV, Excel, JSON and Parquet files without uploading them anywhere.">
-<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f7f7f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f3f2" media="(prefers-color-scheme: light)">
 <meta name="color-scheme" content="dark light">
 <title>Duckbench</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -44,23 +44,23 @@
   <section id="importScreen" class="import-screen" hidden></section>
 
   <main id="workbench" class="workbench" hidden>
-    <div id="ribbon" class="ribbon" role="toolbar" aria-label="Transforms"></div>
     <div class="bench">
       <aside id="leftRail" class="left-rail" aria-label="Queries and steps">
         <section id="queriesPanel" class="panel queries-panel"></section>
         <section id="stepsPanel" class="panel steps-panel"></section>
       </aside>
-      <div id="splitLeft" class="splitter splitter-left" role="separator" aria-orientation="vertical" aria-label="Resize queries panel" tabindex="0"></div>
+      <div id="splitLeft" class="splitter splitter-left" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
+      <div id="ribbon" class="ribbon" role="toolbar" aria-label="Transforms"></div>
       <section id="centerPane" class="center-pane">
         <div id="gridToolbar" class="grid-toolbar"></div>
         <div id="gridBanner" class="grid-banner" hidden></div>
         <div id="gridHost" class="grid-host"></div>
         <div id="gridEmpty" class="grid-empty" hidden></div>
       </section>
+      <footer id="statusBar" class="status-bar" role="status" aria-live="polite"></footer>
       <div id="splitRight" class="splitter splitter-right" role="separator" aria-orientation="vertical" aria-label="Resize inspector" tabindex="0" hidden></div>
       <aside id="rightRail" class="right-rail" hidden aria-label="Inspector"></aside>
     </div>
-    <footer id="statusBar" class="status-bar" role="status" aria-live="polite"></footer>
   </main>
   <div id="jobBar" class="job-bar" hidden></div>
 </div>

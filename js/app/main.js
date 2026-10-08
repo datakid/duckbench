@@ -216,41 +216,39 @@ function renderImport() {
   const screen = $('#importScreen');
   clear(screen);
   const drop = el('label', { class: 'drop-zone', tabindex: '0', id: 'dropZone' },
-    el('span', { class: 'dz-icon' }, icon('upload', 18)),
+    el('span', { class: 'dz-icon' }, icon('upload', 22)),
     el('span', { class: 'dz-text' },
-      el('p', { class: 'drop-title' }, 'Drop files or click to browse'),
+      el('span', { class: 'drop-title' }, 'Drop files or browse'),
       el('span', { class: 'dz-formats' }, ['CSV', 'TSV', 'XLSX', 'JSON', 'JSONL', 'PARQUET'].map(f => el('span', {}, f)))));
   drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickFiles({ accept: ACCEPT, multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
-  const resume = el('div', { class: 'side-card', id: 'resumeCard' }, el('h3', {}, 'Resume'), el('p', { class: 'resume-empty' }, 'No saved session.'));
-  const action = (ic, label, hint, fn, id) => el('button', { class: 'import-action', onclick: fn, id: id || null }, el('span', { class: 'ia-ico' }, icon(ic, 16)), el('span', { class: 'ia-text' }, el('span', { class: 'ia-label' }, label), el('span', { class: 'ia-hint' }, hint)), icon('arrow-right', 14));
-  const st = duck.duckStatus();
-  screen.append(el('div', { class: 'import-shell' },
-    el('section', { class: 'hero', 'aria-labelledby': 'heroTitle' },
-      el('h2', { class: 'hero-title', id: 'heroTitle' }, 'New project'),
-      el('p', { class: 'hero-sub' }, isDesktop() ? 'Files are processed on this computer and never leave it.' : 'Files are processed in this tab and are not uploaded.'),
-      drop,
-      el('div', { class: 'hero-row' },
-        el('button', { class: 'btn btn-primary', id: 'sampleBtn', onclick: loadSample }, icon('table', 14), 'Sample data'),
-        el('button', { class: 'btn btn-ghost', onclick: () => importWithOptions(true) }, icon('settings', 14), 'Import with options'),
-        el('button', { class: 'btn btn-ghost', onclick: () => startTour({ force: true }) }, icon('play', 14), 'Tour')),
-      el('div', { class: 'hero-foot' }, el('span', {}, `Duckbench 2.2${isDesktop() ? ' desktop' : ''} · ${engineLabel()}`), el('span', { style: { marginLeft: 'auto' } }, el('a', { href: 'tests.html' }, 'Self-test')))),
-    el('div', { class: 'side-col' },
-      resume,
-      el('div', { class: 'side-card' }, el('h3', {}, 'Open'),
-        el('div', { class: 'import-actions' },
-          action('clipboard', 'Recipe', '.duckbench.json', loadRecipeFile),
-          action('layers', 'Batch apply', 'One recipe, many files', openBatch),
-          action('terminal', 'SQL console', 'DuckDB', () => openConsole()),
-          action('database', 'Large file', 'Opened with DuckDB, read in place', () => openWithDuck(true)))))));
+  const resume = el('section', { class: 'resume-slot', id: 'resumeCard', hidden: true, 'aria-label': 'Resume session' });
+  const act = (ic, label, fn, id) => el('button', { class: 'launch-act', type: 'button', onclick: fn, id: id || null, title: label }, icon(ic, 15), el('span', {}, label));
+  screen.append(el('div', { class: 'launch' },
+    drop,
+    resume,
+    el('nav', { class: 'launch-acts', 'aria-label': 'Start' },
+      act('table', 'Sample', loadSample, 'sampleBtn'),
+      act('settings', 'Options', () => importWithOptions(true)),
+      act('clipboard', 'Recipe', loadRecipeFile),
+      act('layers', 'Batch', openBatch),
+      act('terminal', 'SQL', () => openConsole()),
+      act('database', 'Large file', () => openWithDuck(true))),
+    el('footer', { class: 'hero-foot' },
+      el('span', {}, `2.3${isDesktop() ? ' desktop' : ''}`),
+      el('span', { class: 'hf-sep' }),
+      el('button', { class: 'hf-link', type: 'button', onclick: () => startTour({ force: true }) }, 'Tour'),
+      el('span', { class: 'hf-sep' }),
+      el('a', { class: 'hf-link', href: 'tests.html' }, 'Self-test'))));
   persist.getSession().then((sess) => {
     if (!sess?.json) return;
     let data; try { data = JSON.parse(sess.json); } catch { return; }
     if (!data.queries?.length) return;
-    clear(resume).append(el('h3', {}, 'Resume'), el('div', { class: 'resume-card' },
-      icon('database', 18),
+    resume.hidden = false;
+    clear(resume).append(el('div', { class: 'resume-card' },
+      el('span', { class: 'resume-ico' }, icon('database', 18)),
       el('div', { class: 'resume-text' }, el('strong', {}, data.projectName || 'Previous session'), el('span', {}, `${data.queries.length} quer${data.queries.length === 1 ? 'y' : 'ies'} · ${data.queries.reduce((n, q) => n + q.steps.length, 0)} steps · ${fmtAgo(sess.at)}`)),
-      el('button', { class: 'btn btn-primary btn-sm', onclick: () => resumeSession(data) }, 'Resume'),
+      el('button', { class: 'btn btn-primary btn-sm', onclick: () => resumeSession(data) }, 'Resume', icon('arrow-right', 13)),
       el('button', { class: 'icon-btn icon-btn-sm', title: 'Forget this session', 'aria-label': 'Forget this session', onclick: async () => { await persist.clearSession(); await persist.clearFiles(); renderImport(); } }, icon('x', 14))));
   });
 }
@@ -355,7 +353,7 @@ const refresh = debounce(async () => {
     if (res.error) {
       ui.result = null;
       showGridMessage(res.sourceError ? 'Source unavailable' : `Step ${res.errorIndex + 1} failed`, res.error, res.sourceError ? { label: 'Locate file…', fn: () => locateSource(q) } : null);
-      renderSteps(); renderStatus();
+      renderSteps(); renderStatus(); renderToolbar();
       return;
     }
     ui.result = res;
@@ -382,7 +380,7 @@ const refresh = debounce(async () => {
     if (e.cancelled || token !== ui.evalToken) return;
     ui.result = null;
     showGridMessage('The preview could not be computed', e.message);
-    renderSteps(); renderStatus();
+    renderSteps(); renderStatus(); renderToolbar();
   }
 }, 60);
 
@@ -400,7 +398,7 @@ function showGridMessage(title, message, action) {
   $('#gridHost').hidden = true;
   const box = $('#gridEmpty');
   box.hidden = false;
-  put(clear(box), icon('warn', 28), el('h3', {}, title), el('p', {}, message), action ? el('button', { class: 'btn btn-primary', onclick: action.fn }, action.label) : null);
+  put(clear(box), el('span', { class: 'ge-ico' }, icon('warn', 22)), el('h3', {}, title), el('p', {}, message), action ? el('button', { class: 'btn btn-primary', onclick: action.fn }, action.label) : null);
   $('#gridBanner').hidden = true;
 }
 
@@ -517,7 +515,7 @@ function renderMast() {
   const st = duck.duckStatus();
   const pill = el('button', { class: `engine-pill is-${st}`, type: 'button', title: st === 'failed' ? duck.duckError() || 'DuckDB failed to load' : 'DuckDB engine', onclick: (e) => duckMenu(e.currentTarget) }, el('span', { class: 'dot' }), engineLabel());
   if (inBench) {
-    center.append(el('button', { class: 'btn btn-ghost btn-sm palette-btn', id: 'paletteBtn', onclick: openPalette, title: 'Command palette' }, icon('search', 14), el('span', {}, 'Actions'), el('kbd', {}, kbd('⌘K'))));
+    center.append(el('button', { class: 'btn btn-ghost btn-sm palette-btn', id: 'paletteBtn', onclick: openPalette, title: 'Command palette' }, icon('search', 14), el('span', {}, 'Search steps and commands'), el('kbd', {}, kbd('⌘K'))));
     nav.append(
       btn('undo', `Undo ${store.undoLabel()} (${kbd('⌘Z')})`, () => doUndo(), { disabled: !store.canUndo() }),
       btn('redo', `Redo ${store.redoLabel()} (${kbd('⌘⇧Z')})`, () => doRedo(), { disabled: !store.canRedo() }),
@@ -816,7 +814,6 @@ const gridHandlers = {
   onCellMenu: ({ x, y, field, value, rid }) => cellMenu(field, value, rid, { x, y }),
   onRowMenu: ({ x, y, rids }) => menu(document.body, [
     { label: `Delete ${rids.length} row${rids.length === 1 ? '' : 's'}`, icon: 'trash', danger: true, disabled: !rids.length, onClick: () => deleteRows(rids) },
-    { label: 'Keep rows above', icon: 'crop', onClick: () => {} , disabled: true },
   ], { x, y }),
   onDeleteRows: (rids) => deleteRows(rids),
   onCellEdit: ({ rid, column, value }) => {
@@ -1564,7 +1561,7 @@ function installDesktop() {
   renderMast();
   renderImport();
   $('#importScreen').hidden = false;
-  window.duckbench = { store, client, sql, duck, version: '2.2.0', desktop: isDesktop() };
+  window.duckbench = { store, client, sql, duck, version: '2.3.0', desktop: isDesktop() };
   const params = new URLSearchParams(location.search);
   if (params.has('notour')) prefs.set('tourDone', true);
   if (params.has('demo')) await loadSample();

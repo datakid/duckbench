@@ -2,8 +2,8 @@ import { el, clear, copyText } from './dom.js';
 import { icon } from './icons.js';
 import { formatValue, TYPE_BADGES, TYPE_LABELS, isNumeric } from '../core/types.js';
 
-const ROW_H = 28;
-const HEAD_H = 52;
+const ROW_H = 30;
+const HEAD_H = 54;
 const GUTTER_W = 56;
 const PAGE = 200;
 const OVERSCAN_ROWS = 12;
@@ -93,18 +93,17 @@ export class Grid {
 
   autoWidths(page) {
     const ctx = Grid.measureCtx || (Grid.measureCtx = document.createElement('canvas').getContext('2d'));
-    ctx.font = '12.5px "Instrument Sans", system-ui, sans-serif';
     this.fields.forEach((f, c) => {
       if (this.widths.has(f.name)) return;
-      ctx.font = '600 12px "Instrument Sans", system-ui, sans-serif';
-      let w = ctx.measureText(f.name).width + 90;
-      ctx.font = (isNumeric(f.type) ? '12px "JetBrains Mono", monospace' : '12.5px "Instrument Sans", system-ui, sans-serif');
+      ctx.font = '600 12px Geist, "Instrument Sans", system-ui, sans-serif';
+      let w = ctx.measureText(f.name).width + 94;
+      ctx.font = (isNumeric(f.type) || f.type === 'date' || f.type === 'datetime' ? '12px "Geist Mono", "JetBrains Mono", monospace' : '12.5px Geist, "Instrument Sans", system-ui, sans-serif');
       const rows = page?.rows || [];
       for (let r = 0; r < Math.min(rows.length, 80); r++) {
         const v = rows[r][c];
         if (v == null) continue;
         const s = formatValue(v, f.type);
-        w = Math.max(w, ctx.measureText(s.length > 60 ? s.slice(0, 60) : s).width + 28);
+        w = Math.max(w, ctx.measureText(s.length > 60 ? s.slice(0, 60) : s).width + 32);
       }
       this.widths.set(f.name, Math.round(Math.min(MAX_AUTO_W, Math.max(MIN_W + 20, w))));
     });
