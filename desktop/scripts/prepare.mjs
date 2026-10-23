@@ -2,13 +2,11 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, rea
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktop = resolve(here, '..');
 const web = resolve(desktop, '..');
 const dist = join(desktop, 'dist');
-const require = createRequire(join(desktop, 'package.json'));
 
 const WEB_ENTRIES = ['index.html', 'demo.html', 'tests.html', 'parity.html', 'selftest.html', 'favicon.svg', 'css', 'fonts', 'js', 'vendor'];
 const DUCKDB_VERSION = '1.4.3';
@@ -20,7 +18,12 @@ function fail(msg) {
 }
 
 function pkgDir(name) {
-  try { return dirname(require.resolve(`${name}/package.json`)); } catch { fail(`missing dependency ${name}. Run "npm install" in desktop/.`); }
+  for (let dir = desktop; ; dir = dirname(dir)) {
+    const candidate = join(dir, 'node_modules', name);
+    if (existsSync(join(candidate, 'package.json'))) return candidate;
+    if (dirname(dir) === dir) break;
+  }
+  fail(`missing dependency ${name}. Run "npm install" in desktop/.`);
 }
 
 function copyWeb() {

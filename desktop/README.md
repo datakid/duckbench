@@ -37,12 +37,29 @@ npm run icons
 
 ## Releases
 
-Pushing a `v*` tag runs `.github/workflows/desktop.yml`, which:
-- builds macOS (Apple Silicon and Intel), Windows and Linux
-- runs the Rust tests
-- attaches the installers and the update manifest (`latest.json`) to a draft GitHub release
+### CI
 
-### Signing and updates
+`.github/workflows/ci.yml` runs on every push to `main`, every pull request, and on demand:
+- **Web self-tests:** the browser test suite (`tests.html`) runs in headless Chromium.
+- **Desktop installer (Windows):** runs `npm run check` (bundle preparation and the Rust tests), then builds the NSIS installer and uploads it as the `duckbench-windows-installer` artifact (kept 14 days).
+
+CI builds use `src-tauri/tauri.ci.conf.json`, which turns off update artifacts so no signing key is needed.
+
+### Pre-alpha releases
+
+`.github/workflows/release.yml` builds the Windows installer and publishes it on the Releases page with a SHA-256 file. Push a tag to start one:
+
+```bash
+git tag v2.3.0-alpha.1
+git push origin v2.3.0-alpha.1
+```
+
+- The version in the tag is written into the installer, so version numbers don't need editing by hand.
+- A tag with a suffix (`-alpha.1`, `-beta.1`) is published as a **pre-release**. A plain tag such as `v2.3.0` is a normal release.
+- It can also be started from the Actions tab (**Run workflow**) with a tag name.
+- These builds are unsigned and have no auto-update. macOS and Linux builds are not part of the workflow yet.
+
+### Signing and updates (not enabled yet)
 
 | Secret / setting | Purpose |
 |---|---|

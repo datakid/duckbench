@@ -4,13 +4,13 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tauri::http::{header, Request, Response, StatusCode};
 
-fn header_str(req: &tauri::ipc::Request, key: &str) -> Result<String, String> {
+fn header_str(req: &tauri::ipc::Request<'_>, key: &str) -> Result<String, String> {
     let v = req.headers().get(key).ok_or(format!("missing {key}"))?;
     let s = v.to_str().map_err(|e| e.to_string())?;
     Ok(percent_decode_str(s).decode_utf8_lossy().into_owned())
 }
 
-fn body_bytes(req: &tauri::ipc::Request) -> Result<&[u8], String> {
+fn body_bytes<'a>(req: &'a tauri::ipc::Request<'_>) -> Result<&'a [u8], String> {
     match req.body() {
         tauri::ipc::InvokeBody::Raw(b) => Ok(b),
         _ => Err("expected raw bytes".into()),
