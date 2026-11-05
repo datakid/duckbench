@@ -2,26 +2,13 @@
 
 A data-prep workbench that runs entirely on your machine. Clean, reshape, join and export CSV, Excel, JSON and Parquet files with visual steps or SQL. Nothing is uploaded: files are processed in the browser tab or in the desktop app.
 
+![Duckbench showing a sales table, the ribbon and the applied steps](docs/screenshot.png)
+
+**Try it:** https://duckbench2.vercel.app · **Desktop:** in preview, see [Desktop](#desktop)
+
 Duckbench uses two engines. A fast JavaScript engine handles everyday files. [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview) handles SQL and files too large for memory.
 
-## Interface (2.3)
-
-The 2.3 release is a full UI overhaul. The engine, steps, recipes and file formats are unchanged.
-
-- **Shell.** A full-height sidebar holds the brand, queries and applied steps. The workspace on the right has floating cards for the ribbon and the data grid, with a minimal status line underneath. The inspector is a separate floating panel on the right.
-- **Launch screen.** A centred hero, a large drop zone, a resume banner for saved sessions, and a four-card grid (recipe, batch, SQL console, large file).
-- **Palette.** The same coral accent and supporting hues as before, at lower chroma: warm-neutral greys, a softened coral `#f26a68` (dark) / `#e85f5d` (light), and muted sky, orchid, mint and sand for types and states.
-- **Type.** Geist and Geist Mono, self-hosted, with Instrument Sans and JetBrains Mono as fallbacks.
-- **Details.** Underline ribbon tabs, pill step codes on a timeline, taller grid rows (30 px), pill toolbar toggles, frosted menus, toasts and job bar.
-
-### Fixes in 2.3
-- `listSheets` (sheet picker for large `.xlsx` files opened with DuckDB) used to read the whole workbook into memory. It now reads only the ZIP central directory and `xl/workbook.xml`.
-- The grid toolbar now refreshes when a step fails, so the title and shape no longer show stale values.
-- Removed a row-menu item ("Keep rows above") that was always disabled.
-- Added the missing `favicon.svg`, which every page linked to.
-- The version shown on the launch screen and in `window.duckbench` now matches the package version (2.3.0).
-
-## Features
+## What it does
 
 **Visual steps**
 - Filter, sort, remove duplicates or blank rows, keep a range or sample of rows
@@ -67,6 +54,15 @@ The 2.3 release is a full UI overhaul. The engine, steps, recipes and file forma
 | JSON / JSONL | ✓ | ✓ | ✓ |
 | Parquet | ✓ | ✓ | ✓ |
 
+## What it does not do
+
+- It does not upload files or call a server. The web app fetches its libraries from a CDN (see Privacy), and nothing else leaves the page.
+- Excel `.xls` and `.ods` files can be imported but not exported, and cannot be opened with DuckDB.
+- On DuckDB-backed files, steps that cannot be translated to SQL exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB.
+- Extract text and window columns are not translated to SQL yet. Full and right joins, and loose key matching, are not in SQL yet.
+- The desktop app is a preview. There are no recent files on desktop yet.
+- A step is never translated to SQL when SQL could give a different answer from the JavaScript engine.
+
 ## Privacy
 
 Files never leave your device. The web app downloads DuckDB-WASM and the Parquet library from jsDelivr on first use. If you open an Excel file with DuckDB, it also downloads DuckDB's Excel extension from `extensions.duckdb.org`. No data is sent anywhere.
@@ -74,6 +70,15 @@ Files never leave your device. The web app downloads DuckDB-WASM and the Parquet
 Sessions are saved in the browser:
 - Small files are stored in IndexedDB.
 - Large files opened with DuckDB are remembered as file handles in Chromium-based browsers, and as private copies in the browser's own storage (OPFS) in Firefox and Safari.
+
+## Built with
+
+- **No framework, no build step for the web app.** Plain ES modules, a columnar `Frame` engine in a Web Worker, and self-hosted fonts.
+- **DuckDB-WASM 1.32.0** for SQL and large files, loaded on demand from jsDelivr (bundled in the desktop app).
+- **hyparquet 1**, **hyparquet-compressors 1** and **hyparquet-writer 0** for reading and writing Parquet, loaded from jsDelivr on first use.
+- **SheetJS 0.20.3** for Excel and OpenDocument files, vendored in `vendor/`.
+- **Fonts:** Geist and Geist Mono, with Instrument Sans and JetBrains Mono as fallbacks.
+- **Desktop:** Tauri 2 (Rust 1.77.2 or newer) with the dialog, updater, process and window-state plugins. esbuild prepares the web files for it.
 
 ## Getting started
 
