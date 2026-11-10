@@ -180,3 +180,7 @@ cd desktop && cargo test --manifest-path src-tauri/Cargo.toml
 - Full and right joins, and loose key matching, in SQL
 - Open `.xls` and `.ods` files with DuckDB
 - Recent files on desktop
+
+## License
+
+MIT. See `LICENSE`. Bundled third-party components keep their own licences.
