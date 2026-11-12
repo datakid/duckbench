@@ -25,6 +25,9 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 - Undo and redo for every edit
 - Each step is cached, so editing late steps doesn't recompute early ones
 - Recipes save the whole pipeline as JSON and can be applied to many files in one batch
+- Each step shows how many rows and columns it added or removed
+- Share a query's steps as a link. The link carries the steps only, never your file or its rows
+- Copy a pipeline as SQL when the file is opened with DuckDB. The copied SQL reads the file by name, so it runs in DuckDB wherever that file exists (the in-app SQL console blocks direct file reads)
 
 **SQL**
 - SQL steps run DuckDB queries against the current data and any other query
@@ -36,7 +39,7 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 - CSV files up to about 1 GB are streamed into memory
 - Larger files, or any file opened with "Open with DuckDB", are queried in place
 - On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, merge, date parts, index/duplicate/move columns, fill empty values, group by, joins, pivots and unpivots
-- Steps that can't be translated exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB.
+- Steps that can't be translated exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB and a `preview` badge when it ran on the preview. Exporting a result that contains preview-only steps asks you to confirm first.
 - Full-file export to Parquet (ZSTD), CSV, JSON or JSONL
 
 **Grid**

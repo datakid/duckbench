@@ -113,7 +113,7 @@ export function createSqlRunner(client, { onStatus } = {}) {
         try { total = await duck.countRows(sql); } catch {}
         note = `First ${take.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''} rows${pushed ? ` after ${pushed} step${pushed === 1 ? '' : 's'} run by DuckDB over the whole file` : ''}. Full-file export uses every row.`;
       } else if (pushed) note = `${pushed} step${pushed === 1 ? '' : 's'} ran in DuckDB over the whole file.`;
-      await client.call('putSqlResult', { key: need.key, fields: dedupe(r.fields), columns: r.columns, note }, { track: false });
+      await client.call('putSqlResult', { key: need.key, fields: dedupe(r.fields), columns: r.columns, note, truncated: !!r.truncated }, { track: false });
     } catch (e) {
       await client.call('putSqlResult', { key: need.key, error: pushed ? cleanError(e) : `${table}: ${cleanError(e)}` }, { track: false });
     }

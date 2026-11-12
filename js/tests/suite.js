@@ -12,6 +12,7 @@ import { zipFiles, unzipEntries, crc32 } from '../io/zip.js';
 import { createStore } from '../app/store.js';
 import { compileStep, mayCompile } from '../engine/compile.js';
 import { profileFromJson } from '../engine/duck.js';
+import { firstPreviewOnlyIndex, previewTaintedAt, formatStepDelta, sqlHeader, buildSqlCopy, finishSql, stripForShare, encodeShare, decodeShare, extractShare, createShareLink, usesOtherQueries, baseName } from '../app/vnext.js';
 
 const SALES_FIELDS = [{ name: 'order_id', type: 'integer' }, { name: 'order_date', type: 'date' }, { name: 'customer', type: 'text' }, { name: 'region', type: 'text' }, { name: 'quantity', type: 'integer' }, { name: 'unit_price', type: 'number' }];
 function duckEngine(steps, schemaFields = SALES_FIELDS) {
@@ -300,6 +301,117 @@ export const TESTS = [
   ['duck — EXPLAIN ANALYZE JSON profile', () => {
     const p = profileFromJson({ latency: 0.012, children: [{ operator_name: 'PROJECTION', operator_timing: 0.001, operator_cardinality: 5, children: [{ operator_name: 'FILTER', operator_timing: 0.004, operator_cardinality: 5, children: [{ operator_name: 'TABLE_SCAN', operator_timing: 0.006, operator_cardinality: 52, children: [] }] }] }] });
     eq(p.ops.map(o => o.name), ['PROJECTION', 'FILTER', 'TABLE_SCAN']); eq(p.total, 0.012); ok(p.text.includes('    TABLE_SCAN  52 rows'));
+  }],
+  ['vNext — preview taint: no steps', () => { eq(firstPreviewOnlyIndex([]), -1); eq(previewTaintedAt([], 0), -1); }],
+  ['vNext — preview taint: first preview-only step', () => { const d = [{ pushed: true }, { preview: true }, { preview: true }]; eq(firstPreviewOnlyIndex(d), 1); eq(previewTaintedAt(d, 0), -1); eq(previewTaintedAt(d, 2), 1); }],
+  ['vNext — preview taint: disabled never taints, in-memory is clean', () => { eq(firstPreviewOnlyIndex([{ disabled: true, preview: true }, { rows: 3 }]), -1); eq(firstPreviewOnlyIndex([{ rows: 1 }, { rows: 2 }]), -1); }],
+  ['vNext — engine flags steps that ran on a truncated DuckDB preview', () => {
+    const e = duckEngine([{ type: 'sort', data: { keys: [{ column: 'region', direction: 'asc' }] } }, { type: 'extract_text', data: { column: 'region', mode: 'first', count: 2 } }, { type: 'keep_rows', data: { mode: 'first', count: 1 } }]);
+    const first = e.evaluate({ queryId: 'd' });
+    ok(first.needsSql && first.needsSql.source, 'wants source rows');
+    e.putSqlResult({ key: first.needsSql.key, fields: [{ name: 'region', type: 'text' }], columns: [['North', 'South', 'East']], truncated: true });
+    const r = e.evaluate({ queryId: 'd' });
+    ok(r.diag[0].pushed && !r.diag[0].preview, 'pushed step is whole-file');
+    ok(r.diag[1].preview && r.diag[2].preview, 'JS steps are preview-only');
+    eq(firstPreviewOnlyIndex(r.diag), 1);
+  }],
+  ['vNext — engine does not flag steps when the DuckDB result is complete', () => {
+    const e = duckEngine([{ type: 'sort', data: { keys: [{ column: 'region', direction: 'asc' }] } }, { type: 'keep_rows', data: { mode: 'first', count: 1 } }]);
+    const first = e.evaluate({ queryId: 'd' });
+    e.putSqlResult({ key: first.needsSql.key, fields: [{ name: 'region', type: 'text' }], columns: [['North', 'South']] });
+    const r = e.evaluate({ queryId: 'd' });
+    eq(firstPreviewOnlyIndex(r.diag), -1);
+  }],
+  ['vNext — engine ignores disabled steps for the preview flag', () => {
+    const e = duckEngine([{ type: 'sort', data: { keys: [{ column: 'region', direction: 'asc' }] } }, { type: 'extract_text', data: { column: 'region', mode: 'first', count: 2 }, disabled: true }]);
+    const first = e.evaluate({ queryId: 'd' });
+    e.putSqlResult({ key: first.needsSql.key, fields: [{ name: 'region', type: 'text' }], columns: [['North', 'South']], truncated: true });
+    const r = e.evaluate({ queryId: 'd' });
+    eq(firstPreviewOnlyIndex(r.diag), -1);
+  }],
+  ['vNext — delta: unchanged shape', () => { const d = formatStepDelta({ rows: 10, cols: 3 }, { rows: 10, cols: 3 }); eq(d.text, 'no change'); ok(d.muted); ok(/Values or types may still have changed/.test(d.tip)); }],
+  ['vNext — delta: rows removed', () => { const d = formatStepDelta({ rows: 2000, cols: 3 }, { rows: 796, cols: 3 }); eq(d.text, `−${(1204).toLocaleString()} rows`); eq(d.label, `${(1204).toLocaleString()} rows removed`); ok(!d.muted); }],
+  ['vNext — delta: columns added', () => eq(formatStepDelta({ rows: 5, cols: 3 }, { rows: 5, cols: 5 }).text, '+2 cols')],
+  ['vNext — delta: singular wording and both parts', () => { const d = formatStepDelta({ rows: 5, cols: 3 }, { rows: 4, cols: 2 }); eq(d.text, '−1 row · −1 col'); eq(d.label, '1 row removed, 1 column removed'); }],
+  ['vNext — delta: columns only when rows unknown', () => eq(formatStepDelta({ cols: 3 }, { cols: 4 }).text, '+1 col')],
+  ['vNext — delta: unknown sides show nothing', () => { eq(formatStepDelta({ rows: 5, cols: 3 }, {}), null); eq(formatStepDelta(undefined, { rows: 5, cols: 3 }), null); eq(formatStepDelta({ cols: 3 }, { cols: 3 }), null); }],
+  ['vNext — delta: engine diag feeds the chip', () => {
+    const e = setup();
+    e.setQueries({ queries: [{ id: 'q', name: 'sales', source: { kind: 'file', sourceId: 'sales' }, steps: [{ id: 'a', type: 'keep_rows', data: { mode: 'first', count: 5 } }] }] });
+    const d = e.evaluate({ queryId: 'q' }).diag[0];
+    eq(formatStepDelta({ rows: d.prevRows, cols: d.prevCols }, { rows: d.rows, cols: d.cols }).text, `−${(d.prevRows - 5).toLocaleString()} rows`);
+  }],
+  ['vNext — sql header uses the file name only', () => { const h = sqlHeader({ fileName: 'C:\\Users\\alice\\data\\sales.csv', from: 1, to: 4, total: 6, date: new Date(2026, 10, 11) }); ok(h.includes('-- Source: sales.csv')); ok(!h.includes('alice')); ok(h.includes('-- Steps 1 to 4 of 6')); ok(h.includes('-- Generated 2026-11-11')); }],
+  ['vNext — sql header cannot be broken out of by a file name', () => { const h = sqlHeader({ fileName: 'a\nDROP TABLE x;.csv', from: 1, to: 1, total: 1, date: new Date(2026, 0, 2) }); eq(h.split('\n').filter(l => l.startsWith('-- Source:')).length, 1); ok(!h.split('\n').some(l => l.startsWith('DROP'))); ok(h.includes('-- Generated 2026-01-02')); }],
+  ['vNext — sql copy ends with a single semicolon and LF endings', () => { const t = buildSqlCopy({ fileName: '/tmp/a.csv', sql: 'SELECT 1;;\r\n', to: 1, total: 1, date: new Date(2026, 10, 11) }); ok(t.endsWith('SELECT 1;\n')); ok(!t.includes('\r')); eq(finishSql('SELECT 2'), 'SELECT 2;'); eq(baseName('\\\\srv\\share\\x.csv'), 'x.csv'); }],
+  ['vNext — copy sql: compiled plan matches the pipeline', () => {
+    const e = duckEngine([{ type: 'filter', data: { rules: [{ column: 'quantity', operator: '>', value: '2' }] } }, { type: 'sort', data: { keys: [{ column: 'region', direction: 'asc' }] } }]);
+    const plan = e.duckPlan({ queryId: 'd' });
+    ok(plan.complete && plan.pushed === 2, 'both steps compile');
+    const t = buildSqlCopy({ fileName: 'big.csv', sql: plan.sql, to: 2, total: 2, date: new Date(2026, 10, 11) });
+    ok(/WHERE/i.test(t) && /ORDER BY/i.test(t) && t.trimEnd().endsWith(';'));
+  }],
+  ['vNext — share: round trip keeps unicode and emoji', async () => {
+    const steps = [{ type: 'filter', data: { rules: [{ column: 'naïve "quoted"', operator: '=', value: '数量 🦆' }] }, name: 'Pick 🦆' }, { type: 'sort', data: { keys: [{ column: 'Unit Price', direction: 'desc' }] }, disabled: true }];
+    const wire = stripForShare(steps);
+    const enc = await encodeShare(wire);
+    ok(/^1\.[A-Za-z0-9_-]+$/.test(enc), 'url-safe alphabet only');
+    const dec = await decodeShare(enc);
+    ok(dec.ok); eq(dec.recipe, wire);
+  }],
+  ['vNext — share: truncated, wrong version and bad characters are rejected', async () => {
+    const enc = await encodeShare(stripForShare([{ type: 'sort', data: { keys: [{ column: 'a', direction: 'asc' }] } }]));
+    const cut = await decodeShare(enc.slice(0, -10));
+    ok(!cut.ok && cut.reason === 'malformed');
+    eq((await decodeShare('2.abc')).reason, 'newer-version');
+    eq((await decodeShare('1.!!!')).reason, 'malformed');
+    eq((await decodeShare('')).reason, 'malformed');
+    eq((await decodeShare('x'.repeat(10001))).reason, 'too-long');
+  }],
+  ['vNext — share: non-recipe payloads are rejected', async () => {
+    eq((await decodeShare(await encodeShare([]))).reason, 'malformed');
+    eq((await decodeShare(await encodeShare({ app: 'duckbench', steps: [] }))).reason, 'malformed');
+    eq((await decodeShare(await encodeShare({ app: 'duckbench', steps: [1] }))).reason, 'malformed');
+    eq((await decodeShare(await encodeShare({ app: 'duckbench', steps: [{ type: 'x'.repeat(80) }] }))).reason, 'malformed');
+  }],
+  ['vNext — share: prototype pollution keys are dropped', async () => {
+    const enc = await encodeShare(JSON.parse('{"steps":[{"type":"sort","data":{"__proto__":{"x":1},"constructor":{"y":2},"keys":[]}}]}'));
+    const dec = await decodeShare(enc);
+    ok(dec.ok); eq({}.x, undefined); eq(Object.keys(dec.recipe.steps[0].data), ['keys']);
+  }],
+  ['vNext — share: decompression is capped', async () => {
+    const enc = await encodeShare({ app: 'duckbench', steps: [{ type: 'sort', data: { pad: ' '.repeat(2_000_000) } }] });
+    ok(enc.length < 10000, 'bomb is small on the wire');
+    eq((await decodeShare(enc)).reason, 'too-large');
+  }],
+  ['vNext — share: unknown step types are reported', async () => {
+    const enc = await encodeShare({ app: 'duckbench', steps: [{ type: 'sort', data: {} }, { type: 'time_travel', data: {} }] });
+    const dec = await decodeShare(enc, { isKnownStep: (st) => st.type !== 'time_travel' });
+    ok(!dec.ok && dec.reason === 'unsupported-step' && dec.type === 'time_travel');
+  }],
+  ['vNext — share: markup in names survives as plain data', async () => {
+    const enc = await encodeShare(stripForShare([{ type: 'sort', data: {}, name: '<img src=x onerror=alert(1)>' }]));
+    const dec = await decodeShare(enc);
+    ok(dec.ok); eq(dec.recipe.steps[0].name, '<img src=x onerror=alert(1)>');
+  }],
+  ['vNext — share: pasted urls, fragments and trailing whitespace are accepted', () => { eq(extractShare('https://example.com/app/index.html?demo#r=1.abc_-\n'), '1.abc_-'); eq(extractShare('  r=1.abc  '), '1.abc'); eq(extractShare('#r=1.abc'), '1.abc'); eq(extractShare('1.abc'), '1.abc'); }],
+  ['vNext — share: payload carries steps only, never paths or file names', async () => {
+    const steps = [{ id: 's1', type: 'filter', data: { rules: [{ column: 'a', operator: '=', value: 'x' }] }, disabled: false, name: '', note: '' }];
+    const wire = stripForShare(steps);
+    eq(Object.keys(wire).sort(), ['app', 'steps']);
+    eq(Object.keys(wire.steps[0]).sort(), ['data', 'type']);
+    const link = await createShareLink(steps, 'https://duckbench2.vercel.app/');
+    ok(link.ok && link.url.startsWith('https://duckbench2.vercel.app/#r=1.'));
+    const dec = await decodeShare(extractShare(link.url));
+    ok(!JSON.stringify(dec.recipe).includes('C:\\'));
+  }],
+  ['vNext — share: oversize recipes get no link, cross-query recipes are refused', async () => {
+    const big = Array.from({ length: 400 }, (_, i) => ({ type: 'replace_values', data: { column: 'c' + i, find: Math.random().toString(36).repeat(8) + i, replace: Math.random().toString(36).repeat(8) } }));
+    eq((await createShareLink(big, 'https://x.test/')).reason, 'too-long');
+    eq((await createShareLink([{ type: 'join', data: {} }], 'https://x.test/')).reason, 'multi');
+    ok(usesOtherQueries([{ type: 'sql', data: { tables: ['q2'] } }]));
+    eq((await createShareLink([{ type: 'sort', data: {} }], '')).reason, 'nobase');
+    eq((await createShareLink([], 'https://x.test/')).reason, 'no-steps');
   }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];

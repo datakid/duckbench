@@ -19,6 +19,9 @@ import { enhanceSelects } from '../ui/select.js';
 import { TYPE_BADGES } from '../core/types.js';
 import { keepCopy, getCopy, opfsFilesAvailable, listSheets } from './filestore.js';
 import { pickNativeFiles, nativeFileUrl, checkForUpdate } from './platform.js';
+import { installNativeGuards } from '../ui/native.js';
+import { copyWithFeedback } from '../ui/clip.js';
+import { previewTaintedAt, formatStepDelta, buildSqlCopy, createShareLink, decodeShare, extractShare, STRINGS } from './vnext.js';
 if (isDesktop()) setTimeout(async () => { const u = await checkForUpdate(); if (u) toast(`Duckbench ${u.version} is available`, { action: 'Install & restart', onAction: () => u.install() }); }, 4000);
 
 const store = createStore();
@@ -27,6 +30,7 @@ const xlsx = makeXlsxRpc();
 const sql = createSqlRunner(client, { onStatus: () => renderMast() });
 const LARGE_FILE_BYTES = 1024 * 1024 * 1024;
 const DUCK_PREVIEW_ROWS = 1_000_000;
+const SHARE_BASE_URL = 'https://duckbench2.vercel.app/';
 const duckFiles = new Map();
 
 function engineLabel() {
@@ -37,9 +41,31 @@ function engineLabel() {
   return client.mode === 'worker' ? 'Local engine' : 'Inline engine';
 }
 duck.onDuckStatus(() => { renderMast(); if (!$('#workbench').hidden) renderRibbon(); });
+let engineNote = null;
+let engineTimer = null;
+function clearEngineNote() {
+  clearTimeout(engineTimer);
+  engineTimer = null;
+  if (engineNote) { engineNote(); engineNote = null; }
+}
+function showEngineFailed() {
+  clearEngineNote();
+  engineNote = toast(STRINGS_ENGINE.failed, { kind: 'error', action: 'Retry', onAction: () => { engineNote = null; duck.ensureDuck().catch((e) => console.error('[vnext:E3]', e)); }, duration: 600000 });
+}
+const STRINGS_ENGINE = { downloading: 'Downloading the SQL engine (one time)…', failed: 'Couldn’t download the SQL engine. Check your connection and try again.' };
+duck.onDuckStatus((st) => {
+  if (isDesktop()) return;
+  if (st === 'loading') {
+    if (engineNote) return;
+    engineNote = toast(STRINGS_ENGINE.downloading, { duration: 600000 });
+    engineTimer = setTimeout(showEngineFailed, 60000);
+  } else if (st === 'ready') clearEngineNote();
+  else if (st === 'failed') showEngineFailed();
+  else clearEngineNote();
+});
 const ui = {
   result: null, selection: { columns: [] }, selectedStep: null, rightMode: null, profileColumn: null,
-  showQuality: prefs.get('quality', true), evalToken: 0, diag: [], inputFields: [], search: '',
+  showQuality: prefs.get('quality', true), evalToken: 0, diag: [], inputFields: [], search: '', shared: null,
 };
 let grid = null;
 const ACCEPT = '.csv,.tsv,.txt,.json,.jsonl,.ndjson,.xlsx,.xls,.xlsm,.ods,.parquet';
@@ -126,7 +152,7 @@ async function importLargeViaDuck(file, { asNewProject, handle, options = {}, na
   toast(`${file.name} opened with DuckDB`, { kind: 'success' });
 }
 
-async function importFiles(files, { asNewProject = false, options, viaDuck = false, handles, native } = {}) {
+async function importFiles(files, { asNewProject = false, options, viaDuck = false, handles, native, deferShared = false } = {}) {
   const done = [];
   for (const file of files) {
     try {
@@ -157,6 +183,7 @@ async function importFiles(files, { asNewProject = false, options, viaDuck = fal
   if (done.length === 1) toast(done[0], { kind: 'success' });
   else if (done.length > 1) toast(`${done.length} files imported`, { kind: 'success' });
   if (store.state.queries.length) showWorkbench();
+  if (!deferShared && done.length) applyPendingShared();
 }
 
 async function importWithOptions(asNewProject) {
@@ -187,9 +214,10 @@ async function importWithOptions(asNewProject) {
 async function loadSample() {
   const a = new File([SAMPLE_SALES_CSV], 'sample_sales.csv', { type: 'text/csv' });
   const b = new File([SAMPLE_REGIONS_CSV], 'regions.csv', { type: 'text/csv' });
-  await importFiles([a, b], { asNewProject: true });
+  await importFiles([a, b], { asNewProject: true, deferShared: true });
   const first = store.state.queries[0];
   if (first) store.quiet((s) => { s.activeQueryId = first.id; s.projectName = 'Sample sales'; }, 'change');
+  applyPendingShared();
 }
 
 async function pickForDuck() {
@@ -241,12 +269,14 @@ function renderImport() {
         el('p', { class: 'launch-sub' }, icon('shield', 12), isDesktop() ? 'Files stay on this computer' : 'Files stay in this tab — nothing is uploaded'))),
     drop,
     resume,
+    ui.shared ? el('div', { class: 'launch-note', role: 'status' }, icon('link', 14), el('span', {}, `Shared recipe ready (${ui.shared.recipe.steps.length} steps). Open a file to apply it.`), el('button', { class: 'btn btn-ghost btn-xs', type: 'button', onclick: () => { ui.shared = null; renderImport(); } }, 'Discard')) : null,
     el('div', { class: 'launch-section' },
       el('span', { class: 'launch-label' }, 'Or start with'),
       el('nav', { class: 'launch-acts', 'aria-label': 'Start' },
         act('table', 'Sample data', 'Two linked tables', loadSample, 'sampleBtn'),
         act('settings', 'Import options', 'Delimiter, encoding', () => importWithOptions(true)),
         act('clipboard', 'Open recipe', '.duckbench.json', loadRecipeFile),
+        act('link', 'Recipe link', 'Paste a share link', openPasteLink, 'linkBtn'),
         act('layers', 'Batch apply', 'One recipe, many files', openBatch),
         act('terminal', 'SQL console', 'DuckDB', () => openConsole(), null, '⌘J'),
         act('database', 'Large file', 'Read in place', () => openWithDuck(true)))),
@@ -384,7 +414,9 @@ const refresh = debounce(async () => {
     clear(banner);
     const vd = ui.diag[cursor];
     const msgs = [];
-    if (res.viewError) msgs.push(['error', `Step ${res.viewError.index + 1}: ${res.viewError.message}`]);
+    const pIdx = previewTaintedAt(ui.diag, cursor);
+    if (pIdx >= 0) msgs.push(['warn', `Showing results from the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows. Step ${pIdx + 1} (${q.steps[pIdx].name || TRANSFORMS[q.steps[pIdx].type]?.label || q.steps[pIdx].type}) can’t run on the whole file yet.`]);
+    if (res.viewError) msgs.push(['error', `Step ${res.viewError.index + 1}${q.steps[res.viewError.index] ? ` (${q.steps[res.viewError.index].name || TRANSFORMS[q.steps[res.viewError.index].type]?.label || q.steps[res.viewError.index].type})` : ''}: ${res.viewError.message}`]);
     if (vd?.warn?.length) vd.warn.forEach(w => msgs.push(['warn', w]));
     if (vd?.info?.length) vd.info.forEach(w => msgs.push(['info', w]));
     if (res.sourceNote) msgs.push(['info', res.sourceNote]);
@@ -524,6 +556,7 @@ function renderMast() {
   $('#brandMark').innerHTML = LOGO;
   const pn = $('#projectName');
   pn.textContent = store.state.projectName;
+  document.title = !$('#workbench').hidden && store.state.queries.length ? `${store.state.projectName} — Duckbench` : 'Duckbench';
   pn.onclick = async () => { const v = await promptDialog('Project name', { value: store.state.projectName }); if (v) store.commit('Rename project', (s) => { s.projectName = v; }); };
   const nav = clear($('#mastActions'));
   const center = clear($('#mastCenter'));
@@ -663,7 +696,7 @@ function renderSteps() {
   const q = store.activeQuery();
   if (!q) return;
   const cursor = store.cursor();
-  host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Applied steps'), el('span', { class: 'panel-count' }, String(q.steps.length))));
+  host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Applied steps'), el('div', { class: 'panel-tools' }, el('button', { class: 'icon-btn icon-btn-xs', type: 'button', 'aria-label': 'Copy as SQL, share and import', title: 'Copy as SQL, share link, import link', onclick: (e) => stepsToolsMenu(e.currentTarget) }, icon('more', 14)), el('span', { class: 'panel-count' }, String(q.steps.length)))));
   host.appendChild(el('button', { class: 'btn btn-ghost btn-block add-step-btn', id: 'addStepBtn', onclick: openPalette }, icon('plus', 15), 'Add step', el('kbd', {}, kbd('⌘K'))));
   const list = el('ol', { class: 'step-list', id: 'stepList' });
   const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
@@ -675,13 +708,15 @@ function renderSteps() {
     const t = TRANSFORMS[s.type];
     const d = ui.diag[i] || {};
     const status = d.error ? 'error' : d.blocked ? 'blocked' : d.warn?.length ? 'warn' : '';
-    const delta = d.rows != null && d.prevRows != null && d.rows !== d.prevRows ? `${d.rows > d.prevRows ? '+' : '−'}${fmtCount(Math.abs(d.rows - d.prevRows))} rows` : '';
+    const dl = !s.disabled && !d.error && !d.blocked && !d.draft ? formatStepDelta({ rows: d.prevRows, cols: d.prevCols }, { rows: d.rows, cols: d.cols }, { preview: !!d.preview }) : null;
+    const previewTip = `Counted on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows.`;
+    const deltaTip = dl ? [dl.tip, dl.preview ? previewTip : ''].filter(Boolean).join(' ') : '';
     const li = el('li', { class: `step-item${s.type === 'sql' ? ' step-sql' : ''}${i === cursor ? ' is-cursor' : ''}${i > cursor ? ' is-after' : ''}${s.disabled ? ' is-disabled' : ''}${status ? ` is-${status}` : ''}${s.id === ui.selectedStep ? ' is-selected' : ''}`, tabindex: '0', draggable: 'true', dataset: { i: String(i) }, title: d.error || (d.warn || []).join('\n') || '' },
       el('span', { class: 'step-code' }, t?.code || '??'),
       el('span', { class: 'step-text' },
         el('span', { class: 'step-name' }, s.name || t?.label || s.type),
         el('span', { class: 'step-sum' }, d.error ? d.error : stepSummary(s, { queryName }))),
-      el('span', { class: 'step-meta' }, d.pushed ? el('span', { class: 'step-pushed', title: 'Ran in DuckDB over the whole file' }, 'duck') : null, d.cached ? el('span', { class: 'step-cached', title: 'Served from cache' }, '●') : null, delta ? el('span', { class: 'step-delta' }, delta) : null, d.ms != null && !d.cached ? el('span', { class: 'step-ms' }, fmtMs(d.ms)) : null),
+      el('span', { class: 'step-meta' }, d.pushed ? el('span', { class: 'step-pushed', title: 'Ran in DuckDB over the whole file' }, 'duck') : null, d.preview ? el('span', { class: 'step-preview', title: `This step ran on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows, not the whole file.`, 'aria-label': `Preview: this step ran on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows, not the whole file.`, role: 'img' }, STRINGS.previewBadge) : null, d.cached ? el('span', { class: 'step-cached', title: 'Served from cache' }, '●') : null, dl ? el('span', { class: `step-delta${dl.muted ? ' is-muted' : ''}`, title: deltaTip || null, 'aria-label': dl.label, role: 'img' }, dl.text) : null, d.ms != null && !d.cached ? el('span', { class: 'step-ms' }, fmtMs(d.ms)) : null),
       el('button', { class: 'icon-btn icon-btn-xs step-more', 'aria-label': 'Step actions', onclick: (e) => { e.stopPropagation(); stepMenu(s, i, e.currentTarget); } }, icon('more', 14)));
     li.addEventListener('click', () => { ui.selectedStep = s.id; ui.rightMode = 'inspector'; setCursor(i); });
     li.addEventListener('keydown', (e) => {
@@ -974,6 +1009,9 @@ function openPalette() {
     { label: 'Open large file…', icon: 'database', kw: 'big parquet gb', run: () => openWithDuck(false) },
     { label: 'Freeze first column', icon: 'pin', kw: 'pin lock', run: () => setFrozen(1) },
     { label: 'Unfreeze columns', icon: 'pin', run: () => setFrozen(0) },
+    { label: 'Copy pipeline as SQL', icon: 'terminal', kw: 'duckdb sql copy clipboard', run: copyPipelineSql },
+    { label: 'Copy share link', icon: 'link', kw: 'recipe url share', run: copyShareLink },
+    { label: 'Import recipe from link', icon: 'link', kw: 'recipe url paste share', run: openPasteLink },
     { label: 'Save recipe', icon: 'save', run: saveRecipe },
     { label: 'Open recipe…', icon: 'clipboard', run: loadRecipeFile },
     { label: 'Batch apply steps to many files…', icon: 'layers', run: openBatch },
@@ -1092,6 +1130,15 @@ async function runExport(opts) {
   if (!q) return;
   const base = (q.name || 'export').replace(/[\\/:*?"<>|]+/g, '_');
   const stepIndex = opts.atStep ? store.cursor() : q.steps.length - 1;
+  if (!opts.clipboard && q.source?.kind === 'duck') {
+    const pIdx = previewTaintedAt(ui.diag, stepIndex);
+    if (pIdx >= 0) {
+      const lim = DUCK_PREVIEW_ROWS.toLocaleString();
+      const name = q.steps[pIdx].name || TRANSFORMS[q.steps[pIdx].type]?.label || q.steps[pIdx].type;
+      const go = await confirmDialog(`Step ${pIdx + 1} (${name}) can’t run on the whole file yet, so the export will contain results from the first ${lim} rows only.`, { title: `Export contains only the first ${lim} rows`, ok: `Export first ${lim} rows`, focusCancel: true });
+      if (!go) return;
+    }
+  }
   const args = { queryId: q.id, stepIndex, columns: opts.columns, nullText: opts.nullText ?? '', delimiter: opts.delimiter || ',', bom: opts.bom !== false, guard: opts.guard !== false, rowStart: opts.rowStart || 0, rowEnd: opts.rowEnd ?? Infinity };
   try {
     const targetsToResolve = opts.format === 'xlsx-all' ? store.state.queries : [q];
@@ -1167,13 +1214,141 @@ async function loadRecipeFile() {
   if (Array.isArray(r.steps)) {
     const q = store.activeQuery();
     if (!q) { toast('Import a data file first, then open this Duckbench 1 recipe to apply its steps.', { kind: 'error', duration: 8000 }); return; }
-    const steps = r.steps.map(migrateStep).filter(Boolean).map(s => ({ ...s, id: uid('s') }));
-    const unsupported = steps.filter(s => s.unsupported).length;
-    store.commit('Apply v1 recipe', (st) => { st.queries.find(x => x.id === q.id).steps.push(...steps); delete st.stepCursor[q.id]; });
-    toast(`Applied ${steps.length} steps${unsupported ? `, ${unsupported} unsupported` : ''}`, { kind: unsupported ? 'info' : 'success' });
+    applyRecipeSteps(r.steps, 'Apply v1 recipe');
     return;
   }
   toast('That doesn’t look like a Duckbench recipe.', { kind: 'error' });
+}
+
+function applyRecipeSteps(rawSteps, label) {
+  const q = store.activeQuery();
+  if (!q) return false;
+  const steps = rawSteps.map(migrateStep).filter(Boolean).map(s => ({ ...s, id: uid('s') }));
+  const unsupported = steps.filter(s => s.unsupported).length;
+  store.commit(label, (st) => { st.queries.find(x => x.id === q.id).steps.push(...steps); delete st.stepCursor[q.id]; });
+  toast(`Applied ${steps.length} steps${unsupported ? `, ${unsupported} unsupported` : ''}`, { kind: unsupported ? 'info' : 'success' });
+  return true;
+}
+
+const stepTitle = (s) => s.name || TRANSFORMS[s.type]?.label || s.type;
+
+async function copyPipelineSql() {
+  const q = store.activeQuery();
+  if (!q || $('#workbench').hidden) { toast(STRINGS.sqlNofile); return; }
+  if (q.source?.kind !== 'duck') { toast(STRINGS.sqlUnavailable); return; }
+  const cursor = store.cursor();
+  if (!q.steps.slice(0, cursor + 1).some(s => !s.disabled)) { toast(STRINGS.sqlNosteps); return; }
+  let plan;
+  try { plan = await sql.planFor(q.id, cursor); } catch (e) { console.error('[vnext:C]', e); toast(STRINGS.sqlError, { kind: 'error' }); return; }
+  if (!plan || plan.error || !plan.sql) { console.error('[vnext:C]', plan?.error); toast(STRINGS.sqlError, { kind: 'error' }); return; }
+  const fileName = store.source(q.source.sourceId)?.name || q.name;
+  let to = cursor + 1;
+  let message = null;
+  if (!plan.complete) {
+    const n = plan.blockedAt + 1;
+    const name = stepTitle(q.steps[plan.blockedAt]);
+    if (!plan.pushed) { toast(`Nothing to copy. Step ${n} (${name}) has no SQL equivalent yet.`, { kind: 'warn' }); return; }
+    to = plan.blockedAt;
+    message = `Copied SQL for steps 1 to ${to}. Step ${n} (${name}) has no SQL equivalent yet.`;
+  }
+  let text;
+  try { text = buildSqlCopy({ fileName, sql: plan.sql, from: 1, to, total: q.steps.length, date: new Date() }); } catch (e) { console.error('[vnext:C]', e); toast(STRINGS.sqlError, { kind: 'error' }); return; }
+  await copyWithFeedback(text, 'SQL', { message });
+}
+
+function shareBase() {
+  if (isDesktop()) return SHARE_BASE_URL;
+  return /^https?:$/.test(location.protocol) ? location.origin + location.pathname : '';
+}
+
+function recipeFileDialog(message) {
+  const m = modal({
+    title: 'Share link', width: 440,
+    body: el('p', { class: 'modal-text' }, message),
+    footer: [
+      el('button', { class: 'btn btn-ghost', autofocus: true, onclick: () => m.close() }, 'Cancel'),
+      el('button', { class: 'btn btn-primary', onclick: () => { m.close(); saveRecipe(); } }, 'Download recipe file')],
+  });
+}
+
+async function copyShareLink() {
+  const q = store.activeQuery();
+  if (!q || $('#workbench').hidden) { toast(STRINGS.sqlNofile); return; }
+  if (!q.steps.length) { toast(STRINGS.shareNoSteps); return; }
+  const r = await createShareLink(q.steps, shareBase());
+  if (!r.ok) {
+    if (r.reason === 'too-long') recipeFileDialog(STRINGS.shareTooLong);
+    else if (r.reason === 'multi') recipeFileDialog(STRINGS.shareMulti);
+    else if (r.reason === 'unsupported') recipeFileDialog(STRINGS.shareUnsupported);
+    else toast('Share links need the web address of Duckbench, which isn’t set yet.', { kind: 'error' });
+    return;
+  }
+  if (prefs.get('shareNoticeSeen', false)) { await copyWithFeedback(r.url, 'Share link'); return; }
+  const m = modal({
+    title: 'Share link', width: 460,
+    body: el('p', { class: 'modal-text' }, 'The link contains your steps, including column names and any values you typed into steps (for example filter values). It does not contain your file or its rows.'),
+    footer: [
+      el('button', { class: 'btn btn-ghost', autofocus: true, onclick: () => m.close() }, 'Cancel'),
+      el('button', { class: 'btn btn-primary', onclick: () => { prefs.set('shareNoticeSeen', true); m.close(); copyWithFeedback(r.url, 'Share link'); } }, 'Copy link')],
+  });
+}
+
+const isKnownStep = (s) => { try { const m = migrateStep({ ...s }); return !!m && !m.unsupported; } catch { return false; } };
+
+function applyPendingShared() {
+  if (!ui.shared || !store.activeQuery()) return;
+  const r = ui.shared.recipe;
+  ui.shared = null;
+  applyRecipeSteps(r.steps, 'Apply shared recipe');
+}
+
+async function offerShared(raw) {
+  const res = await decodeShare(extractShare(raw), { isKnownStep });
+  if (!res.ok) {
+    toast(res.reason === 'unsupported-step' ? `This recipe uses a step this version doesn’t know (${res.type}). Update Duckbench and try again.` : STRINGS.shareErr[res.reason] || STRINGS.shareErr.malformed, { kind: 'error', duration: 9000 });
+    return false;
+  }
+  const steps = res.recipe.steps;
+  const shown = steps.slice(0, 20).map(s => el('li', {}, stepTitle(s)));
+  if (steps.length > 20) shown.push(el('li', {}, `and ${steps.length - 20} more`));
+  const accepted = await new Promise((resolve) => {
+    let ok = false;
+    const m = modal({
+      title: 'Load shared recipe?', width: 480,
+      body: [el('p', { class: 'modal-text' }, `This link contains ${steps.length} step${steps.length === 1 ? '' : 's'}. Nothing is applied until you open a file and confirm.`), el('ol', { class: 'share-steps' }, shown)],
+      footer: [
+        el('button', { class: 'btn btn-ghost', autofocus: true, onclick: () => m.close() }, 'Cancel'),
+        el('button', { class: 'btn btn-primary', onclick: () => { ok = true; m.close(); } }, 'Load recipe')],
+      onClose: () => resolve(ok),
+    });
+  });
+  if (!accepted) return false;
+  ui.shared = { recipe: res.recipe };
+  if (!$('#workbench').hidden && store.activeQuery()) applyPendingShared();
+  else renderImport();
+  return true;
+}
+
+function openPasteLink() {
+  const input = el('input', { class: 'input', type: 'text', placeholder: 'https://…#r=1.…', 'aria-label': 'Paste a Duckbench share link', autofocus: true });
+  const go = () => { const raw = input.value; m.close(); if (raw.trim()) offerShared(raw); };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  const m = modal({
+    title: 'Import recipe from link', width: 480,
+    body: el('label', { class: 'share-field' }, el('span', { class: 'f-label' }, 'Paste a Duckbench share link'), input),
+    footer: [el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Cancel'), el('button', { class: 'btn btn-primary', onclick: go }, 'Import')],
+  });
+}
+
+function stepsToolsMenu(anchor) {
+  const q = store.activeQuery();
+  const duckBacked = q?.source?.kind === 'duck';
+  menu(anchor, [
+    { label: 'Copy as SQL', icon: 'terminal', hint: duckBacked ? '' : 'SQL engine files', onClick: copyPipelineSql },
+    { label: 'Copy share link', icon: 'link', onClick: copyShareLink },
+    '-',
+    { label: 'Import recipe from link…', icon: 'clipboard', onClick: openPasteLink },
+  ], { align: 'end' });
 }
 
 const BATCH_FORMATS = [['csv', 'CSV'], ['xlsx', 'Excel (.xlsx)'], ['json', 'JSON'], ['jsonl', 'JSON Lines'], ['parquet', 'Parquet']];
@@ -1574,6 +1749,7 @@ function installDesktop() {
 
 (async function boot() {
   installDesktop();
+  installNativeGuards();
   enhanceSelects();
   await client.init();
   initSplitters();
@@ -1584,4 +1760,9 @@ function installDesktop() {
   const params = new URLSearchParams(location.search);
   if (params.has('notour')) prefs.set('tourDone', true);
   if (params.has('demo')) await loadSample();
+  if (/^#r=/.test(location.hash)) {
+    const raw = location.hash;
+    await offerShared(raw);
+    history.replaceState(null, '', location.pathname + location.search);
+  }
 })();

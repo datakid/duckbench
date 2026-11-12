@@ -85,14 +85,14 @@ export function modal({ title, body, footer, width = 520, className = '', onClos
   return entry;
 }
 
-export function confirmDialog(message, { title = 'Are you sure?', ok = 'Confirm', cancel = 'Cancel', danger = false } = {}) {
+export function confirmDialog(message, { title = 'Are you sure?', ok = 'Confirm', cancel = 'Cancel', danger = false, focusCancel = false } = {}) {
   return new Promise((resolve) => {
     let result = false;
     const m = modal({
       title, width: 420,
       body: el('p', { class: 'modal-text' }, message),
       footer: [
-        el('button', { class: 'btn btn-ghost', onclick: () => m.close(false) }, cancel),
+        el('button', { class: 'btn btn-ghost', autofocus: focusCancel, onclick: () => m.close(false) }, cancel),
         el('button', { class: `btn ${danger ? 'btn-danger' : 'btn-primary'}`, onclick: () => { result = true; m.close(true); } }, ok),
       ],
       onClose: () => resolve(result),
@@ -215,7 +215,7 @@ let toastHost = null;
 export function toast(message, { kind = 'info', action, onAction, duration } = {}) {
   if (!toastHost) { toastHost = el('div', { class: 'toast-host', role: 'status', 'aria-live': 'polite' }); document.body.appendChild(toastHost); }
   const t = el('div', { class: `toast toast-${kind}` },
-    icon(kind === 'error' ? 'warn' : kind === 'success' ? 'check' : 'info', 15),
+    icon(kind === 'error' || kind === 'warn' ? 'warn' : kind === 'success' ? 'check' : 'info', 15),
     el('span', { class: 'toast-msg' }, message),
     action ? el('button', { class: 'toast-action', onclick: () => { onAction?.(); dismiss(); } }, action) : null,
     el('button', { class: 'toast-x', 'aria-label': 'Dismiss', onclick: () => dismiss() }, icon('x', 12)));

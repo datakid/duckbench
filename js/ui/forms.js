@@ -317,10 +317,11 @@ function formulaEditor(value, p, fields, set) {
   const ta = el('textarea', { class: 'input formula-input', rows: '3', placeholder: p.placeholder || '', spellcheck: 'false', dataset: { fkey: p.key } });
   ta.value = value;
   const suggest = el('div', { class: 'formula-suggest', hidden: true, role: 'listbox' });
-  const help = el('details', { class: 'formula-help' },
-    el('summary', {}, 'Formula reference'),
+  const helpBody = el('div', { class: 'formula-help-body', hidden: true },
     el('p', { class: 'f-help' }, 'Refer to columns as [Column name]. Operators: + − * / % ^ & (join text), = != < > <= >=, and / or / not. Text in "quotes".'),
     el('div', { class: 'fn-list' }, FORMULA_FUNCTIONS.map(f => el('button', { type: 'button', class: 'fn-item', title: f.doc, onclick: () => insert(`${f.name}(`) }, el('code', {}, f.name), el('span', {}, f.doc.replace(/^[^—]*?—\s*/, '').replace(/^\w+\(.*?\)\s*/, ''))))));
+  const disc = el('button', { class: 'disc', type: 'button', 'aria-expanded': 'false', onclick: () => { const open = disc.getAttribute('aria-expanded') !== 'true'; disc.setAttribute('aria-expanded', String(open)); helpBody.hidden = !open; } }, icon('chevron-right', 11), 'Formula reference');
+  const help = el('div', { class: 'formula-help' }, disc, helpBody);
   const insert = (text) => {
     const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? ta.value.length;
     ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
