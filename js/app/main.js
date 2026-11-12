@@ -20,7 +20,7 @@ import { TYPE_BADGES } from '../core/types.js';
 import { keepCopy, getCopy, opfsFilesAvailable, listSheets } from './filestore.js';
 import { pickNativeFiles, nativeFileUrl, checkForUpdate } from './platform.js';
 import { installNativeGuards } from '../ui/native.js';
-import { copyWithFeedback } from '../ui/clip.js';
+import { copyWithFeedback, showCopyFallback } from '../ui/clip.js';
 import { previewTaintedAt, formatStepDelta, buildSqlCopy, createShareLink, decodeShare, extractShare, STRINGS } from './vnext.js';
 if (isDesktop()) setTimeout(async () => { const u = await checkForUpdate(); if (u) toast(`Duckbench ${u.version} is available`, { action: 'Install & restart', onAction: () => u.install() }); }, 4000);
 
@@ -66,6 +66,7 @@ duck.onDuckStatus((st) => {
 const ui = {
   result: null, selection: { columns: [] }, selectedStep: null, rightMode: null, profileColumn: null,
   showQuality: prefs.get('quality', true), evalToken: 0, diag: [], inputFields: [], search: '', shared: null,
+  suggest: { key: '', items: null, dismissed: new Set() },
 };
 let grid = null;
 const ACCEPT = '.csv,.tsv,.txt,.json,.jsonl,.ndjson,.xlsx,.xls,.xlsm,.ods,.parquet';
@@ -177,7 +178,7 @@ async function importFiles(files, { asNewProject = false, options, viaDuck = fal
       asNewProject = false;
       done.push(`${file.name}: ${fmtCount(info.rowCount)} rows`);
     } catch (e) {
-      toast(`Couldn’t read ${file.name}: ${e.message}`, { kind: 'error' });
+      toast(/DuckDB could not be loaded/.test(e.message) ? `Couldn’t open ${file.name}: the SQL engine isn’t available. Check your connection and try again.` : `Couldn’t read ${file.name}: ${e.message}`, { kind: 'error' });
     }
   }
   if (done.length === 1) toast(done[0], { kind: 'success' });
@@ -276,7 +277,7 @@ function renderImport() {
         act('table', 'Sample data', 'Two linked tables', loadSample, 'sampleBtn'),
         act('settings', 'Import options', 'Delimiter, encoding', () => importWithOptions(true)),
         act('clipboard', 'Open recipe', '.duckbench.json', loadRecipeFile),
-        act('link', 'Recipe link', 'Paste a share link', openPasteLink, 'linkBtn'),
+        act('link', 'Recipe link', 'Import a recipe link', openPasteLink, 'linkBtn'),
         act('layers', 'Batch apply', 'One recipe, many files', openBatch),
         act('terminal', 'SQL console', 'DuckDB', () => openConsole(), null, '⌘J'),
         act('database', 'Large file', 'Read in place', () => openWithDuck(true)))),
@@ -425,6 +426,7 @@ const refresh = debounce(async () => {
     for (const [k, m] of msgs.slice(0, 4)) banner.appendChild(el('div', { class: `banner-line banner-${k}` }, icon(k === 'error' ? 'warn' : k === 'warn' ? 'warn' : 'info', 14), el('span', {}, m)));
     if (cursor < q.steps.length - 1) banner.appendChild(el('button', { class: 'btn btn-ghost btn-xs', onclick: () => setCursor(q.steps.length - 1) }, 'Jump to last step'));
     renderSteps(); renderStatus(); renderToolbar();
+    ensureSuggestions(q);
     if (ui.rightMode === 'profile' && ui.profileColumn) renderProfile(ui.profileColumn);
   } catch (e) {
     if (e.cancelled || token !== ui.evalToken) return;
@@ -433,6 +435,59 @@ const refresh = debounce(async () => {
     renderSteps(); renderStatus(); renderToolbar();
   }
 }, 60);
+
+const SUGGEST_RULES = {
+  number: { type: 'change_type', seed: (it) => ({ columns: [it.column], type: 'number' }), has: (q, it) => q.steps.some(s => s.type === 'change_type' && (s.data.columns || []).includes(it.column)), text: (it) => ['Change ', el('b', {}, it.column), ' to number.'], action: 'Change type', label: (it) => `Change ${it.column} to number` },
+  trim: { type: 'trim_clean', seed: (it) => ({ columns: [it.column], trim: true, collapse: false, clean: false, emptyToNull: false }), has: (q, it) => q.steps.some(s => s.type === 'trim_clean' && (s.data.columns || []).includes(it.column)), text: (it) => ['Trim ', el('b', {}, it.column), '.'], action: 'Trim', label: (it) => `Trim ${it.column}` },
+  blank: { type: 'remove_blank_rows', seed: () => ({ columns: [], mode: 'all' }), has: (q) => q.steps.some(s => s.type === 'remove_blank_rows'), text: () => ['Remove blank rows.'], action: 'Remove', label: () => 'Remove blank rows' },
+};
+
+function visibleSuggestions(q) {
+  const items = ui.suggest.items;
+  if (!items || q.source?.kind === 'duck') return [];
+  return Object.keys(SUGGEST_RULES).flatMap((rule) => {
+    const it = items[rule];
+    if (!it) return [];
+    const id = `${ui.suggest.key}|${rule}|${it.column ?? ''}`;
+    if (ui.suggest.dismissed.has(id) || SUGGEST_RULES[rule].has(q, it)) return [];
+    return [{ rule, it, id }];
+  });
+}
+
+function renderSuggestions() {
+  const bar = $('#suggestBar');
+  const q = store.activeQuery();
+  const list = q && !$('#workbench').hidden ? visibleSuggestions(q) : [];
+  bar.hidden = !list.length;
+  clear(bar);
+  for (const { rule, it, id } of list) {
+    const def = SUGGEST_RULES[rule];
+    bar.appendChild(el('div', { class: 'suggest-item' },
+      el('span', { class: 'suggest-tag' }, 'Suggestion'),
+      el('span', {}, ...def.text(it)),
+      el('button', { class: 'btn btn-sm', type: 'button', onclick: () => { addStep(def.type, def.seed(it), { open: false, label: def.label(it) }); } }, def.action),
+      el('button', { class: 'icon-btn icon-btn-xs', type: 'button', 'aria-label': 'Dismiss suggestion', title: 'Dismiss', onclick: () => { ui.suggest.dismissed.add(id); renderSuggestions(); } }, icon('x', 12))));
+  }
+}
+
+function ensureSuggestions(q) {
+  if (!q || q.source?.kind === 'duck') { ui.suggest.key = ''; ui.suggest.items = null; renderSuggestions(); return; }
+  const src = store.source(q.source?.sourceId);
+  const key = `${q.id}:${q.source?.sourceId}:${src?.rowCount ?? ''}:${src?.size ?? ''}`;
+  if (ui.suggest.key === key) { renderSuggestions(); return; }
+  ui.suggest.key = key;
+  ui.suggest.items = null;
+  renderSuggestions();
+  setTimeout(async () => {
+    if (ui.suggest.key !== key) return;
+    try {
+      const r = await client.call('suggest', { queryId: q.id }, { track: false });
+      if (ui.suggest.key !== key) return;
+      ui.suggest.items = r.items || null;
+      renderSuggestions();
+    } catch (e) { console.error('[vnext:G]', e); }
+  }, 350);
+}
 
 function hintsFor(q, cursor) {
   const sort = [], filter = [];
@@ -450,6 +505,7 @@ function showGridMessage(title, message, action) {
   box.hidden = false;
   put(clear(box), el('span', { class: 'ge-ico' }, icon('warn', 22)), el('h3', {}, title), el('p', {}, message), action ? el('button', { class: 'btn btn-primary', onclick: action.fn }, action.label) : null);
   $('#gridBanner').hidden = true;
+  $('#suggestBar').hidden = true;
 }
 
 async function locateSource(q) {
@@ -556,7 +612,9 @@ function renderMast() {
   $('#brandMark').innerHTML = LOGO;
   const pn = $('#projectName');
   pn.textContent = store.state.projectName;
-  document.title = !$('#workbench').hidden && store.state.queries.length ? `${store.state.projectName} — Duckbench` : 'Duckbench';
+  const activeQ = !$('#workbench').hidden ? store.activeQuery() : null;
+  const titleName = activeQ ? (store.source(activeQ.source?.sourceId)?.name || store.state.projectName) : '';
+  document.title = titleName ? `${titleName} — Duckbench` : 'Duckbench';
   pn.onclick = async () => { const v = await promptDialog('Project name', { value: store.state.projectName }); if (v) store.commit('Rename project', (s) => { s.projectName = v; }); };
   const nav = clear($('#mastActions'));
   const center = clear($('#mastCenter'));
@@ -716,7 +774,7 @@ function renderSteps() {
       el('span', { class: 'step-text' },
         el('span', { class: 'step-name' }, s.name || t?.label || s.type),
         el('span', { class: 'step-sum' }, d.error ? d.error : stepSummary(s, { queryName }))),
-      el('span', { class: 'step-meta' }, d.pushed ? el('span', { class: 'step-pushed', title: 'Ran in DuckDB over the whole file' }, 'duck') : null, d.preview ? el('span', { class: 'step-preview', title: `This step ran on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows, not the whole file.`, 'aria-label': `Preview: this step ran on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows, not the whole file.`, role: 'img' }, STRINGS.previewBadge) : null, d.cached ? el('span', { class: 'step-cached', title: 'Served from cache' }, '●') : null, dl ? el('span', { class: `step-delta${dl.muted ? ' is-muted' : ''}`, title: deltaTip || null, 'aria-label': dl.label, role: 'img' }, dl.text) : null, d.ms != null && !d.cached ? el('span', { class: 'step-ms' }, fmtMs(d.ms)) : null),
+      el('span', { class: 'step-meta' }, d.pushed ? el('span', { class: 'step-badge step-pushed', title: 'Ran in DuckDB over the whole file' }, 'duck') : null, d.preview ? el('span', { class: 'step-badge step-preview', title: `This step ran on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows, not the whole file.`, 'aria-label': `Preview: this step ran on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows, not the whole file.`, role: 'img' }, STRINGS.previewBadge) : null, d.cached ? el('span', { class: 'step-cached', title: 'Served from cache' }, '●') : null, dl ? el('span', { class: `step-badge step-delta${dl.muted ? ' is-muted' : ''}`, title: deltaTip || null, 'aria-label': dl.label, role: 'img' }, dl.text) : null, d.ms != null && !d.cached ? el('span', { class: 'step-ms' }, fmtMs(d.ms)) : null),
       el('button', { class: 'icon-btn icon-btn-xs step-more', 'aria-label': 'Step actions', onclick: (e) => { e.stopPropagation(); stepMenu(s, i, e.currentTarget); } }, icon('more', 14)));
     li.addEventListener('click', () => { ui.selectedStep = s.id; ui.rightMode = 'inspector'; setCursor(i); });
     li.addEventListener('keydown', (e) => {
@@ -878,6 +936,7 @@ const gridHandlers = {
   },
   onEditBlocked: () => toast('Cells can only be edited before steps that regroup rows (group by, pivot, join…). Select an earlier step.', { kind: 'error' }),
   onCopied: (r, c) => toast(`Copied ${fmtCount(r)} × ${c} cells`),
+  onCopyBlocked: (text) => showCopyFallback(text, 'Selection'),
 };
 
 function deleteRows(rids) {
@@ -939,7 +998,7 @@ function cellMenu(field, value, rid, pos) {
     value != null && typeof value === 'number' ? { label: `Keep rows > ${short}`, icon: 'filter', onClick: () => addStep('filter', rule('>'), { open: false }) } : null,
     { label: 'Replace this value…', icon: 'replace', onClick: () => addStep('replace_values', { columns: [field.name], match: 'whole', find: lit, replace: '' }) },
     '-',
-    { label: 'Copy value', icon: 'copy', onClick: () => copyText(lit).then(() => toast('Copied')) },
+    { label: 'Copy value', icon: 'copy', onClick: () => copyWithFeedback(lit, 'Value') },
     { label: 'Copy selection', icon: 'copy', hint: kbd('⌘C'), onClick: () => grid.copySelection() },
     rid != null ? { label: 'Delete this row', icon: 'trash', danger: true, onClick: () => deleteRows(ui.selection.rids?.length ? ui.selection.rids : [rid]) } : null,
   ], pos);
@@ -1166,7 +1225,7 @@ async function runExport(opts) {
       return;
     }
     const r = await client.call('exportData', { ...args, format: opts.format }, { label: 'Exporting' });
-    if (opts.clipboard) { await copyText(r.text); toast(`Copied ${fmtCount(r.rows)} rows`, { kind: 'success' }); return; }
+    if (opts.clipboard) { await copyWithFeedback(r.text, `${fmtCount(r.rows)} rows`); return; }
     const ext = { csv: 'csv', tsv: 'tsv', json: 'json', jsonl: 'jsonl', markdown: 'md', sql: 'sql' }[opts.format];
     await saveOut(r.text, `${base}.${ext}`, r.mime, `Exported ${fmtCount(r.rows)} rows`);
   } catch (e) { toast(`Export failed: ${e.message}`, { kind: 'error' }); }
@@ -1344,7 +1403,7 @@ function stepsToolsMenu(anchor) {
   const q = store.activeQuery();
   const duckBacked = q?.source?.kind === 'duck';
   menu(anchor, [
-    { label: 'Copy as SQL', icon: 'terminal', hint: duckBacked ? '' : 'SQL engine files', onClick: copyPipelineSql },
+    { label: 'Copy as SQL', icon: 'terminal', disabled: !duckBacked, title: duckBacked ? null : STRINGS.sqlUnavailable, onClick: copyPipelineSql },
     { label: 'Copy share link', icon: 'link', onClick: copyShareLink },
     '-',
     { label: 'Import recipe from link…', icon: 'clipboard', onClick: openPasteLink },

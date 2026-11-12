@@ -12,6 +12,7 @@ import { zipFiles, unzipEntries, crc32 } from '../io/zip.js';
 import { createStore } from '../app/store.js';
 import { compileStep, mayCompile } from '../engine/compile.js';
 import { profileFromJson } from '../engine/duck.js';
+import { suggestCleanups } from '../core/suggest.js';
 import { firstPreviewOnlyIndex, previewTaintedAt, formatStepDelta, sqlHeader, buildSqlCopy, finishSql, stripForShare, encodeShare, decodeShare, extractShare, createShareLink, usesOtherQueries, baseName } from '../app/vnext.js';
 
 const SALES_FIELDS = [{ name: 'order_id', type: 'integer' }, { name: 'order_date', type: 'date' }, { name: 'customer', type: 'text' }, { name: 'region', type: 'text' }, { name: 'quantity', type: 'integer' }, { name: 'unit_price', type: 'number' }];
@@ -412,6 +413,46 @@ export const TESTS = [
     ok(usesOtherQueries([{ type: 'sql', data: { tables: ['q2'] } }]));
     eq((await createShareLink([{ type: 'sort', data: {} }], '')).reason, 'nobase');
     eq((await createShareLink([], 'https://x.test/')).reason, 'no-steps');
+  }],
+  ['clean-up suggestions: number rule needs 20 non-empty values and 95% parsing', () => {
+    const mk = (vals) => ({ fields: [{ name: 'amt', type: 'text' }], columns: [vals], rowCount: vals.length });
+    const nums = (n) => Array.from({ length: n }, (_, i) => String(i + 1));
+    eq(suggestCleanups(mk(nums(20))).number, { column: 'amt' });
+    eq(suggestCleanups(mk(nums(19))).number, null);
+    eq(suggestCleanups(mk([...nums(19), 'n/a'])).number, { column: 'amt' });
+    eq(suggestCleanups(mk([...nums(18), 'n/a', 'x'])).number, null);
+    eq(suggestCleanups(mk([...nums(20), '', '  ', null])).number, { column: 'amt' });
+  }],
+  ['clean-up suggestions: codes with leading zeros, very long digit strings and typed columns are left alone', () => {
+    const mk = (vals, type = 'text') => ({ fields: [{ name: 'c', type }], columns: [vals], rowCount: vals.length });
+    eq(suggestCleanups(mk(Array.from({ length: 30 }, (_, i) => String(i).padStart(5, '0')))).number, null);
+    eq(suggestCleanups(mk(Array.from({ length: 30 }, (_, i) => '1234567890123456' + i))).number, null);
+    eq(suggestCleanups(mk(Array.from({ length: 30 }, (_, i) => String(i + 1)), 'integer')).number, null);
+    eq(suggestCleanups(mk(Array.from({ length: 30 }, (_, i) => `${i + 1},5`))).number, null);
+  }],
+  ['clean-up suggestions: trim rule picks the first padded text column by order', () => {
+    const f = { fields: [{ name: 'a', type: 'text' }, { name: 'b', type: 'text' }, { name: 'c', type: 'text' }], columns: [['x', 'y'], ['ok', ' pad '], ['  z', 'w']], rowCount: 2 };
+    eq(suggestCleanups(f).trim, { column: 'b' });
+    eq(suggestCleanups({ fields: [{ name: 'a', type: 'text' }], columns: [['x', '   ', null]], rowCount: 3 }).trim, null);
+  }],
+  ['clean-up suggestions: blank rows are rows empty in every column', () => {
+    const f = { fields: [{ name: 'a', type: 'text' }, { name: 'b', type: 'integer' }], columns: [['x', '', '  ', null], [1, null, null, null]], rowCount: 4 };
+    eq(suggestCleanups(f).blank, { rows: 3 });
+    eq(suggestCleanups({ fields: [{ name: 'a', type: 'text' }], columns: [['x', 'y']], rowCount: 2 }).blank, null);
+    eq(suggestCleanups({ fields: [], columns: [], rowCount: 0 }), { number: null, trim: null, blank: null });
+  }],
+  ['clean-up suggestions: engine computes them on the loaded file only', () => {
+    const e = setup();
+    e.loadText({ id: 'm', name: 'm.csv', text: 'id,name\n1, a \n2,b\n,\n' });
+    e.setQueries({ queries: [{ id: 'q', name: 'm', source: { kind: 'file', sourceId: 'm' }, steps: [] }] });
+    const r = e.suggest({ queryId: 'q' });
+    eq(r.items.trim, { column: 'name' });
+    eq(r.items.blank, { rows: 1 });
+    eq(e.suggest({ queryId: 'nope' }).items, null);
+  }],
+  ['clean-up suggestions: never computed for DuckDB-backed queries', () => {
+    const e = duckEngine([]);
+    eq(e.suggest({ queryId: 'd' }).items, null);
   }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];

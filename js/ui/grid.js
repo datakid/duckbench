@@ -550,8 +550,9 @@ export class Grid {
     const lines = [];
     if (withHeaders || this.selCols.length) lines.push(cols.map(c => this.fields[c].name).join('\t'));
     for (const { row } of rows) lines.push(cols.map(c => { const v = row[c]; const s = v == null ? '' : formatValue(v, this.fields[c].type); return /[\t\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join('\t'));
-    await copyText(lines.join('\n'));
-    this.h.onCopied?.(rows.length, cols.length);
+    const text = lines.join('\n');
+    if (await copyText(text)) this.h.onCopied?.(rows.length, cols.length);
+    else this.h.onCopyBlocked?.(text);
   }
 
   startEdit(p, initial) {

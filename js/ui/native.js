@@ -1,4 +1,4 @@
-import { el } from './dom.js';
+import { el, isMac } from './dom.js';
 import { menu, toast } from './overlay.js';
 
 const TIP_DELAY = 420;
@@ -102,7 +102,7 @@ async function openEditMenu(field, e) {
   const readOnly = field.readOnly || field.disabled;
   const canRead = await clipboardReadable();
   const writeBack = (text, s, en) => { field.focus(); field.setRangeText(text, s, en, 'end'); fireInput(field); };
-  const mod = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
+  const mod = isMac ? '⌘' : 'Ctrl';
   menu(field, [
     { label: 'Cut', hint: `${mod}+X`, disabled: !hasSel || readOnly, onClick: async () => { const t = field.value.slice(start, end); try { await navigator.clipboard.writeText(t); } catch { document.execCommand?.('copy'); } writeBack('', start, end); } },
     { label: 'Copy', hint: `${mod}+C`, disabled: !hasSel, onClick: async () => { field.focus(); field.setSelectionRange(start, end); const t = field.value.slice(start, end); try { await navigator.clipboard.writeText(t); } catch { document.execCommand?.('copy'); } } },

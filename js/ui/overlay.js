@@ -166,7 +166,8 @@ export function menu(anchor, items, opts = {}) {
       if (!it) continue;
       if (it === '-' || it.divider) { container.appendChild(el('div', { class: 'menu-sep', role: 'separator' })); continue; }
       if (it.header) { container.appendChild(el('div', { class: 'menu-header' }, it.header)); continue; }
-      const btn = el('button', { class: `menu-item${it.danger ? ' is-danger' : ''}${it.checked ? ' is-checked' : ''}`, role: 'menuitem', disabled: it.disabled, title: it.title || null },
+      const soft = !!(it.disabled && it.title);
+      const btn = el('button', { class: `menu-item${it.danger ? ' is-danger' : ''}${it.checked ? ' is-checked' : ''}${soft ? ' is-soft-disabled' : ''}`, role: 'menuitem', disabled: soft ? undefined : it.disabled, 'aria-disabled': soft ? 'true' : null, title: it.title || null },
         el('span', { class: 'menu-ico' }, it.checked ? icon('check', 14) : it.icon ? icon(it.icon, 14) : null),
         el('span', { class: 'menu-label' }, it.label),
         it.hint ? el('span', { class: 'menu-hint' }, it.hint) : null,
@@ -185,7 +186,7 @@ export function menu(anchor, items, opts = {}) {
         btn.addEventListener('keydown', (e) => { if (e.key === 'ArrowRight') { open(); sub?.node.querySelector('button')?.focus(); } });
       } else {
         btn.addEventListener('mouseenter', () => { if (sub && !sub.node.contains(btn)) closeSub(); });
-        btn.addEventListener('click', () => { closeSub(); entry.close(); it.onClick?.(); });
+        btn.addEventListener('click', () => { if (soft) return; closeSub(); entry.close(); it.onClick?.(); });
       }
       container.appendChild(btn);
     }
@@ -202,7 +203,13 @@ export function menu(anchor, items, opts = {}) {
   let closed = false;
   entry = {
     node, light: true, anchor: opts.x != null ? null : anchor,
-    close: () => { if (closed) return; closed = true; closeSub(); pop(entry); node.remove(); opts.onClose?.(); },
+    close: () => {
+      if (closed) return;
+      closed = true;
+      const hadFocus = node.contains(document.activeElement) || !!(sub && sub.node.contains(document.activeElement));
+      closeSub(); pop(entry); node.remove(); opts.onClose?.();
+      if (hadFocus && anchor && anchor.isConnected && typeof anchor.focus === 'function') anchor.focus({ preventScroll: true });
+    },
   };
   const origContains = node.contains.bind(node);
   entry.node = { contains: (t) => origContains(t) || (sub && sub.node.contains(t)), querySelectorAll: (s) => node.querySelectorAll(s) };

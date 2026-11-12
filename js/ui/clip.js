@@ -4,6 +4,11 @@ import { modal, toast } from './overlay.js';
 export async function copyWithFeedback(text, label = 'Text', { message } = {}) {
   const ok = await copyText(text);
   if (ok) { toast(message || `${label} copied`, { kind: message ? 'info' : 'success', duration: message ? 6500 : undefined }); return true; }
+  showCopyFallback(text, label);
+  return false;
+}
+
+export function showCopyFallback(text, label = 'Text') {
   const area = el('textarea', { class: 'input copy-fallback', readonly: true, rows: '8', spellcheck: 'false' });
   area.value = text;
   const m = modal({
@@ -12,5 +17,4 @@ export async function copyWithFeedback(text, label = 'Text', { message } = {}) {
     footer: [el('button', { class: 'btn btn-primary', onclick: () => m.close() }, 'Close')],
   });
   requestAnimationFrame(() => { area.focus(); area.select(); });
-  return false;
 }
