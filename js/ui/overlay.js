@@ -85,14 +85,14 @@ export function modal({ title, body, footer, width = 520, className = '', onClos
   return entry;
 }
 
-export function confirmDialog(message, { title = 'Are you sure?', ok = 'Confirm', cancel = 'Cancel', danger = false } = {}) {
+export function confirmDialog(message, { title = 'Are you sure?', ok = 'Confirm', cancel = 'Cancel', danger = false, focusCancel = false } = {}) {
   return new Promise((resolve) => {
     let result = false;
     const m = modal({
       title, width: 420,
       body: el('p', { class: 'modal-text' }, message),
       footer: [
-        el('button', { class: 'btn btn-ghost', onclick: () => m.close(false) }, cancel),
+        el('button', { class: 'btn btn-ghost', autofocus: focusCancel, onclick: () => m.close(false) }, cancel),
         el('button', { class: `btn ${danger ? 'btn-danger' : 'btn-primary'}`, onclick: () => { result = true; m.close(true); } }, ok),
       ],
       onClose: () => resolve(result),
@@ -166,7 +166,8 @@ export function menu(anchor, items, opts = {}) {
       if (!it) continue;
       if (it === '-' || it.divider) { container.appendChild(el('div', { class: 'menu-sep', role: 'separator' })); continue; }
       if (it.header) { container.appendChild(el('div', { class: 'menu-header' }, it.header)); continue; }
-      const btn = el('button', { class: `menu-item${it.danger ? ' is-danger' : ''}${it.checked ? ' is-checked' : ''}`, role: 'menuitem', disabled: it.disabled, title: it.title || null },
+      const soft = !!(it.disabled && it.title);
+      const btn = el('button', { class: `menu-item${it.danger ? ' is-danger' : ''}${it.checked ? ' is-checked' : ''}${soft ? ' is-soft-disabled' : ''}`, role: 'menuitem', disabled: soft ? undefined : it.disabled, 'aria-disabled': soft ? 'true' : null, title: it.title || null },
         el('span', { class: 'menu-ico' }, it.checked ? icon('check', 14) : it.icon ? icon(it.icon, 14) : null),
         el('span', { class: 'menu-label' }, it.label),
         it.hint ? el('span', { class: 'menu-hint' }, it.hint) : null,
@@ -185,7 +186,7 @@ export function menu(anchor, items, opts = {}) {
         btn.addEventListener('keydown', (e) => { if (e.key === 'ArrowRight') { open(); sub?.node.querySelector('button')?.focus(); } });
       } else {
         btn.addEventListener('mouseenter', () => { if (sub && !sub.node.contains(btn)) closeSub(); });
-        btn.addEventListener('click', () => { closeSub(); entry.close(); it.onClick?.(); });
+        btn.addEventListener('click', () => { if (soft) return; closeSub(); entry.close(); it.onClick?.(); });
       }
       container.appendChild(btn);
     }
@@ -202,7 +203,13 @@ export function menu(anchor, items, opts = {}) {
   let closed = false;
   entry = {
     node, light: true, anchor: opts.x != null ? null : anchor,
-    close: () => { if (closed) return; closed = true; closeSub(); pop(entry); node.remove(); opts.onClose?.(); },
+    close: () => {
+      if (closed) return;
+      closed = true;
+      const hadFocus = node.contains(document.activeElement) || !!(sub && sub.node.contains(document.activeElement));
+      closeSub(); pop(entry); node.remove(); opts.onClose?.();
+      if (hadFocus && anchor && anchor.isConnected && typeof anchor.focus === 'function') anchor.focus({ preventScroll: true });
+    },
   };
   const origContains = node.contains.bind(node);
   entry.node = { contains: (t) => origContains(t) || (sub && sub.node.contains(t)), querySelectorAll: (s) => node.querySelectorAll(s) };
@@ -215,7 +222,7 @@ let toastHost = null;
 export function toast(message, { kind = 'info', action, onAction, duration } = {}) {
   if (!toastHost) { toastHost = el('div', { class: 'toast-host', role: 'status', 'aria-live': 'polite' }); document.body.appendChild(toastHost); }
   const t = el('div', { class: `toast toast-${kind}` },
-    icon(kind === 'error' ? 'warn' : kind === 'success' ? 'check' : 'info', 15),
+    icon(kind === 'error' || kind === 'warn' ? 'warn' : kind === 'success' ? 'check' : 'info', 15),
     el('span', { class: 'toast-msg' }, message),
     action ? el('button', { class: 'toast-action', onclick: () => { onAction?.(); dismiss(); } }, action) : null,
     el('button', { class: 'toast-x', 'aria-label': 'Dismiss', onclick: () => dismiss() }, icon('x', 12)));

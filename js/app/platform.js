@@ -43,10 +43,10 @@ export function nativeFileUrl(path) {
   return os === 'win' ? `http://dbfile.localhost/${encodeURIComponent(path)}` : `dbfile://localhost/${encodeURIComponent(path)}`;
 }
 
-export async function pickNativeFiles() {
+export async function pickNativeFiles({ extensions = DATA_EXT, multiple = true } = {}) {
   const t = tauri();
   if (!t) return null;
-  const sel = await t.core.invoke('plugin:dialog|open', { options: { multiple: true, filters: [{ name: 'Data files', extensions: DATA_EXT }] } });
+  const sel = await t.core.invoke('plugin:dialog|open', { options: { multiple, filters: [{ name: 'Data files', extensions }] } });
   const paths = !sel ? [] : Array.isArray(sel) ? sel : [sel];
   const out = [];
   for (const path of paths) {
@@ -57,6 +57,32 @@ export async function pickNativeFiles() {
     out.push({ path, file });
   }
   return out;
+}
+
+export async function nativeFileSize(path) {
+  const t = tauri();
+  if (!t) return null;
+  try { return (await t.core.invoke('file_meta', { path })).size; } catch { return null; }
+}
+
+const READ_CHUNK = 32 * 1024 * 1024;
+
+export async function readNativeFile(path, size) {
+  const url = nativeFileUrl(path);
+  const name = path.split(/[\\/]/).pop();
+  if (size <= READ_CHUNK) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`read failed (${res.status})`);
+    return new File([await res.arrayBuffer()], name);
+  }
+  const parts = [];
+  for (let start = 0; start < size; start += READ_CHUNK) {
+    const end = Math.min(start + READ_CHUNK, size) - 1;
+    const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
+    if (res.status !== 206 && res.status !== 200) throw new Error(`read failed (${res.status})`);
+    parts.push(await res.arrayBuffer());
+  }
+  return new File(parts, name);
 }
 
 export async function checkForUpdate() {

@@ -18,7 +18,11 @@ import { sqlEditor, SQL_SNIPPETS } from '../ui/sqleditor.js';
 import { enhanceSelects } from '../ui/select.js';
 import { TYPE_BADGES } from '../core/types.js';
 import { keepCopy, getCopy, opfsFilesAvailable, listSheets } from './filestore.js';
-import { pickNativeFiles, nativeFileUrl, checkForUpdate } from './platform.js';
+import { pickNativeFiles, nativeFileUrl, nativeFileSize, readNativeFile, checkForUpdate } from './platform.js';
+import { addRecent, removeRecent, readRecents, writeRecents, recentWhen, folderOf, pathName, RECENT_MAX } from './recents.js';
+import { installNativeGuards } from '../ui/native.js';
+import { copyWithFeedback, showCopyFallback } from '../ui/clip.js';
+import { previewTaintedAt, formatStepDelta, buildSqlCopy, createShareLink, decodeShare, extractShare, STRINGS } from './vnext.js';
 if (isDesktop()) setTimeout(async () => { const u = await checkForUpdate(); if (u) toast(`Duckbench ${u.version} is available`, { action: 'Install & restart', onAction: () => u.install() }); }, 4000);
 
 const store = createStore();
@@ -27,6 +31,7 @@ const xlsx = makeXlsxRpc();
 const sql = createSqlRunner(client, { onStatus: () => renderMast() });
 const LARGE_FILE_BYTES = 1024 * 1024 * 1024;
 const DUCK_PREVIEW_ROWS = 1_000_000;
+const SHARE_BASE_URL = 'https://duckbench2.vercel.app/';
 const duckFiles = new Map();
 
 function engineLabel() {
@@ -37,9 +42,32 @@ function engineLabel() {
   return client.mode === 'worker' ? 'Local engine' : 'Inline engine';
 }
 duck.onDuckStatus(() => { renderMast(); if (!$('#workbench').hidden) renderRibbon(); });
+let engineNote = null;
+let engineTimer = null;
+function clearEngineNote() {
+  clearTimeout(engineTimer);
+  engineTimer = null;
+  if (engineNote) { engineNote(); engineNote = null; }
+}
+function showEngineFailed() {
+  clearEngineNote();
+  engineNote = toast(STRINGS_ENGINE.failed, { kind: 'error', action: 'Retry', onAction: () => { engineNote = null; duck.ensureDuck().catch((e) => console.error('[vnext:E3]', e)); }, duration: 600000 });
+}
+const STRINGS_ENGINE = { downloading: 'Downloading the SQL engine (one time)…', failed: 'Couldn’t download the SQL engine. Check your connection and try again.' };
+duck.onDuckStatus((st) => {
+  if (isDesktop()) return;
+  if (st === 'loading') {
+    if (engineNote) return;
+    engineNote = toast(STRINGS_ENGINE.downloading, { duration: 600000 });
+    engineTimer = setTimeout(showEngineFailed, 60000);
+  } else if (st === 'ready') clearEngineNote();
+  else if (st === 'failed') showEngineFailed();
+  else clearEngineNote();
+});
 const ui = {
   result: null, selection: { columns: [] }, selectedStep: null, rightMode: null, profileColumn: null,
-  showQuality: prefs.get('quality', true), evalToken: 0, diag: [], inputFields: [], search: '',
+  showQuality: prefs.get('quality', true), evalToken: 0, diag: [], inputFields: [], search: '', shared: null,
+  suggest: { key: '', items: null, dismissed: new Set() },
 };
 let grid = null;
 const ACCEPT = '.csv,.tsv,.txt,.json,.jsonl,.ndjson,.xlsx,.xls,.xlsm,.ods,.parquet';
@@ -126,15 +154,18 @@ async function importLargeViaDuck(file, { asNewProject, handle, options = {}, na
   toast(`${file.name} opened with DuckDB`, { kind: 'success' });
 }
 
-async function importFiles(files, { asNewProject = false, options, viaDuck = false, handles, native } = {}) {
+async function importFiles(files, { asNewProject = false, options, viaDuck = false, handles, native, deferShared = false } = {}) {
   const done = [];
   for (const file of files) {
     try {
       const handle = handles?.get(file) || null;
+      const nativePath = native?.get(file) || nativePaths.get(file) || null;
+      const sourcesBefore = store.state.sources.map(x => x.id).join('|');
       if (viaDuck || file.size > LARGE_FILE_BYTES) {
         if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB. Filters, sorts, column changes, group by and SQL steps run over every row; other steps work on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
-        await importLargeViaDuck(file, { asNewProject, handle, nativePath: native?.get(file) || null, options: viaDuck ? { ...(options || {}) } : {} });
+        await importLargeViaDuck(file, { asNewProject, handle, nativePath, options: viaDuck ? { ...(options || {}) } : {} });
         asNewProject = false;
+        if (store.state.sources.map(x => x.id).join('|') !== sourcesBefore) recordRecent(nativePath);
         continue;
       }
       const sid = uid('f');
@@ -149,18 +180,20 @@ async function importFiles(files, { asNewProject = false, options, viaDuck = fal
         s.sources.push(src); s.queries.push(q); s.activeQueryId = q.id;
       });
       asNewProject = false;
+      recordRecent(nativePath);
       done.push(`${file.name}: ${fmtCount(info.rowCount)} rows`);
     } catch (e) {
-      toast(`Couldn’t read ${file.name}: ${e.message}`, { kind: 'error' });
+      toast(/DuckDB could not be loaded/.test(e.message) ? `Couldn’t open ${file.name}: the SQL engine isn’t available. Check your connection and try again.` : `Couldn’t read ${file.name}: ${e.message}`, { kind: 'error' });
     }
   }
   if (done.length === 1) toast(done[0], { kind: 'success' });
   else if (done.length > 1) toast(`${done.length} files imported`, { kind: 'success' });
   if (store.state.queries.length) showWorkbench();
+  if (!deferShared && done.length) applyPendingShared();
 }
 
 async function importWithOptions(asNewProject) {
-  const [file] = await pickFiles({ accept: ACCEPT });
+  const [file] = await pickDataFiles({ multiple: false });
   if (!file) return;
   const format = formatOf(file.name);
   const opts = { delimiter: 'auto', header: true, skipRows: 0, detectTypes: true, encoding: 'auto' };
@@ -187,9 +220,10 @@ async function importWithOptions(asNewProject) {
 async function loadSample() {
   const a = new File([SAMPLE_SALES_CSV], 'sample_sales.csv', { type: 'text/csv' });
   const b = new File([SAMPLE_REGIONS_CSV], 'regions.csv', { type: 'text/csv' });
-  await importFiles([a, b], { asNewProject: true });
+  await importFiles([a, b], { asNewProject: true, deferShared: true });
   const first = store.state.queries[0];
   if (first) store.quiet((s) => { s.activeQueryId = first.id; s.projectName = 'Sample sales'; }, 'change');
+  applyPendingShared();
 }
 
 async function pickForDuck() {
@@ -223,7 +257,7 @@ function renderImport() {
       el('span', { class: 'drop-title' }, 'Drop files to start'),
       el('span', { class: 'drop-hint' }, 'or ', el('span', { class: 'drop-link' }, 'browse your computer')),
       el('span', { class: 'dz-formats' }, ['CSV', 'TSV', 'XLSX', 'JSON', 'JSONL', 'PARQUET'].map(f => el('span', {}, f)))));
-  drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickFiles({ accept: ACCEPT, multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
+  drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickDataFiles({ multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
   const resume = el('section', { class: 'resume-slot', id: 'resumeCard', hidden: true, 'aria-label': 'Resume session' });
   const act = (ic, label, hint, fn, id, key) => el('button', { class: 'launch-act', type: 'button', onclick: fn, id: id || null },
@@ -241,15 +275,18 @@ function renderImport() {
         el('p', { class: 'launch-sub' }, icon('shield', 12), isDesktop() ? 'Files stay on this computer' : 'Files stay in this tab — nothing is uploaded'))),
     drop,
     resume,
+    ui.shared ? el('div', { class: 'launch-note', role: 'status' }, icon('link', 14), el('span', {}, `Shared recipe ready (${ui.shared.recipe.steps.length} steps). Open a file to apply it.`), el('button', { class: 'btn btn-ghost btn-xs', type: 'button', onclick: () => { ui.shared = null; renderImport(); } }, 'Discard')) : null,
     el('div', { class: 'launch-section' },
       el('span', { class: 'launch-label' }, 'Or start with'),
       el('nav', { class: 'launch-acts', 'aria-label': 'Start' },
         act('table', 'Sample data', 'Two linked tables', loadSample, 'sampleBtn'),
         act('settings', 'Import options', 'Delimiter, encoding', () => importWithOptions(true)),
         act('clipboard', 'Open recipe', '.duckbench.json', loadRecipeFile),
+        act('link', 'Recipe link', 'Import a recipe link', openPasteLink, 'linkBtn'),
         act('layers', 'Batch apply', 'One recipe, many files', openBatch),
         act('terminal', 'SQL console', 'DuckDB', () => openConsole(), null, '⌘J'),
         act('database', 'Large file', 'Read in place', () => openWithDuck(true)))),
+    recentSection(),
     el('footer', { class: 'hero-foot' },
       el('span', { class: `hf-engine is-${st}` }, el('span', { class: 'le-dot' }), engineLabel()),
       el('span', { class: 'hf-sep' }),
@@ -384,7 +421,9 @@ const refresh = debounce(async () => {
     clear(banner);
     const vd = ui.diag[cursor];
     const msgs = [];
-    if (res.viewError) msgs.push(['error', `Step ${res.viewError.index + 1}: ${res.viewError.message}`]);
+    const pIdx = previewTaintedAt(ui.diag, cursor);
+    if (pIdx >= 0) msgs.push(['warn', `Showing results from the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows. Step ${pIdx + 1} (${q.steps[pIdx].name || TRANSFORMS[q.steps[pIdx].type]?.label || q.steps[pIdx].type}) can’t run on the whole file yet.`]);
+    if (res.viewError) msgs.push(['error', `Step ${res.viewError.index + 1}${q.steps[res.viewError.index] ? ` (${q.steps[res.viewError.index].name || TRANSFORMS[q.steps[res.viewError.index].type]?.label || q.steps[res.viewError.index].type})` : ''}: ${res.viewError.message}`]);
     if (vd?.warn?.length) vd.warn.forEach(w => msgs.push(['warn', w]));
     if (vd?.info?.length) vd.info.forEach(w => msgs.push(['info', w]));
     if (res.sourceNote) msgs.push(['info', res.sourceNote]);
@@ -393,6 +432,7 @@ const refresh = debounce(async () => {
     for (const [k, m] of msgs.slice(0, 4)) banner.appendChild(el('div', { class: `banner-line banner-${k}` }, icon(k === 'error' ? 'warn' : k === 'warn' ? 'warn' : 'info', 14), el('span', {}, m)));
     if (cursor < q.steps.length - 1) banner.appendChild(el('button', { class: 'btn btn-ghost btn-xs', onclick: () => setCursor(q.steps.length - 1) }, 'Jump to last step'));
     renderSteps(); renderStatus(); renderToolbar();
+    ensureSuggestions(q);
     if (ui.rightMode === 'profile' && ui.profileColumn) renderProfile(ui.profileColumn);
   } catch (e) {
     if (e.cancelled || token !== ui.evalToken) return;
@@ -401,6 +441,59 @@ const refresh = debounce(async () => {
     renderSteps(); renderStatus(); renderToolbar();
   }
 }, 60);
+
+const SUGGEST_RULES = {
+  number: { type: 'change_type', seed: (it) => ({ columns: [it.column], type: 'number' }), has: (q, it) => q.steps.some(s => s.type === 'change_type' && (s.data.columns || []).includes(it.column)), text: (it) => ['Change ', el('b', {}, it.column), ' to number.'], action: 'Change type', label: (it) => `Change ${it.column} to number` },
+  trim: { type: 'trim_clean', seed: (it) => ({ columns: [it.column], trim: true, collapse: false, clean: false, emptyToNull: false }), has: (q, it) => q.steps.some(s => s.type === 'trim_clean' && (s.data.columns || []).includes(it.column)), text: (it) => ['Trim ', el('b', {}, it.column), '.'], action: 'Trim', label: (it) => `Trim ${it.column}` },
+  blank: { type: 'remove_blank_rows', seed: () => ({ columns: [], mode: 'all' }), has: (q) => q.steps.some(s => s.type === 'remove_blank_rows'), text: () => ['Remove blank rows.'], action: 'Remove', label: () => 'Remove blank rows' },
+};
+
+function visibleSuggestions(q) {
+  const items = ui.suggest.items;
+  if (!items || q.source?.kind === 'duck') return [];
+  return Object.keys(SUGGEST_RULES).flatMap((rule) => {
+    const it = items[rule];
+    if (!it) return [];
+    const id = `${ui.suggest.key}|${rule}|${it.column ?? ''}`;
+    if (ui.suggest.dismissed.has(id) || SUGGEST_RULES[rule].has(q, it)) return [];
+    return [{ rule, it, id }];
+  });
+}
+
+function renderSuggestions() {
+  const bar = $('#suggestBar');
+  const q = store.activeQuery();
+  const list = q && !$('#workbench').hidden ? visibleSuggestions(q) : [];
+  bar.hidden = !list.length;
+  clear(bar);
+  for (const { rule, it, id } of list) {
+    const def = SUGGEST_RULES[rule];
+    bar.appendChild(el('div', { class: 'suggest-item' },
+      el('span', { class: 'suggest-tag' }, 'Suggestion'),
+      el('span', {}, ...def.text(it)),
+      el('button', { class: 'btn btn-sm', type: 'button', onclick: () => { addStep(def.type, def.seed(it), { open: false, label: def.label(it) }); } }, def.action),
+      el('button', { class: 'icon-btn icon-btn-xs', type: 'button', 'aria-label': 'Dismiss suggestion', title: 'Dismiss', onclick: () => { ui.suggest.dismissed.add(id); renderSuggestions(); } }, icon('x', 12))));
+  }
+}
+
+function ensureSuggestions(q) {
+  if (!q || q.source?.kind === 'duck') { ui.suggest.key = ''; ui.suggest.items = null; renderSuggestions(); return; }
+  const src = store.source(q.source?.sourceId);
+  const key = `${q.id}:${q.source?.sourceId}:${src?.rowCount ?? ''}:${src?.size ?? ''}`;
+  if (ui.suggest.key === key) { renderSuggestions(); return; }
+  ui.suggest.key = key;
+  ui.suggest.items = null;
+  renderSuggestions();
+  setTimeout(async () => {
+    if (ui.suggest.key !== key) return;
+    try {
+      const r = await client.call('suggest', { queryId: q.id }, { track: false });
+      if (ui.suggest.key !== key) return;
+      ui.suggest.items = r.items || null;
+      renderSuggestions();
+    } catch (e) { console.error('[vnext:G]', e); }
+  }, 350);
+}
 
 function hintsFor(q, cursor) {
   const sort = [], filter = [];
@@ -418,6 +511,7 @@ function showGridMessage(title, message, action) {
   box.hidden = false;
   put(clear(box), el('span', { class: 'ge-ico' }, icon('warn', 22)), el('h3', {}, title), el('p', {}, message), action ? el('button', { class: 'btn btn-primary', onclick: action.fn }, action.label) : null);
   $('#gridBanner').hidden = true;
+  $('#suggestBar').hidden = true;
 }
 
 async function locateSource(q) {
@@ -524,6 +618,9 @@ function renderMast() {
   $('#brandMark').innerHTML = LOGO;
   const pn = $('#projectName');
   pn.textContent = store.state.projectName;
+  const activeQ = !$('#workbench').hidden ? store.activeQuery() : null;
+  const titleName = activeQ ? (store.source(activeQ.source?.sourceId)?.name || store.state.projectName) : '';
+  document.title = titleName ? `${titleName} — Duckbench` : 'Duckbench';
   pn.onclick = async () => { const v = await promptDialog('Project name', { value: store.state.projectName }); if (v) store.commit('Rename project', (s) => { s.projectName = v; }); };
   const nav = clear($('#mastActions'));
   const center = clear($('#mastCenter'));
@@ -617,7 +714,7 @@ function renderRibbon() {
 
 function renderQueries() {
   const host = clear($('#queriesPanel'));
-  host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Queries'), el('button', { class: 'icon-btn icon-btn-sm', title: 'Import another file as a new query', onclick: async () => { const f = await pickFiles({ accept: ACCEPT, multiple: true }); if (f.length) importFiles(f); } }, icon('plus', 15))));
+  host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Queries'), el('button', { class: 'icon-btn icon-btn-sm', title: 'Import another file as a new query', onclick: async () => { const f = await pickDataFiles({ multiple: true }); if (f.length) importFiles(f); } }, icon('plus', 15))));
   const list = el('ul', { class: 'query-list', role: 'listbox', 'aria-label': 'Queries' });
   for (const q of store.state.queries) {
     const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
@@ -663,7 +760,7 @@ function renderSteps() {
   const q = store.activeQuery();
   if (!q) return;
   const cursor = store.cursor();
-  host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Applied steps'), el('span', { class: 'panel-count' }, String(q.steps.length))));
+  host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Applied steps'), el('div', { class: 'panel-tools' }, el('button', { class: 'icon-btn icon-btn-xs', type: 'button', 'aria-label': 'Copy as SQL, share and import', title: 'Copy as SQL, share link, import link', onclick: (e) => stepsToolsMenu(e.currentTarget) }, icon('more', 14)), el('span', { class: 'panel-count' }, String(q.steps.length)))));
   host.appendChild(el('button', { class: 'btn btn-ghost btn-block add-step-btn', id: 'addStepBtn', onclick: openPalette }, icon('plus', 15), 'Add step', el('kbd', {}, kbd('⌘K'))));
   const list = el('ol', { class: 'step-list', id: 'stepList' });
   const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
@@ -675,13 +772,15 @@ function renderSteps() {
     const t = TRANSFORMS[s.type];
     const d = ui.diag[i] || {};
     const status = d.error ? 'error' : d.blocked ? 'blocked' : d.warn?.length ? 'warn' : '';
-    const delta = d.rows != null && d.prevRows != null && d.rows !== d.prevRows ? `${d.rows > d.prevRows ? '+' : '−'}${fmtCount(Math.abs(d.rows - d.prevRows))} rows` : '';
+    const dl = !s.disabled && !d.error && !d.blocked && !d.draft ? formatStepDelta({ rows: d.prevRows, cols: d.prevCols }, { rows: d.rows, cols: d.cols }, { preview: !!d.preview }) : null;
+    const previewTip = `Counted on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows.`;
+    const deltaTip = dl ? [dl.tip, dl.preview ? previewTip : ''].filter(Boolean).join(' ') : '';
     const li = el('li', { class: `step-item${s.type === 'sql' ? ' step-sql' : ''}${i === cursor ? ' is-cursor' : ''}${i > cursor ? ' is-after' : ''}${s.disabled ? ' is-disabled' : ''}${status ? ` is-${status}` : ''}${s.id === ui.selectedStep ? ' is-selected' : ''}`, tabindex: '0', draggable: 'true', dataset: { i: String(i) }, title: d.error || (d.warn || []).join('\n') || '' },
       el('span', { class: 'step-code' }, t?.code || '??'),
       el('span', { class: 'step-text' },
         el('span', { class: 'step-name' }, s.name || t?.label || s.type),
         el('span', { class: 'step-sum' }, d.error ? d.error : stepSummary(s, { queryName }))),
-      el('span', { class: 'step-meta' }, d.pushed ? el('span', { class: 'step-pushed', title: 'Ran in DuckDB over the whole file' }, 'duck') : null, d.cached ? el('span', { class: 'step-cached', title: 'Served from cache' }, '●') : null, delta ? el('span', { class: 'step-delta' }, delta) : null, d.ms != null && !d.cached ? el('span', { class: 'step-ms' }, fmtMs(d.ms)) : null),
+      el('span', { class: 'step-meta' }, d.pushed ? el('span', { class: 'step-badge step-pushed', title: 'Ran in DuckDB over the whole file' }, 'duck') : null, d.preview ? el('span', { class: 'step-badge step-preview', title: `This step ran on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows, not the whole file.`, 'aria-label': `Preview: this step ran on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows, not the whole file.`, role: 'img' }, STRINGS.previewBadge) : null, d.cached ? el('span', { class: 'step-cached', title: 'Served from cache' }, '●') : null, dl ? el('span', { class: `step-badge step-delta${dl.muted ? ' is-muted' : ''}`, title: deltaTip || null, 'aria-label': dl.label, role: 'img' }, dl.text) : null, d.ms != null && !d.cached ? el('span', { class: 'step-ms' }, fmtMs(d.ms)) : null),
       el('button', { class: 'icon-btn icon-btn-xs step-more', 'aria-label': 'Step actions', onclick: (e) => { e.stopPropagation(); stepMenu(s, i, e.currentTarget); } }, icon('more', 14)));
     li.addEventListener('click', () => { ui.selectedStep = s.id; ui.rightMode = 'inspector'; setCursor(i); });
     li.addEventListener('keydown', (e) => {
@@ -764,7 +863,7 @@ async function openInspector(stepId) {
     fields, rightFields, sqlTables, queryId: q.id, queries: store.state.queries,
     onRunSql: () => { commit.cancel?.(); updateStep(stepId, (x) => { x.data = JSON.parse(JSON.stringify(data)); }, `Edit ${t.label}`); },
     loadDistinct: (column, search) => (input.resultId ? client.call('distinct', { resultId: input.resultId, column, search, limit: 500 }, { track: false }) : null),
-    onAddQuery: async () => { const f = await pickFiles({ accept: ACCEPT }); if (f.length) { const keep = store.state.activeQueryId; await importFiles(f); store.quiet((s) => { s.activeQueryId = keep; }, 'change'); openInspector(stepId); } },
+    onAddQuery: async () => { const f = await pickDataFiles({ multiple: false }); if (f.length) { const keep = store.state.activeQueryId; await importFiles(f); store.quiet((s) => { s.activeQueryId = keep; }, 'change'); openInspector(stepId); } },
   };
   const form = buildForm(t?.params || [], data, ctx, (d, meta) => {
     commit(`Edit ${t.label}`);
@@ -843,6 +942,7 @@ const gridHandlers = {
   },
   onEditBlocked: () => toast('Cells can only be edited before steps that regroup rows (group by, pivot, join…). Select an earlier step.', { kind: 'error' }),
   onCopied: (r, c) => toast(`Copied ${fmtCount(r)} × ${c} cells`),
+  onCopyBlocked: (text) => showCopyFallback(text, 'Selection'),
 };
 
 function deleteRows(rids) {
@@ -904,7 +1004,7 @@ function cellMenu(field, value, rid, pos) {
     value != null && typeof value === 'number' ? { label: `Keep rows > ${short}`, icon: 'filter', onClick: () => addStep('filter', rule('>'), { open: false }) } : null,
     { label: 'Replace this value…', icon: 'replace', onClick: () => addStep('replace_values', { columns: [field.name], match: 'whole', find: lit, replace: '' }) },
     '-',
-    { label: 'Copy value', icon: 'copy', onClick: () => copyText(lit).then(() => toast('Copied')) },
+    { label: 'Copy value', icon: 'copy', onClick: () => copyWithFeedback(lit, 'Value') },
     { label: 'Copy selection', icon: 'copy', hint: kbd('⌘C'), onClick: () => grid.copySelection() },
     rid != null ? { label: 'Delete this row', icon: 'trash', danger: true, onClick: () => deleteRows(ui.selection.rids?.length ? ui.selection.rids : [rid]) } : null,
   ], pos);
@@ -974,10 +1074,15 @@ function openPalette() {
     { label: 'Open large file…', icon: 'database', kw: 'big parquet gb', run: () => openWithDuck(false) },
     { label: 'Freeze first column', icon: 'pin', kw: 'pin lock', run: () => setFrozen(1) },
     { label: 'Unfreeze columns', icon: 'pin', run: () => setFrozen(0) },
+    { label: 'Copy pipeline as SQL', icon: 'terminal', kw: 'duckdb sql copy clipboard', run: copyPipelineSql },
+    { label: 'Copy share link', icon: 'link', kw: 'recipe url share', run: copyShareLink },
+    { label: 'Import recipe from link', icon: 'link', kw: 'recipe url paste share', run: openPasteLink },
     { label: 'Save recipe', icon: 'save', run: saveRecipe },
     { label: 'Open recipe…', icon: 'clipboard', run: loadRecipeFile },
     { label: 'Batch apply steps to many files…', icon: 'layers', run: openBatch },
-    { label: 'Import another file', icon: 'upload', run: async () => { const f = await pickFiles({ accept: ACCEPT, multiple: true }); if (f.length) importFiles(f); } },
+    ...(isDesktop() ? readRecents().map(r => ({ label: `Open recent: ${r.name}`, icon: 'upload', kw: `recent file ${r.path}`, run: () => openRecent(r) })) : []),
+    ...(isDesktop() && readRecents().length ? [{ label: 'Clear recent files', icon: 'x', kw: 'recent forget', run: clearRecents }] : []),
+    { label: 'Import another file', icon: 'upload', run: async () => { const f = await pickDataFiles({ multiple: true }); if (f.length) importFiles(f); } },
     { label: 'Toggle light / dark theme', icon: 'sun', run: toggleTheme },
     { label: 'Undo', icon: 'undo', run: doUndo },
     { label: 'Redo', icon: 'redo', run: doRedo },
@@ -1092,6 +1197,15 @@ async function runExport(opts) {
   if (!q) return;
   const base = (q.name || 'export').replace(/[\\/:*?"<>|]+/g, '_');
   const stepIndex = opts.atStep ? store.cursor() : q.steps.length - 1;
+  if (!opts.clipboard && q.source?.kind === 'duck') {
+    const pIdx = previewTaintedAt(ui.diag, stepIndex);
+    if (pIdx >= 0) {
+      const lim = DUCK_PREVIEW_ROWS.toLocaleString();
+      const name = q.steps[pIdx].name || TRANSFORMS[q.steps[pIdx].type]?.label || q.steps[pIdx].type;
+      const go = await confirmDialog(`Step ${pIdx + 1} (${name}) can’t run on the whole file yet, so the export will contain results from the first ${lim} rows only.`, { title: `Export contains only the first ${lim} rows`, ok: `Export first ${lim} rows`, focusCancel: true });
+      if (!go) return;
+    }
+  }
   const args = { queryId: q.id, stepIndex, columns: opts.columns, nullText: opts.nullText ?? '', delimiter: opts.delimiter || ',', bom: opts.bom !== false, guard: opts.guard !== false, rowStart: opts.rowStart || 0, rowEnd: opts.rowEnd ?? Infinity };
   try {
     const targetsToResolve = opts.format === 'xlsx-all' ? store.state.queries : [q];
@@ -1119,7 +1233,7 @@ async function runExport(opts) {
       return;
     }
     const r = await client.call('exportData', { ...args, format: opts.format }, { label: 'Exporting' });
-    if (opts.clipboard) { await copyText(r.text); toast(`Copied ${fmtCount(r.rows)} rows`, { kind: 'success' }); return; }
+    if (opts.clipboard) { await copyWithFeedback(r.text, `${fmtCount(r.rows)} rows`); return; }
     const ext = { csv: 'csv', tsv: 'tsv', json: 'json', jsonl: 'jsonl', markdown: 'md', sql: 'sql' }[opts.format];
     await saveOut(r.text, `${base}.${ext}`, r.mime, `Exported ${fmtCount(r.rows)} rows`);
   } catch (e) { toast(`Export failed: ${e.message}`, { kind: 'error' }); }
@@ -1167,13 +1281,209 @@ async function loadRecipeFile() {
   if (Array.isArray(r.steps)) {
     const q = store.activeQuery();
     if (!q) { toast('Import a data file first, then open this Duckbench 1 recipe to apply its steps.', { kind: 'error', duration: 8000 }); return; }
-    const steps = r.steps.map(migrateStep).filter(Boolean).map(s => ({ ...s, id: uid('s') }));
-    const unsupported = steps.filter(s => s.unsupported).length;
-    store.commit('Apply v1 recipe', (st) => { st.queries.find(x => x.id === q.id).steps.push(...steps); delete st.stepCursor[q.id]; });
-    toast(`Applied ${steps.length} steps${unsupported ? `, ${unsupported} unsupported` : ''}`, { kind: unsupported ? 'info' : 'success' });
+    applyRecipeSteps(r.steps, 'Apply v1 recipe');
     return;
   }
   toast('That doesn’t look like a Duckbench recipe.', { kind: 'error' });
+}
+
+function applyRecipeSteps(rawSteps, label) {
+  const q = store.activeQuery();
+  if (!q) return false;
+  const steps = rawSteps.map(migrateStep).filter(Boolean).map(s => ({ ...s, id: uid('s') }));
+  const unsupported = steps.filter(s => s.unsupported).length;
+  store.commit(label, (st) => { st.queries.find(x => x.id === q.id).steps.push(...steps); delete st.stepCursor[q.id]; });
+  toast(`Applied ${steps.length} steps${unsupported ? `, ${unsupported} unsupported` : ''}`, { kind: unsupported ? 'info' : 'success' });
+  return true;
+}
+
+const stepTitle = (s) => s.name || TRANSFORMS[s.type]?.label || s.type;
+
+async function copyPipelineSql() {
+  const q = store.activeQuery();
+  if (!q || $('#workbench').hidden) { toast(STRINGS.sqlNofile); return; }
+  if (q.source?.kind !== 'duck') { toast(STRINGS.sqlUnavailable); return; }
+  const cursor = store.cursor();
+  if (!q.steps.slice(0, cursor + 1).some(s => !s.disabled)) { toast(STRINGS.sqlNosteps); return; }
+  let plan;
+  try { plan = await sql.planFor(q.id, cursor); } catch (e) { console.error('[vnext:C]', e); toast(STRINGS.sqlError, { kind: 'error' }); return; }
+  if (!plan || plan.error || !plan.sql) { console.error('[vnext:C]', plan?.error); toast(STRINGS.sqlError, { kind: 'error' }); return; }
+  const fileName = store.source(q.source.sourceId)?.name || q.name;
+  let to = cursor + 1;
+  let message = null;
+  if (!plan.complete) {
+    const n = plan.blockedAt + 1;
+    const name = stepTitle(q.steps[plan.blockedAt]);
+    if (!plan.pushed) { toast(`Nothing to copy. Step ${n} (${name}) has no SQL equivalent yet.`, { kind: 'warn' }); return; }
+    to = plan.blockedAt;
+    message = `Copied SQL for ${to === 1 ? 'step 1' : `steps 1 to ${to}`}. Step ${n} (${name}) has no SQL equivalent yet.`;
+  }
+  let text;
+  try { text = buildSqlCopy({ fileName, sql: plan.sql, from: 1, to, total: q.steps.length, date: new Date() }); } catch (e) { console.error('[vnext:C]', e); toast(STRINGS.sqlError, { kind: 'error' }); return; }
+  await copyWithFeedback(text, 'SQL', { message });
+}
+
+function shareBase() {
+  if (isDesktop()) return SHARE_BASE_URL;
+  return /^https?:$/.test(location.protocol) ? location.origin + location.pathname : '';
+}
+
+function recipeFileDialog(message) {
+  const m = modal({
+    title: 'Share link', width: 440,
+    body: el('p', { class: 'modal-text' }, message),
+    footer: [
+      el('button', { class: 'btn btn-ghost', autofocus: true, onclick: () => m.close() }, 'Cancel'),
+      el('button', { class: 'btn btn-primary', onclick: () => { m.close(); saveRecipe(); } }, 'Download recipe file')],
+  });
+}
+
+async function copyShareLink() {
+  const q = store.activeQuery();
+  if (!q || $('#workbench').hidden) { toast(STRINGS.sqlNofile); return; }
+  if (!q.steps.length) { toast(STRINGS.shareNoSteps); return; }
+  const r = await createShareLink(q.steps, shareBase());
+  if (!r.ok) {
+    if (r.reason === 'too-long') recipeFileDialog(STRINGS.shareTooLong);
+    else if (r.reason === 'multi') recipeFileDialog(STRINGS.shareMulti);
+    else if (r.reason === 'unsupported') recipeFileDialog(STRINGS.shareUnsupported);
+    else toast('Share links need the web address of Duckbench, which isn’t set yet.', { kind: 'error' });
+    return;
+  }
+  if (prefs.get('shareNoticeSeen', false)) { await copyWithFeedback(r.url, 'Share link'); return; }
+  const m = modal({
+    title: 'Share link', width: 460,
+    body: el('p', { class: 'modal-text' }, 'The link contains your steps, including column names and any values you typed into steps (for example filter values). It does not contain your file or its rows.'),
+    footer: [
+      el('button', { class: 'btn btn-ghost', autofocus: true, onclick: () => m.close() }, 'Cancel'),
+      el('button', { class: 'btn btn-primary', onclick: () => { prefs.set('shareNoticeSeen', true); m.close(); copyWithFeedback(r.url, 'Share link'); } }, 'Copy link')],
+  });
+}
+
+const isKnownStep = (s) => { try { const m = migrateStep({ ...s }); return !!m && !m.unsupported; } catch { return false; } };
+
+function applyPendingShared() {
+  if (!ui.shared || !store.activeQuery()) return;
+  const r = ui.shared.recipe;
+  ui.shared = null;
+  applyRecipeSteps(r.steps, 'Apply shared recipe');
+}
+
+async function offerShared(raw) {
+  const res = await decodeShare(extractShare(raw), { isKnownStep });
+  if (!res.ok) {
+    toast(res.reason === 'unsupported-step' ? `This recipe uses a step this version doesn’t know (${res.type}). Update Duckbench and try again.` : STRINGS.shareErr[res.reason] || STRINGS.shareErr.malformed, { kind: 'error', duration: 9000 });
+    return false;
+  }
+  const steps = res.recipe.steps;
+  const shown = steps.slice(0, 20).map(s => el('li', {}, stepTitle(s)));
+  if (steps.length > 20) shown.push(el('li', {}, `and ${steps.length - 20} more`));
+  const accepted = await new Promise((resolve) => {
+    let ok = false;
+    const m = modal({
+      title: 'Load shared recipe?', width: 480,
+      body: [el('p', { class: 'modal-text' }, `This link contains ${steps.length} step${steps.length === 1 ? '' : 's'}. Nothing is applied until you open a file and confirm.`), el('ol', { class: 'share-steps' }, shown)],
+      footer: [
+        el('button', { class: 'btn btn-ghost', autofocus: true, onclick: () => m.close() }, 'Cancel'),
+        el('button', { class: 'btn btn-primary', onclick: () => { ok = true; m.close(); } }, 'Load recipe')],
+      onClose: () => resolve(ok),
+    });
+  });
+  if (!accepted) return false;
+  ui.shared = { recipe: res.recipe };
+  if (!$('#workbench').hidden && store.activeQuery()) applyPendingShared();
+  else renderImport();
+  return true;
+}
+
+function openPasteLink() {
+  const input = el('input', { class: 'input', type: 'text', placeholder: 'https://…#r=1.…', 'aria-label': 'Paste a Duckbench share link', autofocus: true });
+  const go = () => { const raw = input.value; m.close(); if (raw.trim()) offerShared(raw); };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  const m = modal({
+    title: 'Import recipe from link', width: 480,
+    body: el('label', { class: 'share-field' }, el('span', { class: 'f-label' }, 'Paste a Duckbench share link'), input),
+    footer: [el('button', { class: 'btn btn-ghost', onclick: () => m.close() }, 'Cancel'), el('button', { class: 'btn btn-primary', onclick: go }, 'Import')],
+  });
+}
+
+function stepsToolsMenu(anchor) {
+  const q = store.activeQuery();
+  const duckBacked = q?.source?.kind === 'duck';
+  menu(anchor, [
+    { label: 'Copy as SQL', icon: 'terminal', disabled: !duckBacked, title: duckBacked ? null : STRINGS.sqlUnavailable, onClick: copyPipelineSql },
+    { label: 'Copy share link', icon: 'link', onClick: copyShareLink },
+    '-',
+    { label: 'Import recipe from link…', icon: 'clipboard', onClick: openPasteLink },
+  ], { align: 'end' });
+}
+
+const nativePaths = new WeakMap();
+const ACCEPT_EXT = ACCEPT.split(',').map(x => x.slice(1));
+
+async function pickDataFiles({ multiple = true } = {}) {
+  if (!isDesktop()) return pickFiles({ accept: ACCEPT, multiple });
+  let picked;
+  try { picked = await pickNativeFiles({ extensions: ACCEPT_EXT, multiple }); } catch (e) { console.error('[vnext:F]', e); return pickFiles({ accept: ACCEPT, multiple }); }
+  if (!picked || !picked.length) return [];
+  const files = [];
+  for (const { path, file } of picked) {
+    try {
+      const f = file.size > LARGE_FILE_BYTES ? file : await readNativeFile(path, file.size);
+      nativePaths.set(f, path);
+      files.push(f);
+    } catch (e) {
+      console.error('[vnext:F]', e);
+      toast(`Couldn’t read ${pathName(path)}. Check that the file is still there and try again.`, { kind: 'error' });
+    }
+  }
+  return files;
+}
+
+function recordRecent(path) {
+  if (!path || !isDesktop()) return;
+  writeRecents(addRecent(readRecents(), { path, name: pathName(path), openedAt: Date.now() }));
+}
+
+function forgetRecent(path) {
+  writeRecents(removeRecent(readRecents(), path));
+  if ($('#workbench').hidden) renderImport();
+}
+
+function clearRecents() {
+  writeRecents([]);
+  toast('Recent files cleared');
+  if ($('#workbench').hidden) renderImport();
+}
+
+async function openRecent(r) {
+  const size = await nativeFileSize(r.path);
+  if (size == null) {
+    toast(`File not found: ${r.name}. It may have been moved or deleted.`, { kind: 'error', action: 'Remove from list', onAction: () => forgetRecent(r.path), duration: 9000 });
+    return;
+  }
+  let file;
+  try {
+    if (size > LARGE_FILE_BYTES) { file = new File([], r.name); Object.defineProperty(file, 'size', { value: size }); }
+    else file = await readNativeFile(r.path, size);
+  } catch (e) {
+    console.error('[vnext:F]', e);
+    toast(`Couldn’t read ${r.name}. Check that the file is still there and try again.`, { kind: 'error' });
+    return;
+  }
+  nativePaths.set(file, r.path);
+  await importFiles([file], { asNewProject: $('#workbench').hidden });
+}
+
+function recentSection() {
+  const list = isDesktop() ? readRecents() : [];
+  if (!list.length) return null;
+  return el('div', { class: 'launch-section launch-recent', id: 'recentFiles' },
+    el('span', { class: 'launch-label' }, 'Recent files'),
+    el('div', { class: 'recent-list' }, list.map(r => el('button', { class: 'recent-row', type: 'button', onclick: () => openRecent(r) },
+      el('span', { class: 'recent-main' }, el('span', { class: 'recent-name' }, r.name), el('span', { class: 'recent-dir', title: r.path }, folderOf(r.path))),
+      el('span', { class: 'recent-when' }, recentWhen(r.openedAt))))),
+    el('button', { class: 'btn btn-ghost btn-xs recent-clear', type: 'button', onclick: clearRecents }, 'Clear recent files'));
 }
 
 const BATCH_FORMATS = [['csv', 'CSV'], ['xlsx', 'Excel (.xlsx)'], ['json', 'JSON'], ['jsonl', 'JSON Lines'], ['parquet', 'Parquet']];
@@ -1574,6 +1884,7 @@ function installDesktop() {
 
 (async function boot() {
   installDesktop();
+  installNativeGuards();
   enhanceSelects();
   await client.init();
   initSplitters();
@@ -1584,4 +1895,9 @@ function installDesktop() {
   const params = new URLSearchParams(location.search);
   if (params.has('notour')) prefs.set('tourDone', true);
   if (params.has('demo')) await loadSample();
+  if (/^#r=/.test(location.hash)) {
+    const raw = location.hash;
+    await offerShared(raw);
+    history.replaceState(null, '', location.pathname + location.search);
+  }
 })();

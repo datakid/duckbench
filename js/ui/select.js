@@ -2,8 +2,6 @@ import { el } from './dom.js';
 import { icon } from './icons.js';
 import { popover } from './overlay.js';
 
-const coarse = () => { try { return matchMedia('(pointer: coarse)').matches; } catch { return false; } };
-
 function open(sel) {
   const opts = [...sel.options].filter(o => !o.hidden && !(o.disabled && o.value === ''));
   if (!opts.length) return;
@@ -54,15 +52,22 @@ function open(sel) {
 }
 
 export function enhanceSelects() {
-  const eligible = (sel) => sel && !sel.multiple && !(sel.size > 1) && !sel.disabled && !coarse();
+  const eligible = (sel) => sel && !sel.multiple && !(sel.size > 1) && !sel.disabled;
+  const claim = (e) => {
+    const sel = e.target.closest?.('select');
+    if (!eligible(sel)) return false;
+    e.preventDefault();
+    return sel;
+  };
   document.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-    const sel = e.target.closest?.('select');
-    if (!eligible(sel)) return;
-    e.preventDefault();
+    const sel = claim(e);
+    if (!sel) return;
     sel.focus({ preventScroll: true });
     open(sel);
   });
+  document.addEventListener('touchstart', (e) => { claim(e); }, { passive: false });
+  document.addEventListener('click', (e) => { claim(e); });
   document.addEventListener('keydown', (e) => {
     const sel = e.target;
     if (!(sel instanceof HTMLSelectElement) || !eligible(sel)) return;

@@ -2,6 +2,7 @@ import { Frame } from '../core/frame.js';
 import { TRANSFORMS, migrateStep, validateStep } from '../core/transforms.js';
 import { parseCSV, decodeBuffer, rowsToColumns, csvEscape, sniffDelimiter, CsvStream, detectEncoding } from '../core/csv.js';
 import { columnQuality, profileColumn, distinctValues } from '../core/profile.js';
+import { suggestCleanups } from '../core/suggest.js';
 import { formatValue, convertValue } from '../core/types.js';
 import { hashString, dedupeNames, now } from '../core/util.js';
 import { validateSql, withInput } from './duck.js';
@@ -101,8 +102,8 @@ export class Engine {
     return { sql: plan.sql, pushed: plan.pushed, active, complete: rest.length === 0, blockedAt: rest.length ? q.steps.indexOf(rest[0]) : -1 };
   }
 
-  putSqlResult({ key, fields, columns, error, note }) {
-    this.sqlResults.set(key, error ? { error } : { fields, columns, note });
+  putSqlResult({ key, fields, columns, error, note, truncated }) {
+    this.sqlResults.set(key, error ? { error } : { fields, columns, note, truncated: !!truncated });
     for (const k of [...this.cache.keys()]) if (k.startsWith(key)) this.cache.delete(k);
     while (this.sqlResults.size > 24) this.sqlResults.delete(this.sqlResults.keys().next().value);
     return true;
@@ -249,7 +250,7 @@ export class Engine {
     if (!hit) throw Object.assign(new Error('Waiting for DuckDB…'), { needsSql: { key, queryId: q.id, source: { table: src.table, sql: plan.sql, limit: src.limit, pushed: plan.pushed } } });
     if (hit.error) throw Object.assign(new Error(hit.error), { pushedError: plan.pushed > 0 });
     if (!hit.frame) hit.frame = new Frame(hit.fields.map(f => ({ ...f })), hit.columns, hit.columns[0]?.length ?? 0).withRid();
-    return { frame: hit.frame, key, note: hit.note || null };
+    return { frame: hit.frame, key, note: hit.note || null, truncated: !!hit.truncated };
   }
 
   _run(q, upto, override, stack = []) {
@@ -273,6 +274,7 @@ export class Engine {
     }
     let frame = base.frame;
     let key = base.key;
+    const previewOnly = q.source?.kind === 'duck' && !!base.truncated;
     const steps = q.steps;
     const last = Math.min(upto, steps.length - 1);
     let errorIndex = -1, error = null;
@@ -290,10 +292,10 @@ export class Engine {
         diag.push(step.disabled ? { disabled: true } : { pushed: true, rows: i === pushedCount - 1 ? frame.rowCount : null, cols: i === pushedCount - 1 ? frame.fields.length : null });
         continue;
       }
-      if (step.disabled) { diag.push({ disabled: true, rows: frame.rowCount, cols: frame.fields.length }); continue; }
+      if (step.disabled) { diag.push(previewOnly ? { disabled: true, preview: true, rows: frame.rowCount, cols: frame.fields.length } : { disabled: true, rows: frame.rowCount, cols: frame.fields.length }); continue; }
       if (error) { diag.push({ blocked: true }); continue; }
       const r = this._applyStep(q, step, frame, key, stack);
-      diag.push(r.diag);
+      diag.push(previewOnly ? { ...r.diag, preview: true } : r.diag);
       if (r.error) {
         error = r.error; errorIndex = i;
         if (r.needsSql) {
@@ -431,6 +433,15 @@ export class Engine {
     const f = this.results.get(resultId);
     if (!f) return { expired: true };
     return distinctValues(f, column, { search, limit });
+  }
+
+  suggest({ queryId }) {
+    const q = this.queries.get(queryId);
+    if (!q || q.source?.kind === 'duck') return { items: null };
+    try {
+      const base = this._baseFor(q, []);
+      return { items: base?.frame ? suggestCleanups(base.frame) : null };
+    } catch { return { items: null }; }
   }
 
   queryColumns({ queryId }) {
@@ -620,4 +631,4 @@ async function streamCsvFile(file, format, options, progress) {
   return { names, cols, delimiter, encoding };
 }
 
-export const ENGINE_METHODS = ['duckPlan', 'putDuckSchema', 'queryData', 'loadFile', 'dropQuery', 'putSqlResult', 'sqlInput', 'pendingSql', 'ping', 'loadText', 'loadColumns', 'peekText', 'removeSource', 'setQueries', 'sourceInfo', 'evaluate', 'rows', 'profile', 'distinct', 'queryColumns', 'findRows', 'exportData', 'runSteps', 'invalidate'];
+export const ENGINE_METHODS = ['duckPlan', 'putDuckSchema', 'queryData', 'loadFile', 'dropQuery', 'putSqlResult', 'sqlInput', 'pendingSql', 'ping', 'loadText', 'loadColumns', 'peekText', 'removeSource', 'setQueries', 'sourceInfo', 'evaluate', 'rows', 'profile', 'distinct', 'queryColumns', 'suggest', 'findRows', 'exportData', 'runSteps', 'invalidate'];
