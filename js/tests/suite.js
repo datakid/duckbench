@@ -13,6 +13,7 @@ import { createStore } from '../app/store.js';
 import { compileStep, mayCompile } from '../engine/compile.js';
 import { profileFromJson } from '../engine/duck.js';
 import { suggestCleanups } from '../core/suggest.js';
+import { addRecent, parseRecent, removeRecent, recentWhen, folderOf, pathName, readRecents, writeRecents, RECENT_KEY } from '../app/recents.js';
 import { firstPreviewOnlyIndex, previewTaintedAt, formatStepDelta, sqlHeader, buildSqlCopy, finishSql, stripForShare, encodeShare, decodeShare, extractShare, createShareLink, usesOtherQueries, baseName } from '../app/vnext.js';
 
 const SALES_FIELDS = [{ name: 'order_id', type: 'integer' }, { name: 'order_date', type: 'date' }, { name: 'customer', type: 'text' }, { name: 'region', type: 'text' }, { name: 'quantity', type: 'integer' }, { name: 'unit_price', type: 'number' }];
@@ -453,6 +454,42 @@ export const TESTS = [
   ['clean-up suggestions: never computed for DuckDB-backed queries', () => {
     const e = duckEngine([]);
     eq(e.suggest({ queryId: 'd' }).items, null);
+  }],
+  ['recent files: newest first and de-duplicated ignoring case', () => {
+    let l = [];
+    l = addRecent(l, { path: 'C:\\A.csv', name: 'A.csv', openedAt: 1 });
+    l = addRecent(l, { path: 'C:\\B.csv', name: 'B.csv', openedAt: 2 });
+    l = addRecent(l, { path: 'c:\\a.csv', name: 'a.csv', openedAt: 3 });
+    eq(l.map(e => e.path), ['c:\\a.csv', 'C:\\B.csv']);
+  }],
+  ['recent files: capped at ten', () => {
+    let l = [];
+    for (let i = 0; i < 15; i++) l = addRecent(l, { path: `/f/${i}.csv`, name: `${i}.csv`, openedAt: i });
+    eq(l.length, 10); eq(l[0].path, '/f/14.csv'); eq(l[9].path, '/f/5.csv');
+  }],
+  ['recent files: parsing is defensive', () => {
+    eq(parseRecent('garbage'), []); eq(parseRecent('[{"path":1}]'), []); eq(parseRecent(null), []); eq(parseRecent('{"path":"x"}'), []); eq(parseRecent('[null,3,{"path":""}]'), []);
+    eq(parseRecent('[{"path":"/a/b.csv"},{"path":"/c.csv","name":"c","openedAt":5}]'), [{ path: '/a/b.csv', name: 'b.csv', openedAt: 0 }, { path: '/c.csv', name: 'c', openedAt: 5 }]);
+  }],
+  ['recent files: names and folders for Windows, UNC and unix paths', () => {
+    eq(pathName('C:\\Users\\Zoë\\Données\\ventes.csv'), 'ventes.csv');
+    eq(folderOf('C:\\Users\\Zoë\\Données\\ventes.csv'), 'C:\\Users\\Zoë\\Données');
+    eq(pathName('\\\\server\\share\\file.csv'), 'file.csv'); eq(folderOf('\\\\server\\share\\file.csv'), '\\\\server\\share');
+    eq(pathName('/home/a b/x.csv'), 'x.csv'); eq(folderOf('/x.csv'), ''); eq(pathName(''), '');
+  }],
+  ['recent files: remove by path ignores case', () => eq(removeRecent([{ path: 'C:\\A.csv' }, { path: 'C:\\B.csv' }], 'c:\\a.CSV').map(e => e.path), ['C:\\B.csv'])],
+  ['recent files: relative time labels', () => {
+    const now = new Date(2026, 10, 13, 15, 0).getTime();
+    eq(recentWhen(new Date(2026, 10, 13, 1, 0).getTime(), now), 'today');
+    eq(recentWhen(new Date(2026, 10, 12, 23, 59).getTime(), now), 'yesterday');
+    eq(recentWhen(new Date(2026, 10, 1).getTime(), now), new Date(2026, 10, 1).toLocaleDateString());
+  }],
+  ['recent files: storage failures never throw', () => {
+    const bad = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('full'); } };
+    eq(readRecents(bad), []); eq(writeRecents([{ path: 'x' }], bad), false);
+    const mem = new Map(); const ok = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
+    ok.setItem(RECENT_KEY, 'not json'); eq(readRecents(ok), []);
+    eq(writeRecents([{ path: '/a.csv', name: 'a.csv', openedAt: 1 }], ok), true); eq(readRecents(ok).length, 1);
   }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];

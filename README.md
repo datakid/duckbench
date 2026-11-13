@@ -26,6 +26,8 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 - Each step is cached, so editing late steps doesn't recompute early ones
 - Recipes save the whole pipeline as JSON and can be applied to many files in one batch
 - Each step shows how many rows and columns it added or removed
+- After a file opens, up to three dismissible suggestions can offer to change a text column to numbers, trim padded text, or remove blank rows. They are computed once in the background on files that are open in memory, and each one adds a normal step you can undo
+- The desktop app lists your ten most recent files on the start screen and opens them in one click
 - Share a query's steps as a link. The link carries the steps only, never your file or its rows
 - Copy a pipeline as SQL when the file is opened with DuckDB. The copied SQL reads the file by name, so it runs in DuckDB wherever that file exists (the in-app SQL console blocks direct file reads)
 
@@ -61,14 +63,15 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 
 - It does not upload files or call a server. The web app fetches its libraries from a CDN (see Privacy), and nothing else leaves the page.
 - Excel `.xls` and `.ods` files can be imported but not exported, and cannot be opened with DuckDB.
-- On DuckDB-backed files, steps that cannot be translated to SQL exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB.
 - Extract text and window columns are not translated to SQL yet. Full and right joins, and loose key matching, are not in SQL yet.
-- The desktop app is a preview. There are no recent files on desktop yet.
+- The desktop app is a preview.
 - A step is never translated to SQL when SQL could give a different answer from the JavaScript engine.
 
 ## Privacy
 
 Files never leave your device. The web app downloads DuckDB-WASM and the Parquet library from jsDelivr on first use. If you open an Excel file with DuckDB, it also downloads DuckDB's Excel extension from `extensions.duckdb.org`. No data is sent anywhere.
+
+A share link contains a query's steps, including column names and any values typed into steps. It never contains the file or its rows.
 
 Sessions are saved in the browser:
 - Small files are stored in IndexedDB.
@@ -182,7 +185,6 @@ cd desktop && cargo test --manifest-path src-tauri/Cargo.toml
 - Translate extract text and window columns to SQL
 - Full and right joins, and loose key matching, in SQL
 - Open `.xls` and `.ods` files with DuckDB
-- Recent files on desktop
 
 ## License
 

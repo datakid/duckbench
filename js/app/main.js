@@ -18,7 +18,8 @@ import { sqlEditor, SQL_SNIPPETS } from '../ui/sqleditor.js';
 import { enhanceSelects } from '../ui/select.js';
 import { TYPE_BADGES } from '../core/types.js';
 import { keepCopy, getCopy, opfsFilesAvailable, listSheets } from './filestore.js';
-import { pickNativeFiles, nativeFileUrl, checkForUpdate } from './platform.js';
+import { pickNativeFiles, nativeFileUrl, nativeFileSize, readNativeFile, checkForUpdate } from './platform.js';
+import { addRecent, removeRecent, readRecents, writeRecents, recentWhen, folderOf, pathName, RECENT_MAX } from './recents.js';
 import { installNativeGuards } from '../ui/native.js';
 import { copyWithFeedback, showCopyFallback } from '../ui/clip.js';
 import { previewTaintedAt, formatStepDelta, buildSqlCopy, createShareLink, decodeShare, extractShare, STRINGS } from './vnext.js';
@@ -158,10 +159,13 @@ async function importFiles(files, { asNewProject = false, options, viaDuck = fal
   for (const file of files) {
     try {
       const handle = handles?.get(file) || null;
+      const nativePath = native?.get(file) || nativePaths.get(file) || null;
+      const sourcesBefore = store.state.sources.map(x => x.id).join('|');
       if (viaDuck || file.size > LARGE_FILE_BYTES) {
         if (!viaDuck && !(await confirmDialog(`${file.name} is ${fmtBytes(file.size)}. Files this large open with DuckDB. Filters, sorts, column changes, group by and SQL steps run over every row; other steps work on the first ${DUCK_PREVIEW_ROWS.toLocaleString()} rows.`, { title: 'Open with DuckDB', ok: 'Open' }))) continue;
-        await importLargeViaDuck(file, { asNewProject, handle, nativePath: native?.get(file) || null, options: viaDuck ? { ...(options || {}) } : {} });
+        await importLargeViaDuck(file, { asNewProject, handle, nativePath, options: viaDuck ? { ...(options || {}) } : {} });
         asNewProject = false;
+        if (store.state.sources.map(x => x.id).join('|') !== sourcesBefore) recordRecent(nativePath);
         continue;
       }
       const sid = uid('f');
@@ -176,6 +180,7 @@ async function importFiles(files, { asNewProject = false, options, viaDuck = fal
         s.sources.push(src); s.queries.push(q); s.activeQueryId = q.id;
       });
       asNewProject = false;
+      recordRecent(nativePath);
       done.push(`${file.name}: ${fmtCount(info.rowCount)} rows`);
     } catch (e) {
       toast(/DuckDB could not be loaded/.test(e.message) ? `Couldn’t open ${file.name}: the SQL engine isn’t available. Check your connection and try again.` : `Couldn’t read ${file.name}: ${e.message}`, { kind: 'error' });
@@ -188,7 +193,7 @@ async function importFiles(files, { asNewProject = false, options, viaDuck = fal
 }
 
 async function importWithOptions(asNewProject) {
-  const [file] = await pickFiles({ accept: ACCEPT });
+  const [file] = await pickDataFiles({ multiple: false });
   if (!file) return;
   const format = formatOf(file.name);
   const opts = { delimiter: 'auto', header: true, skipRows: 0, detectTypes: true, encoding: 'auto' };
@@ -252,7 +257,7 @@ function renderImport() {
       el('span', { class: 'drop-title' }, 'Drop files to start'),
       el('span', { class: 'drop-hint' }, 'or ', el('span', { class: 'drop-link' }, 'browse your computer')),
       el('span', { class: 'dz-formats' }, ['CSV', 'TSV', 'XLSX', 'JSON', 'JSONL', 'PARQUET'].map(f => el('span', {}, f)))));
-  drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickFiles({ accept: ACCEPT, multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
+  drop.addEventListener('click', async (e) => { e.preventDefault(); const files = await pickDataFiles({ multiple: true }); if (files.length) importFiles(files, { asNewProject: true }); });
   drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop.click(); } });
   const resume = el('section', { class: 'resume-slot', id: 'resumeCard', hidden: true, 'aria-label': 'Resume session' });
   const act = (ic, label, hint, fn, id, key) => el('button', { class: 'launch-act', type: 'button', onclick: fn, id: id || null },
@@ -281,6 +286,7 @@ function renderImport() {
         act('layers', 'Batch apply', 'One recipe, many files', openBatch),
         act('terminal', 'SQL console', 'DuckDB', () => openConsole(), null, '⌘J'),
         act('database', 'Large file', 'Read in place', () => openWithDuck(true)))),
+    recentSection(),
     el('footer', { class: 'hero-foot' },
       el('span', { class: `hf-engine is-${st}` }, el('span', { class: 'le-dot' }), engineLabel()),
       el('span', { class: 'hf-sep' }),
@@ -708,7 +714,7 @@ function renderRibbon() {
 
 function renderQueries() {
   const host = clear($('#queriesPanel'));
-  host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Queries'), el('button', { class: 'icon-btn icon-btn-sm', title: 'Import another file as a new query', onclick: async () => { const f = await pickFiles({ accept: ACCEPT, multiple: true }); if (f.length) importFiles(f); } }, icon('plus', 15))));
+  host.appendChild(el('div', { class: 'panel-head' }, el('h2', {}, 'Queries'), el('button', { class: 'icon-btn icon-btn-sm', title: 'Import another file as a new query', onclick: async () => { const f = await pickDataFiles({ multiple: true }); if (f.length) importFiles(f); } }, icon('plus', 15))));
   const list = el('ul', { class: 'query-list', role: 'listbox', 'aria-label': 'Queries' });
   for (const q of store.state.queries) {
     const src = q.source?.kind === 'file' || q.source?.kind === 'duck' ? store.source(q.source.sourceId) : null;
@@ -857,7 +863,7 @@ async function openInspector(stepId) {
     fields, rightFields, sqlTables, queryId: q.id, queries: store.state.queries,
     onRunSql: () => { commit.cancel?.(); updateStep(stepId, (x) => { x.data = JSON.parse(JSON.stringify(data)); }, `Edit ${t.label}`); },
     loadDistinct: (column, search) => (input.resultId ? client.call('distinct', { resultId: input.resultId, column, search, limit: 500 }, { track: false }) : null),
-    onAddQuery: async () => { const f = await pickFiles({ accept: ACCEPT }); if (f.length) { const keep = store.state.activeQueryId; await importFiles(f); store.quiet((s) => { s.activeQueryId = keep; }, 'change'); openInspector(stepId); } },
+    onAddQuery: async () => { const f = await pickDataFiles({ multiple: false }); if (f.length) { const keep = store.state.activeQueryId; await importFiles(f); store.quiet((s) => { s.activeQueryId = keep; }, 'change'); openInspector(stepId); } },
   };
   const form = buildForm(t?.params || [], data, ctx, (d, meta) => {
     commit(`Edit ${t.label}`);
@@ -1074,7 +1080,9 @@ function openPalette() {
     { label: 'Save recipe', icon: 'save', run: saveRecipe },
     { label: 'Open recipe…', icon: 'clipboard', run: loadRecipeFile },
     { label: 'Batch apply steps to many files…', icon: 'layers', run: openBatch },
-    { label: 'Import another file', icon: 'upload', run: async () => { const f = await pickFiles({ accept: ACCEPT, multiple: true }); if (f.length) importFiles(f); } },
+    ...(isDesktop() ? readRecents().map(r => ({ label: `Open recent: ${r.name}`, icon: 'upload', kw: `recent file ${r.path}`, run: () => openRecent(r) })) : []),
+    ...(isDesktop() && readRecents().length ? [{ label: 'Clear recent files', icon: 'x', kw: 'recent forget', run: clearRecents }] : []),
+    { label: 'Import another file', icon: 'upload', run: async () => { const f = await pickDataFiles({ multiple: true }); if (f.length) importFiles(f); } },
     { label: 'Toggle light / dark theme', icon: 'sun', run: toggleTheme },
     { label: 'Undo', icon: 'undo', run: doUndo },
     { label: 'Redo', icon: 'redo', run: doRedo },
@@ -1408,6 +1416,74 @@ function stepsToolsMenu(anchor) {
     '-',
     { label: 'Import recipe from link…', icon: 'clipboard', onClick: openPasteLink },
   ], { align: 'end' });
+}
+
+const nativePaths = new WeakMap();
+const ACCEPT_EXT = ACCEPT.split(',').map(x => x.slice(1));
+
+async function pickDataFiles({ multiple = true } = {}) {
+  if (!isDesktop()) return pickFiles({ accept: ACCEPT, multiple });
+  let picked;
+  try { picked = await pickNativeFiles({ extensions: ACCEPT_EXT, multiple }); } catch (e) { console.error('[vnext:F]', e); return pickFiles({ accept: ACCEPT, multiple }); }
+  if (!picked || !picked.length) return [];
+  const files = [];
+  for (const { path, file } of picked) {
+    try {
+      const f = file.size > LARGE_FILE_BYTES ? file : await readNativeFile(path, file.size);
+      nativePaths.set(f, path);
+      files.push(f);
+    } catch (e) {
+      console.error('[vnext:F]', e);
+      toast(`Couldn’t read ${pathName(path)}. Check that the file is still there and try again.`, { kind: 'error' });
+    }
+  }
+  return files;
+}
+
+function recordRecent(path) {
+  if (!path || !isDesktop()) return;
+  writeRecents(addRecent(readRecents(), { path, name: pathName(path), openedAt: Date.now() }));
+}
+
+function forgetRecent(path) {
+  writeRecents(removeRecent(readRecents(), path));
+  if ($('#workbench').hidden) renderImport();
+}
+
+function clearRecents() {
+  writeRecents([]);
+  toast('Recent files cleared');
+  if ($('#workbench').hidden) renderImport();
+}
+
+async function openRecent(r) {
+  const size = await nativeFileSize(r.path);
+  if (size == null) {
+    toast(`File not found: ${r.name}. It may have been moved or deleted.`, { kind: 'error', action: 'Remove from list', onAction: () => forgetRecent(r.path), duration: 9000 });
+    return;
+  }
+  let file;
+  try {
+    if (size > LARGE_FILE_BYTES) { file = new File([], r.name); Object.defineProperty(file, 'size', { value: size }); }
+    else file = await readNativeFile(r.path, size);
+  } catch (e) {
+    console.error('[vnext:F]', e);
+    toast(`Couldn’t read ${r.name}. Check that the file is still there and try again.`, { kind: 'error' });
+    return;
+  }
+  nativePaths.set(file, r.path);
+  await importFiles([file], { asNewProject: $('#workbench').hidden });
+}
+
+function recentSection() {
+  const list = isDesktop() ? readRecents() : [];
+  if (!list.length) return null;
+  return el('div', { class: 'launch-section launch-recent', id: 'recentFiles' },
+    el('span', { class: 'launch-label' }, 'Recent files'),
+    el('div', { class: 'recent-list' }, list.map(r => el('button', { class: 'recent-row', type: 'button', onclick: () => openRecent(r) },
+      el('span', { class: 'recent-main' }, el('span', { class: 'recent-name' }, r.name), el('span', { class: 'recent-dir', title: r.path }, folderOf(r.path))),
+      el('span', { class: 'recent-when' }, recentWhen(r.openedAt))))),
+    el('button', { class: 'btn btn-ghost btn-xs recent-clear', type: 'button', onclick: clearRecents }, 'Clear recent files'));
 }
 
 const BATCH_FORMATS = [['csv', 'CSV'], ['xlsx', 'Excel (.xlsx)'], ['json', 'JSON'], ['jsonl', 'JSON Lines'], ['parquet', 'Parquet']];
