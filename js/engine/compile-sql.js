@@ -11,7 +11,7 @@ const STRIP = `${WS.slice(0, -1)}$€£¥₹]|[A-Za-z]{3}$|^[A-Za-z]{3}`;
 
 let seq = 0;
 export const jsTrim = (e) => `regexp_replace(${e}, ${sqlStr(`^${WS}+|${WS}+$`)}, '', 'g')`;
-const bind = (expr, fn) => { const v = `__db_v${++seq}`; return `(list_transform([${expr}], ${v} -> ${fn(v)}))[1]`; };
+const bind = (expr, fn) => { const v = `__db_v${++seq}`; return `(list_transform([${expr}], lambda ${v}: ${fn(v)}))[1]`; };
 const isText = (types, c) => types.get(c) === 'text';
 const project = (fields, map) => fields.map(f => (map.has(f.name) ? `${map.get(f.name)} AS ${qi(f.name)}` : qi(f.name))).join(', ');
 const retype = (fields, map, types) => fields.map(f => ({ name: f.name, type: types?.get(f.name) || f.type }));
@@ -181,7 +181,7 @@ function properExpr(c) {
   const p = `__db_p${++seq}`;
   const word = bind(`regexp_extract(${p}, ${sqlStr(`^${SEP}*`)})`, (lead) =>
     bind(`substr(${p}, length(${lead}) + 1)`, (rest) => `CASE WHEN regexp_full_match(left(${rest}, 1), '\\pL') THEN ${lead} || upper(left(${rest}, 1)) || substr(${rest}, 2) ELSE ${p} END`));
-  return bind(`lower(${c})`, (s) => `CASE WHEN ${s} = '' THEN ${s} ELSE array_to_string(list_transform(regexp_extract_all(${s}, ${sqlStr(`^${NOT_SEP}+|${SEP}+${NOT_SEP}*`)}), ${p} -> ${word}), '') END`);
+  return bind(`lower(${c})`, (s) => `CASE WHEN ${s} = '' THEN ${s} ELSE array_to_string(list_transform(regexp_extract_all(${s}, ${sqlStr(`^${NOT_SEP}+|${SEP}+${NOT_SEP}*`)}), lambda ${p}: ${word}), '') END`);
 }
 
 function changeCase(d, fields, types, ctx) {
@@ -266,7 +266,7 @@ function splitColumn(d, fields, types, ctx) {
     width = Math.max(1, Number(w) || 0);
     if (max > 0) width = Math.min(width, max);
     const v = `__db_t${++seq}`;
-    const piece = d.trimParts !== false ? `list_transform(string_split(${c}, ${D})[${width}:], ${v} -> ${jsTrim(v)})` : `string_split(${c}, ${D})[${width}:]`;
+    const piece = d.trimParts !== false ? `list_transform(string_split(${c}, ${D})[${width}:], lambda ${v}: ${jsTrim(v)})` : `string_split(${c}, ${D})[${width}:]`;
     if (max > 0 && width === max) tail = width - 1;
     parts = Array.from({ length: width }, (_, i) => (i === tail ? `CASE WHEN len(string_split(${c}, ${D})) >= ${i + 1} THEN array_to_string(${piece}, ${D}) END` : `string_split(${c}, ${D})[${i + 1}]`));
   } else {
@@ -394,7 +394,7 @@ function mergeColumns(d, fields, types) {
   const sep = sqlStr(unescapeDelimiter(d.separator ?? ''));
   const skip = d.skipEmpty !== false;
   const parts = cols.map(c => { const q = qi(c), t = types.get(c); return skip ? `CASE WHEN ${blankOf(q, t)} THEN NULL ELSE ${asText(q, t)} END` : `coalesce(${asText(q, t)}, '')`; });
-  const expr = bind(`list_filter([${parts.join(', ')}], __db_m -> __db_m IS NOT NULL)`, (l) => `CASE WHEN len(${l}) = 0 THEN NULL ELSE array_to_string(${l}, ${sep}) END`);
+  const expr = bind(`list_filter([${parts.join(', ')}], lambda __db_m: __db_m IS NOT NULL)`, (l) => `CASE WHEN len(${l}) = 0 THEN NULL ELSE array_to_string(${l}, ${sep}) END`);
   const rest = d.keepOriginal ? fields : fields.filter(f => !cols.includes(f.name));
   const name = uniqueName(d.name.trim(), rest.map(f => f.name), ' ');
   const at = d.keepOriginal ? fields.length : Math.min(...cols.map(c => fields.findIndex(f => f.name === c)));
