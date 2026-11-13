@@ -492,6 +492,21 @@ export const TESTS = [
     ok.setItem(RECENT_KEY, 'not json'); eq(readRecents(ok), []);
     eq(writeRecents([{ path: '/a.csv', name: 'a.csv', openedAt: 1 }], ok), true); eq(readRecents(ok).length, 1);
   }],
+  ['duckdb 2.0 readiness — compiled SQL never uses arrow lambdas', () => {
+    const cases = [
+      { type: 'change_case', data: { columns: ['customer', 'region'], mode: 'proper' } },
+      { type: 'merge_columns', data: { columns: ['customer', 'region'], separator: ' / ', name: 'label', skipEmpty: true } },
+      { type: 'trim_clean', data: { columns: ['customer'], trim: true } },
+    ];
+    let lambdas = 0;
+    for (const c of cases) {
+      const out = compileStep(migrateStep(c), SALES_FIELDS, { probe: () => false });
+      ok(out && out.sql, `${c.type} compiles`);
+      ok(!/\s->\s/.test(out.sql), `${c.type} has no arrow lambda`);
+      if (/lambda\s+\w+\s*:/.test(out.sql)) lambdas++;
+    }
+    ok(lambdas >= 2, 'python-style lambda is used where a lambda is needed');
+  }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];
 
