@@ -344,6 +344,7 @@ export const TESTS = [
     eq(formatStepDelta({ rows: d.prevRows, cols: d.prevCols }, { rows: d.rows, cols: d.cols }).text, `−${(d.prevRows - 5).toLocaleString()} rows`);
   }],
   ['vNext — sql header uses the file name only', () => { const h = sqlHeader({ fileName: 'C:\\Users\\alice\\data\\sales.csv', from: 1, to: 4, total: 6, date: new Date(2026, 10, 11) }); ok(h.includes('-- Source: sales.csv')); ok(!h.includes('alice')); ok(h.includes('-- Steps 1 to 4 of 6')); ok(h.includes('-- Generated 2026-11-11')); }],
+  ['vNext — sql header: a single step reads naturally', () => ok(sqlHeader({ fileName: 'a.csv', from: 1, to: 1, total: 3, date: new Date(2026, 0, 2) }).includes('-- Step 1 of 3'))],
   ['vNext — sql header cannot be broken out of by a file name', () => { const h = sqlHeader({ fileName: 'a\nDROP TABLE x;.csv', from: 1, to: 1, total: 1, date: new Date(2026, 0, 2) }); eq(h.split('\n').filter(l => l.startsWith('-- Source:')).length, 1); ok(!h.split('\n').some(l => l.startsWith('DROP'))); ok(h.includes('-- Generated 2026-01-02')); }],
   ['vNext — sql copy ends with a single semicolon and LF endings', () => { const t = buildSqlCopy({ fileName: '/tmp/a.csv', sql: 'SELECT 1;;\r\n', to: 1, total: 1, date: new Date(2026, 10, 11) }); ok(t.endsWith('SELECT 1;\n')); ok(!t.includes('\r')); eq(finishSql('SELECT 2'), 'SELECT 2;'); eq(baseName('\\\\srv\\share\\x.csv'), 'x.csv'); }],
   ['vNext — copy sql: compiled plan matches the pipeline', () => {

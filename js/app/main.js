@@ -1316,7 +1316,7 @@ async function copyPipelineSql() {
     const name = stepTitle(q.steps[plan.blockedAt]);
     if (!plan.pushed) { toast(`Nothing to copy. Step ${n} (${name}) has no SQL equivalent yet.`, { kind: 'warn' }); return; }
     to = plan.blockedAt;
-    message = `Copied SQL for steps 1 to ${to}. Step ${n} (${name}) has no SQL equivalent yet.`;
+    message = `Copied SQL for ${to === 1 ? 'step 1' : `steps 1 to ${to}`}. Step ${n} (${name}) has no SQL equivalent yet.`;
   }
   let text;
   try { text = buildSqlCopy({ fileName, sql: plan.sql, from: 1, to, total: q.steps.length, date: new Date() }); } catch (e) { console.error('[vnext:C]', e); toast(STRINGS.sqlError, { kind: 'error' }); return; }

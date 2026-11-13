@@ -74,7 +74,7 @@ export function sqlHeader({ fileName, from = 1, to, total, date }) {
   const lines = [
     '-- Duckbench pipeline',
     `-- Source: ${oneLine(baseName(fileName)) || 'unknown'}`,
-    `-- Steps ${from} to ${to} of ${total}`,
+    to === from ? `-- Step ${from} of ${total}` : `-- Steps ${from} to ${to} of ${total}`,
     `-- Generated ${localDate(date instanceof Date ? date : new Date())}`,
   ];
   return lines.join('\n');
