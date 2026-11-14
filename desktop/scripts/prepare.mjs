@@ -9,8 +9,8 @@ const web = resolve(desktop, '..');
 const dist = join(desktop, 'dist');
 
 const WEB_ENTRIES = ['index.html', 'demo.html', 'tests.html', 'parity.html', 'selftest.html', 'favicon.svg', 'css', 'fonts', 'js', 'vendor'];
-const DUCKDB_VERSION = '1.4.3';
-const EXCEL_EXT = ['wasm_mvp', 'wasm_eh'].map(p => ({ p, url: `https://extensions.duckdb.org/v${DUCKDB_VERSION}/${p}/excel.duckdb_extension.wasm` }));
+const DUCKDB_VERSION = '2.0.0';
+const EXCEL_EXT = ['wasm_eh'].map(p => ({ p, url: `https://extensions.duckdb.org/v${DUCKDB_VERSION}/${p}/excel.duckdb_extension.wasm` }));
 
 function fail(msg) {
   console.error(`prepare: ${msg}`);
@@ -73,7 +73,7 @@ async function bundleLibs() {
     bundle: true, format: 'esm', platform: 'browser', target: 'es2020', minify: true, legalComments: 'none', outfile, logLevel: 'warning',
   });
   await bundle(`export * from ${JSON.stringify(join(duckDir, 'dist/duckdb-browser.mjs').replace(/\\/g, '/'))};`, join(duckOut, 'duckdb.mjs'));
-  for (const f of ['duckdb-mvp.wasm', 'duckdb-eh.wasm', 'duckdb-browser-mvp.worker.js', 'duckdb-browser-eh.worker.js']) {
+  for (const f of ['duckdb-base.wasm', 'duckdb-browser-base.worker.js']) {
     const src = join(duckDir, 'dist', f);
     if (!existsSync(src)) fail(`DuckDB file missing: ${f}`);
     cpSync(src, join(duckOut, f));

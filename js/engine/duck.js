@@ -1,6 +1,6 @@
 import { libUrl, duckBundles, LOCAL_LIBS, libSource } from './libs.js';
 
-const DUCKDB_VERSION = '1.32.0';
+const DUCKDB_VERSION = '1.33.1-dev114.0';
 const DUCKDB_DENY = new Set(['1.29.2']);
 
 let state = null;
