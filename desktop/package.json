@@ -19,7 +19,7 @@
     "@tauri-apps/plugin-process": "^2"
   },
   "dependencies": {
-    "@duckdb/duckdb-wasm": "1.32.0",
+    "@duckdb/duckdb-wasm": "1.33.1-dev114.0",
     "hyparquet": "^1.31.1",
     "hyparquet-compressors": "^1.1.1",
     "hyparquet-writer": "^0.5.0"
