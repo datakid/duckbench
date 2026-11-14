@@ -80,7 +80,7 @@ Sessions are saved in the browser:
 ## Built with
 
 - **No framework, no build step for the web app.** Plain ES modules, a columnar `Frame` engine in a Web Worker, and self-hosted fonts.
-- **DuckDB-WASM 1.32.0** for SQL and large files, loaded on demand from jsDelivr (bundled in the desktop app).
+- **DuckDB-WASM 1.33.1-dev114.0 (DuckDB 2.0.0)** for SQL and large files, loaded on demand from jsDelivr (bundled in the desktop app).
 - **hyparquet 1**, **hyparquet-compressors 1** and **hyparquet-writer 0** for reading and writing Parquet, loaded from jsDelivr on first use.
 - **SheetJS 0.20.3** for Excel and OpenDocument files, vendored in `vendor/`.
 - **Fonts:** Geist and Geist Mono, with Instrument Sans and JetBrains Mono as fallbacks.
@@ -185,6 +185,18 @@ cd desktop && cargo test --manifest-path src-tauri/Cargo.toml
 - Translate extract text and window columns to SQL
 - Full and right joins, and loose key matching, in SQL
 - Open `.xls` and `.ods` files with DuckDB
+
+## Upgrading DuckDB-WASM
+
+The DuckDB-WASM version is pinned in several places that must change together:
+
+- `js/engine/libs.js`: the jsDelivr URL, and `duckBundles()` for the desktop build (the bundle names depend on the package: 1.x ships `mvp` and `eh`, the 2.0 builds ship a single `base` bundle)
+- `js/engine/duck.js`: `DUCKDB_VERSION`
+- `desktop/package.json` and `desktop/package-lock.json`
+- `desktop/scripts/prepare.mjs`: the DuckDB core version used for the bundled Excel extension, and the bundle file names
+- `.github/workflows/ci.yml` and `release.yml`: the check that the Excel extension was bundled
+
+After changing them, open `parity.html` against the new engine (every case must pass), run the large-file flow with a CSV, a Parquet and an XLSX file, and open the SQL console. The npm package version and the DuckDB core version differ. Read the core version from the engine pill in the app. Extension files must exist at `https://extensions.duckdb.org/v<core version>/wasm_eh/<name>.duckdb_extension.wasm`.
 
 ## License
 

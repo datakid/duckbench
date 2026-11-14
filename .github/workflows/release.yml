@@ -81,8 +81,8 @@ jobs:
         working-directory: desktop
         shell: bash
         run: |
-          for p in wasm_mvp wasm_eh; do
-            test -s "dist/vendor/duckdb/extensions/v1.4.3/$p/excel.duckdb_extension.wasm"
+          for p in wasm_eh; do
+            test -s "dist/vendor/duckdb/extensions/v2.0.0/$p/excel.duckdb_extension.wasm"
           done
 
       - name: Build installer
