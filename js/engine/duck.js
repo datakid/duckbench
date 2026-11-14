@@ -351,14 +351,14 @@ export function profileFromJson(json) {
   const root = Array.isArray(json) ? json[0] : json;
   const ops = [];
   const lines = [];
-  const nameOf = (n) => n.operator_name || n.operator_type || n.name || '';
+  const nameOf = (n) => n.operator_name || n.operator_type || n.type || n.name || '';
   const timeOf = (n) => Number(n.operator_timing ?? n.timing ?? 0) || 0;
-  const rowsOf = (n) => n.operator_cardinality ?? n.cardinality ?? null;
+  const rowsOf = (n) => n.operator_cardinality ?? n.intermediate_rows ?? n.cardinality ?? null;
   const walk = (n, depth) => {
     if (!n || typeof n !== 'object') return;
     const name = String(nameOf(n)).trim();
     const kids = n.children || [];
-    if (name && !/^(QUERY|EXPLAIN_ANALYZE|EXPLAIN ANALYZE)$/i.test(name)) {
+    if (name && !/^(QUERY|RESULT_COLLECTOR|EXPLAIN_ANALYZE|EXPLAIN ANALYZE)$/i.test(name)) {
       const sec = timeOf(n), rows = rowsOf(n);
       ops.push({ name, seconds: sec, rows });
       lines.push(`${'  '.repeat(depth)}${name}${rows != null ? `  ${Number(rows).toLocaleString()} rows` : ''}  ${(sec * 1000).toFixed(2)} ms`);
@@ -366,8 +366,8 @@ export function profileFromJson(json) {
     }
     for (const k of kids) walk(k, depth);
   };
-  walk(root, 0);
-  const total = Number(root?.latency ?? root?.timing ?? root?.operator_timing ?? NaN);
+  for (const r of Array.isArray(root?.operator) ? root.operator : [root]) walk(r, 0);
+  const total = Number(root?.latency ?? root?.query?.total_time ?? root?.timing ?? root?.operator_timing ?? NaN);
   return { ops, total: Number.isFinite(total) ? total : null, text: lines.join('\n') };
 }
 
