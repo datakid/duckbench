@@ -507,6 +507,13 @@ export const TESTS = [
     }
     ok(lambdas >= 2, 'python-style lambda is used where a lambda is needed');
   }],
+  ['duckdb profile json: 2.0 format (operator array, type/timing/intermediate_rows)', () => {
+    const p = profileFromJson({ io: { total_bytes_read: 0 }, operator: [{ type: 'RESULT_COLLECTOR', timing: 0, intermediate_rows: 0, children: [{ type: 'EXPLAIN_ANALYZE', timing: 0, intermediate_rows: 0, children: [{ type: 'PROJECTION', timing: 0.001, intermediate_rows: 3, children: [{ type: 'TABLE_SCAN', timing: 0.002, intermediate_rows: 100, children: [] }] }] }] }], query: { total_time: 0.052 } });
+    eq(p.ops.map(o => o.name), ['PROJECTION', 'TABLE_SCAN']);
+    eq(p.ops.map(o => o.rows), [3, 100]);
+    eq(p.total, 0.052);
+    ok(/PROJECTION\s+3 rows/.test(p.text) && /TABLE_SCAN\s+100 rows/.test(p.text));
+  }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];
 
