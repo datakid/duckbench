@@ -179,7 +179,7 @@ export function readerFor(name, format, options = {}) {
   if (format === 'parquet') return `read_parquet(${sqlStr(name)})`;
   if (format === 'jsonl') return `read_json_auto(${sqlStr(name)}, format='newline_delimited')`;
   if (format === 'json') return `read_json_auto(${sqlStr(name)})`;
-  const args = [sqlStr(name), 'sample_size=20480'];
+  const args = [sqlStr(name), 'sample_size=20480', 'null_padding=true', 'parallel=false'];
   const d = options.delimiter && options.delimiter !== 'auto' ? options.delimiter.replace('\\t', '\t') : (format === 'tsv' ? '\t' : null);
   if (d) args.push(`delim=${sqlStr(d)}`);
   if (options.header === false) args.push('header=false');
@@ -224,6 +224,41 @@ export function decimalFromWords(w, scale = 0) {
 }
 
 const TS_TO_MS = [1000, 1, 1 / 1000, 1 / 1e6];
+
+const SAFE_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+const WIDE_INT = /^(u?int64|decimal)/;
+
+function wordsToBigInt(w) {
+  let b = 0n;
+  for (let i = w.length - 1; i >= 0; i--) b = (b << 32n) + BigInt(w[i] >>> 0);
+  if (w.length && (w[w.length - 1] & 0x80000000)) b -= 1n << BigInt(w.length * 32);
+  return b;
+}
+
+function exactInt(v, f) {
+  if (v == null) return null;
+  if (typeof v === 'bigint') return v;
+  if (ArrayBuffer.isView(v)) return f.scale ? null : wordsToBigInt(v);
+  return null;
+}
+
+function unsafeIntColumns(res, fields) {
+  const wide = fields.map(f => f.type === 'integer' && WIDE_INT.test(f.arrow) && !f.scale);
+  const flagged = new Set();
+  if (!wide.some(Boolean)) return flagged;
+  for (const batch of res.batches) {
+    for (let c = 0; c < fields.length; c++) {
+      if (!wide[c] || flagged.has(c)) continue;
+      const vec = batch.getChildAt(c);
+      if (!vec) continue;
+      for (let r = 0; r < batch.numRows; r++) {
+        const b = exactInt(vec.get(r), fields[c]);
+        if (b != null && (b > SAFE_MAX || b < -SAFE_MAX)) { flagged.add(c); break; }
+      }
+    }
+  }
+  return flagged;
+}
 const jsonReplacer = (k, x) => (typeof x === 'bigint' ? (Number.isSafeInteger(Number(x)) ? Number(x) : String(x)) : x);
 
 function fmtTime(v, f) {
@@ -238,6 +273,7 @@ function fmtTime(v, f) {
 
 export function convertValue(v, f) {
   if (v == null) return null;
+  if (f.exactInt) { const b = exactInt(v, f); if (b != null) return String(b); }
   switch (f.type) {
     case 'integer':
       if (typeof v === 'bigint') return Number(v);
@@ -302,6 +338,7 @@ export async function runQuery(sql, { maxRows = Infinity } = {}) {
   const limited = Number.isFinite(maxRows) ? `SELECT * FROM (${sql}) LIMIT ${Math.floor(maxRows) + 1}` : sql;
   const res = await s.conn.query(limited);
   const fields = res.schema.fields.map(fieldInfo);
+  for (const c of unsafeIntColumns(res, fields)) fields[c] = { ...fields[c], type: 'text', exactInt: true };
   const cols = fields.map(() => []);
   let n = 0, truncated = false;
   for (const batch of res.batches) {
