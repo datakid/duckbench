@@ -9,6 +9,8 @@ import { SAMPLE_SALES_CSV, SAMPLE_REGIONS_CSV } from '../app/samples.js';
 
 const EXTRA = 'id,code,tags,when_txt,amount_txt,flag,name\n1,A-1,"x, y",2026-01-05,"$1,200.50",yes,  ﬁona  smith \n2,B-22,y,03/04/2026,(45),no,ÉLAN\n3,,"z,,w",2026-02-30,12%,maybe,o\'brien-jones\n4,C-3,,5 Mar 2026,abc,Y,straße\n5,A-1,"x",2026-01-05 10:30,7,1,\n';
 
+const PMESS = 'id,name,city,score,amount,grp,flag,seen,note\n1,Alice,Cairo,3,10.5,A,yes,2026-01-05,plain\n2,alice,cairo,3,10.50,a,no,2026-01-05,dup case\n3,ALICE,CAIRO,1,-2.25,A,yes,2026-02-10,\n4,Jose,Madrid,2,0,B,true,2026-03-01,accent\n5,José,Madrid,2,0.0,B,false,,accent2\n6,josé,MADRID,,100,b,yes,2026-03-01,\n7,  Bob,Berlin,5,1000,C,no,2025-12-31,leading space\n8,Bob  ,Berlin,5,1000,C,yes,2026-12-31,trailing space\n9,Bob,Berlin,5,999.999,C,no,2026-01-01,\n10,,Paris,4,,A,yes,2026-04-04,missing name\n11,   ,Paris,4,7,A,no,2026-04-04,blank name\n12,محمد,القاهرة,6,3.14,D,yes,2026-05-05,arabic\n13,مُحمد,القاهرة,6,3.14,D,no,2026-05-05,arabic diacritic\n14,straße,Köln,7,12,E,yes,2026-06-06,eszett\n15,STRASSE,KÖLN,7,12.00,E,no,2026-06-06,\n16,Émile,Lyon,-1,-0.5,F,true,2026-07-07,neg\n17,emile,Lyon,0,0.5,F,false,2026-07-07,\n18,O\'Brien,Dublin,8,1234567.89,G,yes,2026-08-08,"quote ""x"" here"\n19,"Smith, J",Leeds,9,9007199254,G,no,2026-09-09,comma\n20,Zed,Oslo,9,0.1,H,yes,2026-10-10,"multi\nline"\n21,,,,,,,,\n22, , , , , , , ,\n23,Alice,Cairo,3,10.5,A,yes,2026-01-05,plain\n24,Bob,Berlin,5,999.999,C,no,2026-01-01,\n25,Yan,Taipei,2,,B,,,\n26,Yan,Taipei,2,5,B,yes,2026-11-11,x\n27,Ünal,İzmir,4,2,A,no,2026-02-02,turkish dotted\n28,ünal,izmir,4,2,A,no,2026-02-02,\n';
+
 const CASES = [
   ['trim_clean', 'x', { type: 'trim_clean', data: {} }],
   ['replace whole text', 's', { type: 'replace_values', data: { columns: ['status'], match: 'whole', find: 'Pending', replace: 'Open', caseSensitive: true } }],
@@ -53,6 +55,107 @@ const CASES = [
   ['replace empty with blank', 'x', { type: 'replace_nulls', data: { columns: ['name', 'id'], value: '' } }],
   ['replace empty invalid number refuses', 's', { type: 'replace_nulls', data: { columns: ['discount'], value: 'n/a' } }, 'refuse'],
   ['pivot first', 's', { type: 'pivot', data: { onColumn: 'quantity', valueColumn: 'customer', fn: 'first', groupColumns: ['region'] } }],
+  ["filter = text (case-insensitive)", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "=", "value": "alice"}]} }],
+  ["filter != text (case-insensitive)", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "!=", "value": "alice"}]} }],
+  ["filter = text case-sensitive", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "=", "value": "Alice", "caseSensitive": true}]} }],
+  ["filter = accent text", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "=", "value": "josé"}]} }],
+  ["filter = arabic text", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "=", "value": "محمد"}]} }],
+  ["filter = eszett", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "=", "value": "STRASSE"}]} }],
+  ["filter = turkish", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "=", "value": "ünal"}]} }],
+  ["filter contains", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "contains", "value": "bob"}]} }],
+  ["filter contains cs", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "contains", "value": "Bo", "caseSensitive": true}]} }],
+  ["filter not_contains", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "not_contains", "value": "a"}]} }],
+  ["filter starts_with", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "starts_with", "value": "j"}]} }],
+  ["filter ends_with", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "ends_with", "value": "E"}]} }],
+  ["filter number >", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": ">", "value": "3"}]} }],
+  ["filter number >=", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": ">=", "value": "3"}]} }],
+  ["filter number <", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": "<", "value": "3"}]} }],
+  ["filter number <=", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": "<=", "value": "3"}]} }],
+  ["filter number =", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": "=", "value": "5"}]} }],
+  ["filter number !=", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": "!=", "value": "5"}]} }],
+  ["filter number between", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": "between", "value": "2", "value2": "5"}]} }],
+  ["filter decimal >", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "amount", "operator": ">", "value": "10.5"}]} }],
+  ["filter decimal between negative", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "amount", "operator": "between", "value": "-1", "value2": "10.5"}]} }],
+  ["filter decimal = 0", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "amount", "operator": "=", "value": "0"}]} }],
+  ["filter in_list numbers", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": "in_list", "value": "1, 2, 9"}]} }],
+  ["filter not_in_list numbers", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": "not_in_list", "value": "1, 2, 9"}]} }],
+  ["filter in_list text cs", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "in_list", "value": "Alice, Bob", "caseSensitive": true}]} }],
+  ["filter is_null name", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "is_null"}]} }],
+  ["filter is_not_null name", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "name", "operator": "is_not_null"}]} }],
+  ["filter is_null score", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": "is_null"}]} }],
+  ["filter is_not_null amount", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "amount", "operator": "is_not_null"}]} }],
+  ["filter date >", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "seen", "operator": ">", "value": "2026-03-01"}]} }],
+  ["filter date =", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "seen", "operator": "=", "value": "2026-01-05"}]} }],
+  ["filter date between", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "seen", "operator": "between", "value": "2026-01-01", "value2": "2026-04-30"}]} }],
+  ["filter boolean =", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "flag", "operator": "=", "value": "true"}]} }],
+  ["filter any of two", "p", { type: "filter", data: {"mode": "rules", "logic": "any", "rules": [{"column": "score", "operator": "=", "value": "9"}, {"column": "name", "operator": "=", "value": "zed"}]} }],
+  ["filter all of three", "p", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "score", "operator": ">=", "value": "2"}, {"column": "amount", "operator": "<", "value": "100"}, {"column": "name", "operator": "is_not_null"}]} }],
+  ["filter values include text (with empty)", "p", { type: "filter", data: {"mode": "values", "column": "grp", "values": {"include": true, "list": ["A", "B", null]}} }],
+  ["filter values exclude text", "p", { type: "filter", data: {"mode": "values", "column": "grp", "values": {"include": false, "list": ["A", "a"]}} }],
+  ["filter values integer", "p", { type: "filter", data: {"mode": "values", "column": "score", "values": {"include": true, "list": ["3", null]}} }],
+  ["filter on sales status", "s", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "status", "operator": "=", "value": "completed"}, {"column": "quantity", "operator": ">=", "value": "2"}]} }],
+  ["filter sales discount empty", "s", { type: "filter", data: {"mode": "rules", "logic": "all", "rules": [{"column": "discount", "operator": "is_null"}]} }],
+  ["sort name asc", "p", { type: "sort", data: {"keys": [{"column": "name", "direction": "asc"}], "nullsLast": true} }, 'refuse'],
+  ["sort name desc", "p", { type: "sort", data: {"keys": [{"column": "name", "direction": "desc"}], "nullsLast": true} }, 'refuse'],
+  ["sort name asc nulls first", "p", { type: "sort", data: {"keys": [{"column": "name", "direction": "asc"}], "nullsLast": false} }, 'refuse'],
+  ["sort city asc unicode", "p", { type: "sort", data: {"keys": [{"column": "city", "direction": "asc"}], "nullsLast": true} }, 'refuse'],
+  ["sort score asc ties", "p", { type: "sort", data: {"keys": [{"column": "score", "direction": "asc"}], "nullsLast": true} }],
+  ["sort score desc nulls first", "p", { type: "sort", data: {"keys": [{"column": "score", "direction": "desc"}], "nullsLast": false} }],
+  ["sort amount desc", "p", { type: "sort", data: {"keys": [{"column": "amount", "direction": "desc"}], "nullsLast": true} }],
+  ["sort seen asc", "p", { type: "sort", data: {"keys": [{"column": "seen", "direction": "asc"}], "nullsLast": true} }],
+  ["sort grp then score desc", "p", { type: "sort", data: {"keys": [{"column": "grp", "direction": "asc"}, {"column": "score", "direction": "desc"}], "nullsLast": true} }],
+  ["sort flag asc", "p", { type: "sort", data: {"keys": [{"column": "flag", "direction": "asc"}], "nullsLast": true} }],
+  ["sort note asc", "p", { type: "sort", data: {"keys": [{"column": "note", "direction": "asc"}], "nullsLast": true} }, 'refuse'],
+  ["sort sales category asc", "s", { type: "sort", data: {"keys": [{"column": "category", "direction": "asc"}], "nullsLast": true} }],
+  ["sort sales discount desc nulls first", "s", { type: "sort", data: {"keys": [{"column": "discount", "direction": "desc"}], "nullsLast": false} }],
+  ["sort sales region, unit_price desc", "s", { type: "sort", data: {"keys": [{"column": "region", "direction": "asc"}, {"column": "unit_price", "direction": "desc"}], "nullsLast": true} }],
+  ["select reorder", "p", { type: "select_columns", data: {"columns": ["score", "name", "id"]} }],
+  ["select two", "p", { type: "select_columns", data: {"columns": ["id", "seen"]} }],
+  ["select sales subset", "s", { type: "select_columns", data: {"columns": ["status", "customer", "order_id"]} }],
+  ["remove two", "p", { type: "remove_columns", data: {"columns": ["note", "flag"]} }],
+  ["remove many", "p", { type: "remove_columns", data: {"columns": ["note", "flag", "city", "seen", "amount"]} }],
+  ["rename two", "p", { type: "rename_columns", data: {"mapping": {"name": "full name", "score": "points"}} }],
+  ["rename with symbols", "p", { type: "rename_columns", data: {"mapping": {"amount": "Amount ($)", "grp": "group\"q"}} }],
+  ["keep first 5", "p", { type: "keep_rows", data: {"mode": "first", "count": 5} }],
+  ["keep first 0", "p", { type: "keep_rows", data: {"mode": "first", "count": 0} }],
+  ["keep first 1000", "p", { type: "keep_rows", data: {"mode": "first", "count": 1000} }],
+  ["remove first 3", "p", { type: "keep_rows", data: {"mode": "remove_first", "count": 3} }],
+  ["keep range", "p", { type: "keep_rows", data: {"mode": "range", "offset": 4, "count": 5} }],
+  ["remove first beyond end", "p", { type: "keep_rows", data: {"mode": "remove_first", "count": 500} }],
+  ["blank rows all", "p", { type: "remove_blank_rows", data: {"columns": [], "mode": "all"} }],
+  ["blank rows any on two", "p", { type: "remove_blank_rows", data: {"columns": ["name", "amount"], "mode": "any"} }],
+  ["blank rows all on two", "p", { type: "remove_blank_rows", data: {"columns": ["name", "city"], "mode": "all"} }],
+  ["blank rows sales any", "s", { type: "remove_blank_rows", data: {"columns": ["customer", "discount"], "mode": "any"} }],
+  ["dedupe whole row", "p", { type: "remove_duplicates", data: {"columns": [], "matchMode": "exact", "keep": "first"} }],
+  ["dedupe name keep first", "p", { type: "remove_duplicates", data: {"columns": ["name"], "matchMode": "exact", "keep": "first"} }],
+  ["dedupe name keep last", "p", { type: "remove_duplicates", data: {"columns": ["name"], "matchMode": "exact", "keep": "last"} }],
+  ["dedupe grp+city", "p", { type: "remove_duplicates", data: {"columns": ["grp", "city"], "matchMode": "exact", "keep": "first"} }],
+  ["dedupe lowest score per grp", "p", { type: "remove_duplicates", data: {"columns": ["grp"], "matchMode": "exact", "orderBy": "score"} }],
+  ["dedupe lowest amount per name", "p", { type: "remove_duplicates", data: {"columns": ["name"], "matchMode": "exact", "orderBy": "amount"} }],
+  ["dedupe sales customer", "s", { type: "remove_duplicates", data: {"columns": ["customer"], "matchMode": "exact", "keep": "first"} }],
+  ["group count by grp", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "count"}]} }],
+  ["group count_nonblank name", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "count_nonblank", "column": "name"}]} }],
+  ["group count_distinct name", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "count_distinct", "column": "name"}]} }],
+  ["group sum score", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "sum", "column": "score"}]} }],
+  ["group sum amount", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "sum", "column": "amount"}]} }],
+  ["group avg amount", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "avg", "column": "amount"}]} }],
+  ["group median score", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "median", "column": "score"}]} }],
+  ["group min max amount", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "min", "column": "amount"}, {"fn": "max", "column": "amount"}]} }],
+  ["group min max name", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "min", "column": "name"}, {"fn": "max", "column": "name"}]} }, 'refuse'],
+  ["group std amount", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "std", "column": "amount"}]} }],
+  ["group first last name", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "first", "column": "name"}, {"fn": "last", "column": "name"}]} }, 'refuse'],
+  ["group concat name", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "concat", "column": "name"}]} }, 'refuse'],
+  ["group by name text variants", "p", { type: "group_by", data: {"groupColumns": ["name"], "aggregations": [{"fn": "count"}, {"fn": "sum", "column": "score"}]} }],
+  ["group by two keys", "p", { type: "group_by", data: {"groupColumns": ["grp", "city"], "aggregations": [{"fn": "count"}, {"fn": "avg", "column": "score"}]} }],
+  ["group no keys (global)", "p", { type: "group_by", data: {"groupColumns": [], "aggregations": [{"fn": "count"}, {"fn": "sum", "column": "amount"}, {"fn": "max", "column": "seen"}]} }],
+  ["group min max date", "p", { type: "group_by", data: {"groupColumns": ["grp"], "aggregations": [{"fn": "min", "column": "seen"}, {"fn": "max", "column": "seen"}]} }],
+  ["group sales by region", "s", { type: "group_by", data: {"groupColumns": ["region"], "aggregations": [{"fn": "sum", "column": "quantity"}, {"fn": "avg", "column": "unit_price"}, {"fn": "count_distinct", "column": "customer"}]} }],
+  ["group sales by category (mixed case)", "s", { type: "group_by", data: {"groupColumns": ["category"], "aggregations": [{"fn": "count"}]} }],
+  ["sort sales customer asc (letters and spaces)", "s", { type: "sort", data: {"keys":[{"column":"customer","direction":"asc"}],"nullsLast":true} }],
+  ["sort sales customer desc nulls first", "s", { type: "sort", data: {"keys":[{"column":"customer","direction":"desc"}],"nullsLast":false} }],
+  ["sort sales status then quantity", "s", { type: "sort", data: {"keys":[{"column":"status","direction":"asc"},{"column":"quantity","direction":"desc"}],"nullsLast":true} }],
+  ["sort sales product (hyphen) refuses", "s", { type: "sort", data: {"keys":[{"column":"product","direction":"asc"}],"nullsLast":true} }, 'refuse'],
+  ["sort numbered text refuses", "x", { type: "sort", data: {"keys":[{"column":"code","direction":"asc"}],"nullsLast":true} }, 'refuse'],
 ];
 
 const list = document.getElementById('list');
@@ -81,8 +184,9 @@ try {
   e.loadText({ id: 's', name: 's.csv', text: SAMPLE_SALES_CSV, format: 'csv' });
   e.loadText({ id: 'r', name: 'r.csv', text: SAMPLE_REGIONS_CSV, format: 'csv' });
   e.loadText({ id: 'x', name: 'x.csv', text: EXTRA, format: 'csv' });
+  e.loadText({ id: 'p', name: 'p.csv', text: PMESS, format: 'csv' });
   const base = {};
-  for (const id of ['s', 'r', 'x']) {
+  for (const id of ['s', 'r', 'x', 'p']) {
     e.setQueries({ queries: [{ id, name: id, source: { kind: 'file', sourceId: id }, steps: [] }] });
     const r = e.evaluate({ queryId: id, pageSize: 1e6 });
     const cols = r.fields.map((_, c) => r.page.rows.map(row => row[c]));
@@ -108,8 +212,10 @@ try {
       const d = await duck.runQuery(withInput(base[src].sql, c.sql));
       const a = norm(js.fields, js.fields.map((_, i) => js.page.rows.map(row => row[i])));
       const b = norm(c.fields, d.columns);
-      const A = JSON.stringify(a), B = JSON.stringify(b);
-      if (A !== B) {
+      const close = (x, y) => { if (x === y) return true; if (x == null || y == null) return false; const nx = Number(x), ny = Number(y); return Number.isFinite(nx) && Number.isFinite(ny) && /^-?[\d.]+(e[-+]?\d+)?$/i.test(String(x)) && Math.abs(nx - ny) <= 1e-9 * Math.max(1, Math.abs(nx), Math.abs(ny)); };
+      const sameRows = a.rows.length === b.rows.length && a.rows.every((r, k) => r.length === b.rows[k].length && r.every((v, i) => close(v, b.rows[k][i])));
+      const A = JSON.stringify(a.fields), B = JSON.stringify(b.fields);
+      if (A !== B || !sameRows) {
         let at = ''; if (JSON.stringify(a.fields) !== JSON.stringify(b.fields)) at = `fields js=${a.fields} duck=${b.fields}`; else { const i = a.rows.findIndex((r, k) => JSON.stringify(r) !== JSON.stringify(b.rows[k])); at = `rows ${a.rows.length}/${b.rows.length}, first diff #${i}: js=${JSON.stringify(a.rows[i])} duck=${JSON.stringify(b.rows[i])}`; }
         throw new Error(at);
       }
@@ -117,5 +223,55 @@ try {
     } catch (err) { report(name, false, err.message); }
   }
 } catch (err) { report('setup', false, err.message); }
+
+const READER_FIXTURES = {
+  basic: 'id,name,amount,day,ts,ok,note\n1,Ann,1.5,2026-01-02,2026-01-02 10:30:00,true,hello\n2,Bo,,2026-02-03,2026-02-03 00:00:00,false,\n3,Cy,3,,,true,"x, y"\n',
+  crlf: 'a,b\r\n1,2\r\n3,4\r\n',
+  bom: '\ufeffid,name\n1,Ann\n2,Bo\n',
+  quoted_newline: 'id,note\n1,"line1\nline2"\n2,"say ""hi"""\n',
+  quoted_newline_ragged: 'id,note,x\n1,"line1\nline2"\n2,"a",b\n',
+  ragged_short: 'a,b,c\n1,2\n3,4,5\n',
+  leading_zeros: 'zip,qty\n01234,1\n00012,2\n99999,3\n',
+  bigint_ids: 'id,v\n1234567890123456789,1\n1234567890123456790,2\n-1234567890123456789,3\n',
+  small_ints: 'id\n1\n2\n3\n',
+  negatives: 'v\n-5\n(45)\n+7\n1e3\n',
+  na_strings: 'v,w\nNA,1\nnull,2\nN/A,\n,4\n',
+  thousands: 'v\n"1,234"\n"2,500.50"\n12\n',
+  percent_currency: 'p,c\n12%,$5.00\n7.5%,"€1,200"\n',
+  dates_iso: 'd\n2026-01-05\n2026-12-31\n2020-02-29\n',
+  mixed_type: 'v\n1\n2\nabc\n4\n',
+  booleans: 'f\nyes\nno\nY\nN\n1\n0\n',
+  semicolon: 'a;b\n1;2\n3;4\n',
+  unicode: 'name\nÉlan\nمحمد\n🦆 duck\nstraße\n',
+  header_only: 'a,b,c\n',
+  single_col: 'only\n1\n2\n3\n',
+  whitespace_cells: 'a,b\n  x  , y\n\tz,w \n',
+  decimal_precision: 'v\n0.1\n0.30000000000000004\n1234567.891234\n',
+  long_text: 'v\n' + 'x'.repeat(5000) + '\n',
+};
+try {
+  await duck.ensureDuck();
+  for (const [name, text] of Object.entries(READER_FIXTURES)) {
+    total++;
+    try {
+      const e = new Engine();
+      e.loadText({ id: 'f', name: 'f.csv', text, format: 'csv' });
+      e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: 'f' }, steps: [] }] });
+      const v = e.evaluate({ queryId: 'q', pageSize: 1e6 });
+      if (v.error || v.fullError) throw new Error(`JS import failed: ${v.error || v.fullError.message}`);
+      const jsFields = v.fields.map(f => `${f.name}:${f.type}`);
+      const jsRows = v.page.rows.map(row => row.map((c, i) => (c == null ? null : formatValue(c, v.fields[i].type))));
+      const sep = text.startsWith('a;b') ? ';' : 'auto';
+      await duck.registerFile(`rf_${name}.csv`, new File([text], `rf_${name}.csv`));
+      const q = await duck.runQuery(`SELECT * FROM ${duck.readerFor(`rf_${name}.csv`, 'csv', { delimiter: sep })}`);
+      const dFields = q.fields.map(f => `${f.name}:${f.type}`);
+      const dRows = (q.columns[0] || []).map((_, i) => q.columns.map((c, k) => (c[i] == null ? null : formatValue(c[i], q.fields[k].type))));
+      if (JSON.stringify(jsFields) !== JSON.stringify(dFields)) throw new Error(`fields js=${jsFields} duck=${dFields}`);
+      const at = jsRows.findIndex((r, k) => JSON.stringify(r) !== JSON.stringify(dRows[k]));
+      if (jsRows.length !== dRows.length || at >= 0) throw new Error(`rows js=${jsRows.length} duck=${dRows.length}, first diff #${at}: js=${JSON.stringify(jsRows[at])} duck=${JSON.stringify(dRows[at])}`);
+      report(`file import: ${name}`, true); pass++;
+    } catch (err) { report(`file import: ${name}`, false, err.message); }
+  }
+} catch (err) { report('reader setup', false, err.message); }
 document.getElementById('score').textContent = `DuckDB parity ${pass}/${total}`;
 console.log(`PARITY ${pass}/${total}`);

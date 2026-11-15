@@ -36,6 +36,12 @@ jobs:
           sleep 2
           python .github/scripts/web_selftest.py http://127.0.0.1:8765/tests.html
 
+      - name: Run DuckDB parity suite in headless Chromium
+        run: |
+          python -m http.server 8766 --bind 127.0.0.1 > /dev/null 2>&1 &
+          sleep 2
+          python .github/scripts/web_parity.py http://127.0.0.1:8766/parity.html
+
   desktop:
     name: Desktop installer (Windows)
     runs-on: windows-latest
