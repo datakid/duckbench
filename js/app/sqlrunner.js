@@ -257,5 +257,6 @@ function dedupe(fields) {
 }
 
 export function cleanError(e) {
+  if (/Deprecated lambda arrow/i.test(String(e?.message || e))) return 'Arrow lambdas (x -> …) are not supported by DuckDB 2.0. Write lambda x: … instead, for example list_transform(items, lambda x: x + 1).';
   return String(e?.message || e).replace(/^(Binder|Parser|Catalog|Conversion|Invalid Input|Not implemented|Out of Range) Error:\s*/i, '').split('\n')[0];
 }

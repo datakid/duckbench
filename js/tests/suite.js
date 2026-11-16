@@ -12,6 +12,7 @@ import { zipFiles, unzipEntries, crc32 } from '../io/zip.js';
 import { createStore } from '../app/store.js';
 import { compileStep, mayCompile } from '../engine/compile.js';
 import { profileFromJson } from '../engine/duck.js';
+import { cleanError } from '../app/sqlrunner.js';
 import { suggestCleanups } from '../core/suggest.js';
 import { addRecent, parseRecent, removeRecent, recentWhen, folderOf, pathName, readRecents, writeRecents, RECENT_KEY } from '../app/recents.js';
 import { firstPreviewOnlyIndex, previewTaintedAt, formatStepDelta, sqlHeader, buildSqlCopy, finishSql, stripForShare, encodeShare, decodeShare, extractShare, createShareLink, usesOtherQueries, baseName } from '../app/vnext.js';
@@ -516,6 +517,11 @@ export const TESTS = [
     eq(p.ops.map(o => o.rows), [3, 100]);
     eq(p.total, 0.052);
     ok(/PROJECTION\s+3 rows/.test(p.text) && /TABLE_SCAN\s+100 rows/.test(p.text));
+  }],
+  ['sql errors — old arrow lambdas get advice that works inside the app', () => {
+    const msg = cleanError(new Error("Binder Error: Deprecated lambda arrow (->) detected. Please transition to the new lambda syntax, i.e.., lambda x, i: x + i, before DuckDB's next release. Use SET lambda_syntax='ENABLE_SINGLE_ARROW' to revert to the deprecated behavior."));
+    ok(/lambda x: …/.test(msg) && !/SET lambda_syntax/.test(msg), msg);
+    eq(cleanError(new Error('Binder Error: Table "a" does not exist\nLINE 1: x')), 'Table "a" does not exist');
   }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
 ];
