@@ -27,11 +27,11 @@ export const SQL_SNIPPETS = [
   { label: 'Top N per group', sql: 'SELECT *\nFROM input\nQUALIFY row_number() OVER (PARTITION BY region ORDER BY unit_price DESC) <= 3' },
   { label: 'Deduplicate', sql: 'SELECT DISTINCT ON (customer) *\nFROM input\nORDER BY customer, order_date DESC' },
   { label: 'Pivot', sql: 'PIVOT input\nON region\nUSING SUM(quantity)\nGROUP BY category' },
-  { label: 'Unpivot', sql: 'UNPIVOT input\nON COLUMNS(* EXCLUDE (order_id))\nINTO NAME attribute VALUE value' },
+  { label: 'Unpivot', sql: 'UNPIVOT (SELECT order_id, quantity, unit_price FROM input)\nON quantity, unit_price\nINTO NAME attribute VALUE value' },
   { label: 'Profile every column', sql: 'SUMMARIZE input' },
   { label: 'Running total', sql: 'SELECT *, SUM(quantity) OVER (ORDER BY order_date ROWS UNBOUNDED PRECEDING) AS running_qty\nFROM input' },
-  { label: 'Month buckets', sql: "SELECT date_trunc('month', order_date) AS month, COUNT(*) AS orders\nFROM input\nGROUP BY ALL\nORDER BY month" },
-  { label: 'Fuzzy match', sql: 'SELECT a.*, b.*\nFROM input a\nJOIN other b ON jaro_winkler_similarity(lower(a.name), lower(b.name)) > 0.9' },
+  { label: 'Month buckets', sql: "SELECT CAST(date_trunc('month', order_date) AS DATE) AS month, COUNT(*) AS orders\nFROM input\nGROUP BY ALL\nORDER BY month" },
+  { label: 'Fuzzy match', sql: 'SELECT a.*, b.*\nFROM input a\nJOIN other b ON jaro_winkler_similarity(lower(a.customer), lower(b.name)) > 0.9' },
 ];
 
 const KW_SET = new Set(SQL_KEYWORDS.flatMap(k => k.split(' ')).map(k => k.toLowerCase()).concat(['by', 'group', 'order', 'left', 'right', 'full', 'inner', 'outer', 'cross', 'asof', 'positional', 'anti', 'semi', 'nulls', 'first', 'last', 'partition', 'unbounded', 'preceding', 'following', 'current', 'row', 'into', 'name', 'value', 'on', 'using', 'integer', 'bigint', 'double', 'varchar', 'date', 'timestamp', 'boolean', 'decimal', 'text']));

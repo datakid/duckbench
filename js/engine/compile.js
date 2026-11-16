@@ -117,9 +117,14 @@ const COMPILERS = {
     return { where: parts.join(d.logic === 'any' ? ' OR ' : ' AND '), fields };
   },
 
-  sort(d, fields, types) {
+  sort(d, fields, types, ctx) {
     const keys = d.keys || [];
     if (!keys.length || keys.some(k => !types.has(k.column))) return null;
+    const textKeys = [...new Set(keys.filter(k => types.get(k.column) === 'text').map(k => k.column))];
+    if (textKeys.length) {
+      const odd = textKeys.map(c => `(${qi(c)} IS NOT NULL AND NOT regexp_matches(${qi(c)}, ${sqlStr('^[A-Za-z ]*$')}))`).join(' OR ');
+      if (ctx.probe(`SELECT EXISTS (SELECT 1 FROM input WHERE ${odd})`) !== false) return null;
+    }
     const nulls = d.nullsLast !== false ? 'NULLS LAST' : 'NULLS FIRST';
     const order = keys.map(k => `${types.get(k.column) === 'text' ? `lower(${qi(k.column)})` : qi(k.column)} ${k.direction === 'desc' ? 'DESC' : 'ASC'} ${nulls}`);
     return { sql: `SELECT ${selectList(fields)} FROM ${numbered()} ORDER BY ${order.join(', ')}, ${RN}`, fields };
