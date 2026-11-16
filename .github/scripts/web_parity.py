@@ -1,12 +1,12 @@
 import os
 import re
 import sys
+import time
 
 from playwright.sync_api import sync_playwright
 
 url = sys.argv[1]
 chromium = os.environ.get("PW_CHROMIUM")
-SCORE = "/DuckDB parity \\d+\\/\\d+/.test(document.getElementById('score').textContent)"
 
 result = None
 for attempt in (1, 2):
@@ -20,8 +20,15 @@ for attempt in (1, 2):
         page.on("console", lambda m: logs.append(m.text))
         page.goto(url)
         try:
-            page.wait_for_function(SCORE, timeout=300000)
-            text = page.evaluate("document.getElementById('score').textContent")
+            deadline = time.time() + 300
+            text = ""
+            while time.time() < deadline:
+                text = page.evaluate("document.getElementById('score').textContent")
+                if re.search(r"DuckDB parity \d+/\d+", text or ""):
+                    break
+                time.sleep(3)
+            else:
+                raise TimeoutError("parity page did not report a score within 300s")
             fails = page.evaluate(
                 "[...document.querySelectorAll('#list li')].filter(li => li.children[0].textContent === 'FAIL').map(li => li.children[1].textContent + ' :: ' + (li.children[2] ? li.children[2].textContent : ''))"
             )
