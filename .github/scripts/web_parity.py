@@ -31,6 +31,8 @@ for attempt in (1, 2):
         except Exception as e:
             print(f"Parity run {attempt} did not finish:", str(e)[:200])
             print("\n".join(logs[-20:]))
+            tail = " | ".join(logs[-6:]).replace("\n", " ")[:600]
+            print(f"::error title=parity run {attempt} did not finish::{str(e)[:160]} || console: {tail}")
             browser.close()
 
 if result is None:
@@ -40,6 +42,8 @@ text, fails = result
 m = re.search(r"(\d+)/(\d+)", text)
 passed, total = int(m.group(1)), int(m.group(2))
 print(f"{text}")
-for f in fails:
+print(f"::notice title=parity score::{text}")
+for f in fails[:10]:
     print(f"FAIL {f[:300]}")
+    print(f"::error title=parity failure::{f[:400]}")
 sys.exit(0 if passed == total and total > 0 else 1)
