@@ -30,7 +30,7 @@ export const SQL_SNIPPETS = [
   { label: 'Unpivot', sql: 'UNPIVOT (SELECT order_id, quantity, unit_price FROM input)\nON quantity, unit_price\nINTO NAME attribute VALUE value' },
   { label: 'Profile every column', sql: 'SUMMARIZE input' },
   { label: 'Running total', sql: 'SELECT *, SUM(quantity) OVER (ORDER BY order_date ROWS UNBOUNDED PRECEDING) AS running_qty\nFROM input' },
-  { label: 'Month buckets', sql: "SELECT date_trunc('month', order_date) AS month, COUNT(*) AS orders\nFROM input\nGROUP BY ALL\nORDER BY month" },
+  { label: 'Month buckets', sql: "SELECT CAST(date_trunc('month', order_date) AS DATE) AS month, COUNT(*) AS orders\nFROM input\nGROUP BY ALL\nORDER BY month" },
   { label: 'Fuzzy match', sql: 'SELECT a.*, b.*\nFROM input a\nJOIN other b ON jaro_winkler_similarity(lower(a.customer), lower(b.name)) > 0.9' },
 ];
 
