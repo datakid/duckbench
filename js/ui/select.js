@@ -66,7 +66,22 @@ export function enhanceSelects() {
     sel.focus({ preventScroll: true });
     open(sel);
   });
-  document.addEventListener('touchstart', (e) => { claim(e); }, { passive: false });
+  let touch = null;
+  document.addEventListener('touchstart', (e) => {
+    const sel = e.touches.length === 1 ? e.target.closest?.('select') : null;
+    touch = eligible(sel) ? { sel, x: e.touches[0].clientX, y: e.touches[0].clientY, at: Date.now() } : null;
+  }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    const t = touch;
+    touch = null;
+    if (!t || !e.changedTouches.length) return;
+    const c = e.changedTouches[0];
+    if (Math.hypot(c.clientX - t.x, c.clientY - t.y) > 10 || Date.now() - t.at > 600) return;
+    e.preventDefault();
+    t.sel.focus({ preventScroll: true });
+    open(t.sel);
+  }, { passive: false });
+  document.addEventListener('touchcancel', () => { touch = null; }, { passive: true });
   document.addEventListener('click', (e) => { claim(e); });
   document.addEventListener('keydown', (e) => {
     const sel = e.target;
