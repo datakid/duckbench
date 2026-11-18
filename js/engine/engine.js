@@ -312,7 +312,7 @@ export class Engine {
       if (r.error) return { error: r.error, errorIndex: last + 1, diag, frame, key, draftError: true };
       frame = r.frame; key = r.key;
     }
-    return { frame, key, diag, error, errorIndex, note: base.note || null };
+    return { frame, key, diag, error, errorIndex, note: base.note || null, truncated: previewOnly };
   }
 
   _applyStep(q, step, frame, prevKey, stack) {
@@ -404,6 +404,7 @@ export class Engine {
       viewError,
       fullError: full.error ? { message: full.error, index: full.errorIndex } : null,
       sourceNote: view.note || null,
+      sourceTruncated: !!view.truncated,
       changed,
       bytes: frame.estimateBytes(),
       ms: now() - t0,

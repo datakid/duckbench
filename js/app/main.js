@@ -1207,6 +1207,10 @@ async function runExport(opts) {
       const name = q.steps[pIdx].name || TRANSFORMS[q.steps[pIdx].type]?.label || q.steps[pIdx].type;
       const go = await confirmDialog(`Step ${pIdx + 1} (${name}) can’t run on the whole file yet, so the export will contain results from the first ${lim} rows only.`, { title: `Export contains only the first ${lim} rows`, ok: `Export first ${lim} rows`, focusCancel: true });
       if (!go) return;
+    } else if (ui.result?.sourceTruncated) {
+      const lim = DUCK_PREVIEW_ROWS.toLocaleString();
+      const go = await confirmDialog(`This result has more rows than the ${lim} loaded for preview, so the export will stop at the first ${lim}. Use Export full file to write every row.`, { title: `Export contains only the first ${lim} rows`, ok: `Export first ${lim} rows`, focusCancel: true });
+      if (!go) return;
     }
   }
   const args = { queryId: q.id, stepIndex, columns: opts.columns, nullText: opts.nullText ?? '', delimiter: opts.delimiter || ',', bom: opts.bom !== false, guard: opts.guard !== false, rowStart: opts.rowStart || 0, rowEnd: opts.rowEnd ?? Infinity };

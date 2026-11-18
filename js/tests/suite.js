@@ -616,6 +616,17 @@ export const TESTS = [
     try { h('write', { sheets: [{ name: 'big', fields: [{ name: 'a', type: 'integer' }], columns: [new Array(1048576).fill(1)] }] }); } catch (err) { message = err.message; }
     ok(/1,048,575/.test(message), 'row limit message');
   }],
+  ['duck source — a truncated slice is reported to the caller', () => {
+    const mk = (truncated) => {
+      const e = new Engine();
+      e.setQueries({ queries: [{ id: 'd', name: 'd', source: { kind: 'duck', table: 'big', sql: 'SELECT 1', limit: 3 }, steps: [] }] });
+      const r = e.evaluate({ queryId: 'd' });
+      e.putSqlResult({ key: r.needsSql.key, fields: [{ name: 'x', type: 'integer' }], columns: [[1, 2, 3]], note: 'slice', truncated });
+      return e.evaluate({ queryId: 'd' });
+    };
+    eq(mk(true).sourceTruncated, true);
+    eq(mk(false).sourceTruncated, false);
+  }],
 ];
 
 export async function runAll(onResult) {
