@@ -311,8 +311,43 @@ export function convertValue(v, f) {
   }
 }
 
+function fmtInterval(months, days, nanos) {
+  const parts = [];
+  const years = Math.trunc(months / 12), rest = months % 12;
+  const unit = (n, word) => `${n} ${word}${Math.abs(n) === 1 ? '' : 's'}`;
+  if (years) parts.push(unit(years, 'year'));
+  if (rest) parts.push(unit(rest, 'month'));
+  if (days) parts.push(unit(days, 'day'));
+  if (nanos !== 0n) {
+    const neg = nanos < 0n;
+    let rem = neg ? -nanos : nanos;
+    const h = rem / 3600000000000n; rem %= 3600000000000n;
+    const m = rem / 60000000000n; rem %= 60000000000n;
+    const s = rem / 1000000000n;
+    const frac = rem % 1000000000n;
+    const pad = (x) => String(x).padStart(2, '0');
+    parts.push(`${neg ? '-' : ''}${pad(h)}:${pad(m)}:${pad(s)}${frac ? '.' + String(frac).padStart(9, '0').replace(/0+$/, '') : ''}`);
+  }
+  return parts.length ? parts.join(' ') : '00:00:00';
+}
+
+export function intervalColumn(vec, n) {
+  const out = new Array(n).fill(null);
+  let r = 0;
+  for (const chunk of vec.data) {
+    for (let i = 0; i < chunk.length && r < n; i++, r++) {
+      if (!vec.isValid(r)) continue;
+      const o = (chunk.offset + i) * 4;
+      const v = chunk.values;
+      out[r] = fmtInterval(v[o], v[o + 1], BigInt(v[o + 3]) * 4294967296n + BigInt(v[o + 2] >>> 0));
+    }
+  }
+  return out;
+}
+
 function convertVector(vec, f, n) {
   if (!vec) return new Array(n).fill(null);
+  if (f.arrow.startsWith('interval<month_day_nano') && Array.isArray(vec.data)) return intervalColumn(vec, n);
   if ((f.type === 'number' || f.type === 'integer') && !vec.nullCount && !f.arrow.startsWith('decimal') && typeof vec.toArray === 'function') {
     const arr = vec.toArray();
     if (arr && arr.length >= n && typeof arr[0] !== 'object') {

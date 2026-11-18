@@ -6,7 +6,7 @@ import { evaluateFormula } from '../core/formula.js';
 import { Frame } from '../core/frame.js';
 import { distinctValues } from '../core/profile.js';
 import { SAMPLE_SALES_CSV, SAMPLE_REGIONS_CSV } from '../app/samples.js';
-import { validateSql, withInput, tableNameFor, referencedNames, arrowType, convertValue as duckConvert, decimalFromWords, readerFor } from '../engine/duck.js';
+import { validateSql, withInput, tableNameFor, referencedNames, arrowType, convertValue as duckConvert, decimalFromWords, readerFor, intervalColumn } from '../engine/duck.js';
 import { CsvStream, parseCSV as parseCsvAll } from '../core/csv.js';
 import { highlightSql } from '../ui/sqleditor.js';
 import { zipFiles, unzipEntries, crc32 } from '../io/zip.js';
@@ -666,6 +666,12 @@ export const TESTS = [
       'WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT * FROM r',
       'SELECT list_transform([1, 2], lambda x: x + 1) AS y',
     ]) ok(validateSql(s).sql, 'must allow: ' + s);
+  }],
+  ['duck results — intervals are read from the raw Arrow buffer', () => {
+    const vec = { data: [{ values: new Int32Array([14, 3, 31978496, 3424, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), offset: 0, length: 4 }], isValid: (r) => r !== 3 };
+    eq(intervalColumn(vec, 4), ['1 year 2 months 3 days 04:05:06', '3 days', '00:00:00', null]);
+    const neg = { data: [{ values: new Int32Array([-5, 0, 0, 0]), offset: 0, length: 1 }], isValid: () => true };
+    eq(intervalColumn(neg, 1), ['-5 months']);
   }],
 ];
 
