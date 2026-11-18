@@ -5,7 +5,7 @@ import { inferColumnType, parseDateString, parseNumberString, formatValue } from
 import { evaluateFormula } from '../core/formula.js';
 import { Frame } from '../core/frame.js';
 import { SAMPLE_SALES_CSV, SAMPLE_REGIONS_CSV } from '../app/samples.js';
-import { validateSql, withInput, tableNameFor, referencedNames, arrowType, convertValue as duckConvert, decimalFromWords, readerFor } from '../engine/duck.js';
+import { validateSql, withInput, tableNameFor, referencedNames, arrowType, convertValue as duckConvert, decimalFromWords, readerFor, fmtInterval } from '../engine/duck.js';
 import { CsvStream, parseCSV as parseCsvAll } from '../core/csv.js';
 import { highlightSql } from '../ui/sqleditor.js';
 import { zipFiles, unzipEntries, crc32 } from '../io/zip.js';
@@ -138,6 +138,16 @@ export const TESTS = [
       "SELECT * FROM input WHERE name = 'x.parquet'", 'SELECT "my col.csv" FROM input', "SELECT 'sqlite_scan(' AS s FROM input", 'SELECT table_scan_count FROM input',
     ];
     for (const q of allowed) ok(validateSql(q).sql, `should be accepted: ${q}`);
+  }],
+  ['duck — interval text matches DuckDB', () => {
+    eq(fmtInterval(0, 3, 0n), '3 days');
+    eq(fmtInterval(0, 0, 0n), '00:00:00');
+    eq(fmtInterval(14, 3, 14706000000n), '1 year 2 months 3 days 04:05:06');
+    eq(fmtInterval(-14, 0, 0n), '-1 year -2 months');
+    eq(fmtInterval(0, 1, 0n), '1 day');
+    eq(fmtInterval(0, 0, 1500000n), '00:00:01.5');
+    eq(fmtInterval(0, 0, -5400000000n), '-01:30:00');
+    eq(fmtInterval(25, 40, 360000123456n), '2 years 1 month 40 days 100:00:00.123456');
   }],
   ['sql — WITH composition', () => {
     eq(withInput('SELECT 1', 'SELECT * FROM input'), 'WITH input AS (SELECT 1) SELECT * FROM input');

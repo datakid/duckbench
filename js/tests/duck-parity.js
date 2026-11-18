@@ -299,5 +299,20 @@ if (duck.opfsAvailable()) {
     try { await duck.clearOpfsWork(); } catch {}
   }
 }
+total++;
+try {
+  const ivs = ["INTERVAL 3 DAY", "INTERVAL 0 DAY", "INTERVAL '1 year 2 months 3 days 04:05:06'", "INTERVAL 90 MINUTE", "INTERVAL '-2 days'", "INTERVAL 1500 MILLISECOND", "INTERVAL '-14 months'", "INTERVAL '25 months 40 days 100:00:00.123456'", "INTERVAL '-1 day -00:00:00.000001'", "INTERVAL 1 YEAR", "INTERVAL 12 MONTH", "INTERVAL '-90 minutes'", "(TIMESTAMP '2026-03-04' - TIMESTAMP '2026-03-01')", "age(TIMESTAMP '2026-03-04 10:00', TIMESTAMP '2024-01-01')"];
+  const rows = ["(INTERVAL 1 DAY)", "(NULL::INTERVAL)", "(INTERVAL '2 months')", "(INTERVAL '-3 hours')"];
+  const bad = [];
+  const cmp = async (label, expr, from) => {
+    const a = await duck.runQuery(`SELECT ${expr} AS v ${from}`);
+    const b = await duck.runQuery(`SELECT (${expr})::VARCHAR AS v ${from}`);
+    if (JSON.stringify(a.columns[0]) !== JSON.stringify(b.columns[0])) bad.push(`${label}: ${JSON.stringify(a.columns[0])} vs ${JSON.stringify(b.columns[0])}`);
+  };
+  for (const iv of ivs) await cmp(iv, iv, '');
+  await cmp('column with null', 'v', `FROM (VALUES ${rows.join(', ')}) t(v)`);
+  if (bad.length) throw new Error(bad.slice(0, 3).join(' | '));
+  report('interval values match DuckDB text', true); pass++;
+} catch (err) { report('interval values match DuckDB text', false, err.message); }
 document.getElementById('score').textContent = `DuckDB parity ${pass}/${total}`;
 console.log(`PARITY ${pass}/${total}`);

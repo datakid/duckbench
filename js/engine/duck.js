@@ -281,6 +281,40 @@ function fmtTime(v, f) {
   return d.toISOString().slice(11, ms % 1000 ? 23 : 19);
 }
 
+export function fmtInterval(months, days, micros) {
+  const parts = [];
+  const years = Math.trunc(months / 12), mo = months % 12;
+  if (years) parts.push(`${years} ${Math.abs(years) === 1 ? 'year' : 'years'}`);
+  if (mo) parts.push(`${mo} ${Math.abs(mo) === 1 ? 'month' : 'months'}`);
+  if (days) parts.push(`${days} ${Math.abs(days) === 1 ? 'day' : 'days'}`);
+  if (micros !== 0n || !parts.length) {
+    const neg = micros < 0n;
+    let u = neg ? -micros : micros;
+    const h = u / 3600000000n; u %= 3600000000n;
+    const m = u / 60000000n; u %= 60000000n;
+    const sec = u / 1000000n, frac = u % 1000000n;
+    let t = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    if (frac) t += '.' + String(frac).padStart(6, '0').replace(/0+$/, '');
+    parts.push((neg ? '-' : '') + t);
+  }
+  return parts.join(' ');
+}
+
+function convertIntervals(vec, n) {
+  const out = new Array(n).fill(null);
+  let row = 0;
+  for (const d of vec.data) {
+    const v = d.values;
+    const w = new Int32Array(v.buffer, v.byteOffset, (v.buffer.byteLength - v.byteOffset) >> 2);
+    for (let i = 0; i < d.length && row < n; i++, row++) {
+      const k = (d.offset + i) * 4;
+      if ((vec.nullCount && !vec.isValid(row)) || k + 4 > w.length) continue;
+      out[row] = fmtInterval(w[k], w[k + 1], ((BigInt(w[k + 3]) << 32n) | BigInt(w[k + 2] >>> 0)) / 1000n);
+    }
+  }
+  return out;
+}
+
 export function convertValue(v, f) {
   if (v == null) return null;
   if (f.exactInt) { const b = exactInt(v, f); if (b != null) return String(b); }
@@ -323,6 +357,7 @@ export function convertValue(v, f) {
 
 function convertVector(vec, f, n) {
   if (!vec) return new Array(n).fill(null);
+  if (f.arrow.startsWith('interval') && Array.isArray(vec.data)) return convertIntervals(vec, n);
   if ((f.type === 'number' || f.type === 'integer') && !vec.nullCount && !f.arrow.startsWith('decimal') && typeof vec.toArray === 'function') {
     const arr = vec.toArray();
     if (arr && arr.length >= n && typeof arr[0] !== 'object') {
