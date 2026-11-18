@@ -154,7 +154,8 @@ npm run build
 - **Desktop shell** (`desktop/src-tauri/`)
   - Atomic file saves, and batch exports that never overwrite
   - A local file protocol that lets DuckDB read large files directly from disk
-  - Auto-update and remembered window size
+  - Remembered window size
+  - The updater plugin is installed but not called, because the release signing keys are not set up yet
 
 ## Project structure
 

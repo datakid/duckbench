@@ -18,12 +18,11 @@ import { sqlEditor, SQL_SNIPPETS } from '../ui/sqleditor.js';
 import { enhanceSelects } from '../ui/select.js';
 import { TYPE_BADGES } from '../core/types.js';
 import { keepCopy, getCopy, opfsFilesAvailable, listSheets } from './filestore.js';
-import { pickNativeFiles, nativeFileUrl, nativeFileSize, readNativeFile, checkForUpdate } from './platform.js';
+import { pickNativeFiles, nativeFileUrl, nativeFileSize, readNativeFile } from './platform.js';
 import { addRecent, removeRecent, readRecents, writeRecents, recentWhen, folderOf, pathName, RECENT_MAX } from './recents.js';
 import { installNativeGuards } from '../ui/native.js';
 import { copyWithFeedback, showCopyFallback } from '../ui/clip.js';
 import { previewTaintedAt, formatStepDelta, buildSqlCopy, createShareLink, decodeShare, extractShare, STRINGS } from './vnext.js';
-if (isDesktop()) setTimeout(async () => { const u = await checkForUpdate(); if (u) toast(`Duckbench ${u.version} is available`, { action: 'Install & restart', onAction: () => u.install() }); }, 4000);
 
 const store = createStore();
 const client = new EngineClient();
