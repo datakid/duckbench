@@ -611,20 +611,26 @@ async function streamCsvFile(file, format, options, progress) {
     n++;
   };
   const parser = new CsvStream(delimiter, onRow);
-  const decoder = new TextDecoder(encoding);
+  const detected = encoding === 'utf-8' && (!options.encoding || options.encoding === 'auto');
+  const decoder = new TextDecoder(encoding, { fatal: detected });
   const reader = file.stream().getReader();
   let read = 0, first = true, lastReport = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    read += value.byteLength;
-    let text = decoder.decode(value, { stream: true });
-    if (first) { if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); first = false; }
-    parser.push(text);
-    if (progress && read - lastReport > (4 << 20)) { lastReport = read; progress(read / (file.size || 1)); }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      read += value.byteLength;
+      let text = decoder.decode(value, { stream: true });
+      if (first) { if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); first = false; }
+      parser.push(text);
+      if (progress && read - lastReport > (4 << 20)) { lastReport = read; progress(read / (file.size || 1)); }
+    }
+    const tail = decoder.decode();
+    if (tail) parser.push(tail);
+  } catch (err) {
+    if (detected && err instanceof TypeError) { reader.cancel().catch(() => {}); return streamCsvFile(file, format, { ...options, encoding: 'windows-1252' }, progress); }
+    throw err;
   }
-  const tail = decoder.decode();
-  if (tail) parser.push(tail);
   parser.end();
   progress?.(1);
   if (!names) { names = []; cols = []; }

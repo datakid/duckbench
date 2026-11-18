@@ -572,6 +572,21 @@ export const TESTS = [
     eq(csvEscape('@SUM(A1)'), "'@SUM(A1)");
     eq(csvEscape('-2+3+cmd|x', ',', false), '-2+3+cmd|x');
   }],
+  ['CSV file — a non-UTF-8 byte after the first megabyte falls back to Windows-1252', async () => {
+    const filler = 'abc,xyz\n'.repeat(140000);
+    const latin = new Blob([filler, new Uint8Array([0x43, 0x61, 0x66, 0xE9, 0x2C, 0x5A, 0xFC, 0x72, 0x69, 0x63, 0x68, 0x0A])]);
+    const e = new Engine();
+    const info = await e.loadFile({ id: 'l', name: 'latin.csv', file: new File([new Blob(['name,city\n']), latin], 'latin.csv'), format: 'csv', options: {} });
+    eq(info.encoding, 'windows-1252');
+    const f = e.sources.get('l').frame;
+    eq(f.row(f.rowCount - 1), ['Café', 'Zürich']);
+    const utf = new Blob([filler, 'Café,Zürich\n']);
+    const e2 = new Engine();
+    const info2 = await e2.loadFile({ id: 'u', name: 'utf.csv', file: new File([new Blob(['name,city\n']), utf], 'utf.csv'), format: 'csv', options: {} });
+    eq(info2.encoding, 'utf-8');
+    const g = e2.sources.get('u').frame;
+    eq(g.row(g.rowCount - 1), ['Café', 'Zürich']);
+  }],
 ];
 
 export async function runAll(onResult) {
