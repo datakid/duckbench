@@ -545,6 +545,14 @@ export const TESTS = [
     eq(f.columns[0][2499], 'late');
     eq(f.columns[0][5], '5');
   }],
+  ['find — a column that no longer exists matches nothing', () => {
+    const e = setup();
+    e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: 'sales' }, steps: [] }] });
+    const r = e.evaluate({ queryId: 'q' });
+    const gone = e.findRows({ resultId: r.resultId, text: 'a', column: 'removed_column' });
+    eq(gone.matches, []);
+    ok(e.findRows({ resultId: r.resultId, text: 'north', column: 'region' }).matches.length > 0);
+  }],
 ];
 
 export async function runAll(onResult) {

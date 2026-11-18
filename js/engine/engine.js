@@ -458,7 +458,7 @@ export class Engine {
     if (!f) return { expired: true };
     const needle = String(text || '').toLowerCase();
     if (!needle) return { matches: [] };
-    const cols = column ? [f.indexOf(column)] : f.fields.map((_, i) => i);
+    const cols = column ? [f.indexOf(column)].filter(c => c >= 0) : f.fields.map((_, i) => i);
     const out = [];
     for (let r = 0; r < f.rowCount && out.length < limit; r++) {
       for (const c of cols) {
