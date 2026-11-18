@@ -29,12 +29,22 @@ function wantsOpfs() {
   try { return JSON.parse(localStorage.getItem('duckbench2.duckOpfs') || 'true') !== false; } catch { return true; }
 }
 
-async function clearOpfsWork() {
+export async function clearOpfsWork() {
   try {
     const root = await navigator.storage.getDirectory();
-    const names = [];
-    for await (const name of root.keys()) if (name.startsWith(OPFS_PREFIX) || name === 'duckbench_tmp') names.push(name);
-    for (const n of names) { try { await root.removeEntry(n, { recursive: true }); } catch {} }
+    const dirs = [root];
+    try { dirs.push(await (await root.getDirectoryHandle('duckdb')).getDirectoryHandle('fs')); } catch {}
+    for (const dir of dirs) {
+      const names = [];
+      for await (const name of dir.keys()) if (name.startsWith(OPFS_PREFIX) || name === 'duckbench_tmp') names.push(name);
+      names.sort((a, b) => a.endsWith('.wal') - b.endsWith('.wal'));
+      const gone = new Set();
+      for (const n of names) {
+        const base = n.endsWith('.wal') ? n.slice(0, -4) : null;
+        if (base && names.includes(base) && !gone.has(base)) continue;
+        try { await dir.removeEntry(n, { recursive: true }); gone.add(n); } catch {}
+      }
+    }
   } catch {}
 }
 
@@ -47,7 +57,7 @@ async function openStorage(db, duckdb) {
       return 'opfs';
     } catch {}
   }
-  try { await db.open(OPENED_FLAGS); } catch {}
+  await db.open(OPENED_FLAGS);
   return 'memory';
 }
 
