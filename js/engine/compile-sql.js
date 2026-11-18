@@ -364,7 +364,7 @@ function pivot(d, fields, types, ctx) {
       case 'avg': return `CAST(round(fsum(${val}) FILTER (WHERE ${cond}), 10) / count(${val}) FILTER (WHERE ${cond}) AS DOUBLE)`;
       case 'median': return `CAST(median(${val}) FILTER (WHERE ${cond}) AS DOUBLE)`;
       case 'count': return `CASE WHEN count(*) FILTER (WHERE ${cond}) > 0 THEN count(*) FILTER (WHERE ${cond}) END`;
-      case 'count_distinct': return `CASE WHEN count(*) FILTER (WHERE ${cond}) > 0 THEN count(DISTINCT CASE WHEN NOT ${valType === 'text' ? `(${val} IS NULL OR trim(${val}) = '')` : `(${val} IS NULL)`} THEN ${val} END) FILTER (WHERE ${cond}) END`;
+      case 'count_distinct': return `CASE WHEN count(*) FILTER (WHERE ${cond}) > 0 THEN count(DISTINCT CASE WHEN NOT ${valType === 'text' ? `(${val} IS NULL OR ${jsTrim(val)} = '')` : `(${val} IS NULL)`} THEN ${val} END) FILTER (WHERE ${cond}) END`;
       case 'min': case 'max': return `${d.fn}(${val}) FILTER (WHERE ${cond})`;
       case 'first': return `arg_min(${val}, __db_rn) FILTER (WHERE ${cond} AND ${val} IS NOT NULL)`;
     }
@@ -386,7 +386,7 @@ function pivot(d, fields, types, ctx) {
 
 const TEXTABLE = new Set(['text', 'integer', 'boolean', 'date']);
 const asText = (c, t) => (t === 'text' ? c : `CAST(${c} AS VARCHAR)`);
-const blankOf = (c, t) => (t === 'text' ? `(${c} IS NULL OR trim(${c}) = '')` : `(${c} IS NULL)`);
+const blankOf = (c, t) => (t === 'text' ? `(${c} IS NULL OR ${jsTrim(c)} = '')` : `(${c} IS NULL)`);
 
 function mergeColumns(d, fields, types) {
   const cols = d.columns || [];

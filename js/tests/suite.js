@@ -239,7 +239,7 @@ export const TESTS = [
     ok(/BETWEEN DATE '2026-01-01' AND DATE '2026-02-01'/.test(compileStep({ type: 'filter', data: { mode: 'rules', rules: [{ column: 'order_date', operator: 'between', value: '2026-01-01', value2: '2026-02-01' }] } }, SALES_FIELDS).sql));
     ok(/contains\(lower\("customer"\), 'o''b'\)/.test(compileStep({ type: 'filter', data: { rules: [{ column: 'customer', operator: 'contains', value: "O'B" }] } }, SALES_FIELDS).sql), 'quotes escaped');
     ok(/IN \('North', 'East'\)/.test(compileStep({ type: 'filter', data: { mode: 'values', column: 'region', values: { include: true, list: ['North', 'East'] } } }, SALES_FIELDS).sql));
-    ok(/trim\("customer"\) = ''/.test(compileStep({ type: 'remove_blank_rows', data: { columns: ['customer'], mode: 'any' } }, SALES_FIELDS).sql));
+    ok(/regexp_replace\("customer", .+, '', 'g'\) = ''/.test(compileStep({ type: 'remove_blank_rows', data: { columns: ['customer'], mode: 'any' } }, SALES_FIELDS).sql));
   }],
   ['compile — refuses what DuckDB would get wrong', () => {
     eq(compileStep({ type: 'filter', data: { mode: 'formula', formula: '[a] > 1' } }, SALES_FIELDS), null);

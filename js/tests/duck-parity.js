@@ -11,6 +11,8 @@ const EXTRA = 'id,code,tags,when_txt,amount_txt,flag,name\n1,A-1,"x, y",2026-01-
 
 const PMESS = 'id,name,city,score,amount,grp,flag,seen,note\n1,Alice,Cairo,3,10.5,A,yes,2026-01-05,plain\n2,alice,cairo,3,10.50,a,no,2026-01-05,dup case\n3,ALICE,CAIRO,1,-2.25,A,yes,2026-02-10,\n4,Jose,Madrid,2,0,B,true,2026-03-01,accent\n5,José,Madrid,2,0.0,B,false,,accent2\n6,josé,MADRID,,100,b,yes,2026-03-01,\n7,  Bob,Berlin,5,1000,C,no,2025-12-31,leading space\n8,Bob  ,Berlin,5,1000,C,yes,2026-12-31,trailing space\n9,Bob,Berlin,5,999.999,C,no,2026-01-01,\n10,,Paris,4,,A,yes,2026-04-04,missing name\n11,   ,Paris,4,7,A,no,2026-04-04,blank name\n12,محمد,القاهرة,6,3.14,D,yes,2026-05-05,arabic\n13,مُحمد,القاهرة,6,3.14,D,no,2026-05-05,arabic diacritic\n14,straße,Köln,7,12,E,yes,2026-06-06,eszett\n15,STRASSE,KÖLN,7,12.00,E,no,2026-06-06,\n16,Émile,Lyon,-1,-0.5,F,true,2026-07-07,neg\n17,emile,Lyon,0,0.5,F,false,2026-07-07,\n18,O\'Brien,Dublin,8,1234567.89,G,yes,2026-08-08,"quote ""x"" here"\n19,"Smith, J",Leeds,9,9007199254,G,no,2026-09-09,comma\n20,Zed,Oslo,9,0.1,H,yes,2026-10-10,"multi\nline"\n21,,,,,,,,\n22, , , , , , , ,\n23,Alice,Cairo,3,10.5,A,yes,2026-01-05,plain\n24,Bob,Berlin,5,999.999,C,no,2026-01-01,\n25,Yan,Taipei,2,,B,,,\n26,Yan,Taipei,2,5,B,yes,2026-11-11,x\n27,Ünal,İzmir,4,2,A,no,2026-02-02,turkish dotted\n28,ünal,izmir,4,2,A,no,2026-02-02,\n';
 
+const WSP = 'id,name,qty,note\n1,Ann,5,a\n2,"\t",6,\n3,"\u00a0",7,x\n4,"\n",8,\n5,"  ",9,y\n6,Bob,10,"\u2003"\n7,,11,\n8,"\u3000x",12,z\n9,"\r",13,\n10," \ufeff",14,w\n';
+
 const CASES = [
   ['trim_clean', 'x', { type: 'trim_clean', data: {} }],
   ['replace whole text', 's', { type: 'replace_values', data: { columns: ['status'], match: 'whole', find: 'Pending', replace: 'Open', caseSensitive: true } }],
@@ -156,6 +158,14 @@ const CASES = [
   ["sort sales status then quantity", "s", { type: "sort", data: {"keys":[{"column":"status","direction":"asc"},{"column":"quantity","direction":"desc"}],"nullsLast":true} }],
   ["sort sales product (hyphen) refuses", "s", { type: "sort", data: {"keys":[{"column":"product","direction":"asc"}],"nullsLast":true} }, 'refuse'],
   ["sort numbered text refuses", "x", { type: "sort", data: {"keys":[{"column":"code","direction":"asc"}],"nullsLast":true} }, 'refuse'],
+  ["whitespace remove blank rows (all)", "w", { type: "remove_blank_rows", data: {"columns": ["name", "note"], "mode": "all"} }],
+  ["whitespace remove blank rows (any)", "w", { type: "remove_blank_rows", data: {"columns": ["name", "note"], "mode": "any"} }],
+  ["whitespace filter is empty", "w", { type: "filter", data: {"mode": "rules", "rules": [{"column": "name", "operator": "is_null"}]} }],
+  ["whitespace filter is not empty", "w", { type: "filter", data: {"mode": "rules", "rules": [{"column": "note", "operator": "is_not_null"}]} }],
+  ["whitespace group count_nonblank", "w", { type: "group_by", data: {"groupColumns": [], "aggregations": [{"fn": "count_nonblank", "column": "name"}, {"fn": "count_distinct", "column": "note"}]} }],
+  ["whitespace merge skip empty", "w", { type: "merge_columns", data: {"columns": ["name", "note"], "name": "m", "separator": "-", "skipEmpty": true} }],
+  ["whitespace unpivot skips blanks", "w", { type: "unpivot", data: {"columns": ["name", "note"], "nameColumn": "k", "valueColumn": "v"} }],
+  ["whitespace pivot count_distinct", "w", { type: "pivot", data: {"onColumn": "qty", "valueColumn": "name", "fn": "count_distinct", "groupColumns": []} }],
 ];
 
 const list = document.getElementById('list');
@@ -185,8 +195,9 @@ try {
   e.loadText({ id: 'r', name: 'r.csv', text: SAMPLE_REGIONS_CSV, format: 'csv' });
   e.loadText({ id: 'x', name: 'x.csv', text: EXTRA, format: 'csv' });
   e.loadText({ id: 'p', name: 'p.csv', text: PMESS, format: 'csv' });
+  e.loadText({ id: 'w', name: 'w.csv', text: WSP, format: 'csv' });
   const base = {};
-  for (const id of ['s', 'r', 'x', 'p']) {
+  for (const id of ['s', 'r', 'x', 'p', 'w']) {
     e.setQueries({ queries: [{ id, name: id, source: { kind: 'file', sourceId: id }, steps: [] }] });
     const r = e.evaluate({ queryId: id, pageSize: 1e6 });
     const cols = r.fields.map((_, c) => r.page.rows.map(row => row[c]));

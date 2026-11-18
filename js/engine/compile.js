@@ -2,7 +2,7 @@ import { qi, sqlStr } from './duck.js';
 import { formatDate, formatDateTime, parseNumberString, parseBoolString, convertValue, isNumeric, isTemporal } from '../core/types.js';
 import { aggType, aggDefaultName } from '../core/transforms.js';
 import { parseList } from '../core/util.js';
-import { MORE } from './compile-sql.js';
+import { MORE, jsTrim } from './compile-sql.js';
 
 const PUSHABLE = new Set(['filter', 'sort', 'select_columns', 'remove_columns', 'rename_columns', 'keep_rows', 'remove_blank_rows', 'remove_duplicates', 'group_by', 'trim_clean', 'replace_values', 'change_type', 'change_case', 'split_column', 'join', 'pivot', 'merge_columns', 'unpivot', 'date_part', 'index_column', 'duplicate_column', 'move_column', 'replace_nulls']);
 const RN = '__duckbench_rn';
@@ -40,7 +40,7 @@ export function literalFor(raw, type) {
 }
 
 function blank(c, type) {
-  return type === 'text' ? `(${c} IS NULL OR trim(${c}) = '')` : `(${c} IS NULL)`;
+  return type === 'text' ? `(${c} IS NULL OR ${jsTrim(c)} = '')` : `(${c} IS NULL)`;
 }
 
 function ruleSql(rule, types) {
