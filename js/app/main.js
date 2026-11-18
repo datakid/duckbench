@@ -95,23 +95,26 @@ async function loadFileIntoEngine(file, sourceId, options = {}) {
     }
     const r = await xlsx.call('read', { buffer, sheet, options });
     const args = { id: sourceId, name: file.name, format, names: r.names, columns: r.columns, types: r.types, options };
-    client.remember('loadColumns', args);
     const info = await client.call('loadColumns', args, { label: `Reading ${file.name}` });
+    client.remember('loadColumns', args);
     return { ...info, options: { ...options, sheet } };
   }
   if (format === 'parquet') {
     const args = { id: sourceId, name: file.name, buffer, options };
+    const info = await client.call('loadParquet', args, { label: `Reading ${file.name}` });
     client.remember('loadParquet', args);
-    return { ...(await client.call('loadParquet', args, { label: `Reading ${file.name}` })), options };
+    return { ...info, options };
   }
   if ((format === 'csv' || format === 'tsv') && typeof file.stream === 'function') {
     const fargs = { id: sourceId, name: file.name, format, file, options };
+    const info = await client.call('loadFile', fargs, { label: `Reading ${file.name}` });
     client.remember('loadFile', fargs);
-    return { ...(await client.call('loadFile', fargs, { label: `Reading ${file.name}` })), format, options };
+    return { ...info, format, options };
   }
   const args = { id: sourceId, name: file.name, format, buffer, options };
+  const info = await client.call('loadText', args, { label: `Reading ${file.name}` });
   client.remember('loadText', args);
-  return { ...(await client.call('loadText', args, { label: `Reading ${file.name}` })), options };
+  return { ...info, options };
 }
 
 function chooseSheet(name, sheets) {
