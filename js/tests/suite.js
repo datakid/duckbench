@@ -524,6 +524,27 @@ export const TESTS = [
     eq(cleanError(new Error('Binder Error: Table "a" does not exist\nLINE 1: x')), 'Table "a" does not exist');
   }],
   ['every transform has label, code, params and apply', () => { for (const [k, t] of Object.entries(TRANSFORMS)) { ok(t.label && t.code && Array.isArray(t.params) && typeof t.apply === 'function', k); } }],
+  ['JSON import — mixed-type columns become text with string values', () => {
+    const e = new Engine();
+    e.loadText({ id: 'j', name: 'j.json', text: '[{"a":1,"b":"x"},{"a":"y","b":true},{"a":2.5,"b":"z"}]', format: 'json' });
+    const f = e.sources.get('j').frame;
+    eq(f.fields.map(x => x.type), ['text', 'text']);
+    eq(f.columns[0], ['1', 'y', '2.5']);
+    eq(f.columns[1], ['x', 'true', 'z']);
+    e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: 'j' }, steps: [{ id: 's', ...migrateStep({ type: 'trim_clean', data: { columns: ['a', 'b'] } }) }] }] });
+    const r = e.evaluate({ queryId: 'q' });
+    ok(!r.error && !r.fullError, 'trim_clean on a mixed JSON column');
+  }],
+  ['JSON import — a late string in a long numeric column makes it text', () => {
+    const rows = Array.from({ length: 2500 }, (_, i) => ({ v: i }));
+    rows[2499] = { v: 'late' };
+    const e = new Engine();
+    e.loadText({ id: 'j', name: 'j.json', text: JSON.stringify(rows), format: 'json' });
+    const f = e.sources.get('j').frame;
+    eq(f.fields[0].type, 'text');
+    eq(f.columns[0][2499], 'late');
+    eq(f.columns[0][5], '5');
+  }],
 ];
 
 export async function runAll(onResult) {

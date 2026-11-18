@@ -41,7 +41,12 @@ export class Frame {
         cols[c][r] = v;
       }
     }
-    const fields = names.map((name, i) => ({ name, type: typeOfJsValues(sample(cols[i])) }));
+    const fields = names.map((name, i) => ({ name, type: typeOfJsValues(cols[i]) }));
+    fields.forEach((f, c) => {
+      if (f.type !== 'text') return;
+      const col = cols[c];
+      for (let r = 0; r < col.length; r++) if (col[r] != null && typeof col[r] !== 'string') col[r] = String(col[r]);
+    });
     return new Frame(fields, cols, objs.length);
   }
 
