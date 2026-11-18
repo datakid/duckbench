@@ -47,7 +47,7 @@ async function openStorage(db, duckdb) {
       return 'opfs';
     } catch {}
   }
-  try { await db.open(OPENED_FLAGS); } catch {}
+  await db.open(OPENED_FLAGS);
   return 'memory';
 }
 
