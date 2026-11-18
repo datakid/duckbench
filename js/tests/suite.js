@@ -627,6 +627,18 @@ export const TESTS = [
     eq(mk(true).sourceTruncated, true);
     eq(mk(false).sourceTruncated, false);
   }],
+  ['sql validator — quoted names, escape strings and dollar strings', () => {
+    ok(validateSql('SELECT * FROM "read_csv"(\'a.csv\')').error, 'quoted read_csv');
+    ok(validateSql('SELECT * FROM "glob"(\'*\')').error, 'quoted glob');
+    ok(validateSql('SELECT * FROM "data.xlsx"').error, 'xlsx replacement scan');
+    ok(validateSql("SELECT E'\\'' ; SELECT 1").error, 'statement after an escaped quote');
+    ok(validateSql("SELECT E'\\'--' AS a; DROP TABLE input").error, 'comment marker inside an escape string');
+    ok(validateSql('SELECT $$a;b$$ AS x').sql, 'semicolon inside a dollar string');
+    ok(validateSql("SELECT $tag$it's; fine$tag$ AS x").sql, 'tagged dollar string');
+    ok(validateSql('SELECT "read_me" FROM input').sql, 'column named like a reader');
+    ok(validateSql("SELECT E'a\\nb' AS x, 'it''s' AS y").sql, 'plain escape strings');
+    ok(validateSql("SELECT $$drop table x$$ AS s").sql, 'keyword inside a dollar string');
+  }],
 ];
 
 export async function runAll(onResult) {

@@ -441,26 +441,51 @@ export async function cancelDuck() {
   try { return await state.conn.cancelSent(); } catch { return false; }
 }
 
+function stringEnd(sql, i) {
+  const c = sql[i];
+  if (c === '$') {
+    const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i, i + 64));
+    if (!m) return -1;
+    const close = sql.indexOf(m[0], i + m[0].length);
+    return close < 0 ? sql.length : close + m[0].length;
+  }
+  if (c !== "'" && c !== '"') return -1;
+  const escaped = c === "'" && (sql[i - 1] === 'e' || sql[i - 1] === 'E') && !/\w/.test(sql[i - 2] || '');
+  let j = i + 1;
+  while (j < sql.length) {
+    if (escaped && sql[j] === '\\') { j += 2; continue; }
+    if (sql[j] === c) {
+      if (sql[j + 1] === c) { j += 2; continue; }
+      return j + 1;
+    }
+    j++;
+  }
+  return sql.length;
+}
+
 function stripComments(sql) {
-  let out = '', i = 0, q = null;
+  let out = '', i = 0;
   while (i < sql.length) {
+    const e = stringEnd(sql, i);
+    if (e > 0) { out += sql.slice(i, e); i = e; continue; }
     const c = sql[i];
-    if (q) { out += c; if (c === q) { if (sql[i + 1] === q) { out += q; i++; } else q = null; } i++; continue; }
-    if (c === "'" || c === '"') { q = c; out += c; i++; continue; }
     if (c === '-' && sql[i + 1] === '-') { while (i < sql.length && sql[i] !== '\n') i++; continue; }
-    if (c === '/' && sql[i + 1] === '*') { const e = sql.indexOf('*/', i + 2); i = e < 0 ? sql.length : e + 2; out += ' '; continue; }
+    if (c === '/' && sql[i + 1] === '*') { const k = sql.indexOf('*/', i + 2); i = k < 0 ? sql.length : k + 2; out += ' '; continue; }
     out += c; i++;
   }
   return out;
 }
 
-export function maskQuoted(sql) {
-  let out = '', q = null;
-  for (let i = 0; i < sql.length; i++) {
+export function maskQuoted(sql, keepIdentifiers = false) {
+  let out = '', i = 0;
+  while (i < sql.length) {
+    const e = stringEnd(sql, i);
+    if (e < 0) { out += sql[i]; i++; continue; }
     const c = sql[i];
-    if (q) { if (c === q) { if (sql[i + 1] === q) { out += '  '; i++; continue; } q = null; out += c; continue; } out += ' '; continue; }
-    if (c === "'" || c === '"') { q = c; out += c; continue; }
-    out += c;
+    if (c === '"' && keepIdentifiers) out += sql.slice(i, e);
+    else if (c === '$') out += ' '.repeat(e - i);
+    else out += c + ' '.repeat(e - i - 1);
+    i = e;
   }
   return out;
 }
@@ -476,8 +501,8 @@ export function validateSql(sql) {
   if (!START.test(masked)) return { error: 'The query must start with SELECT, WITH, FROM, VALUES, PIVOT, UNPIVOT, SUMMARIZE or DESCRIBE.' };
   const m = FORBIDDEN.exec(masked);
   if (m) return { error: `“${m[1].toUpperCase()}” is not allowed in a SQL step. Steps are read-only.` };
-  if (/\b(read_\w+|glob|load_extension|parquet_scan|parquet_metadata|parquet_schema|sniff_csv|query|query_table|getenv)\s*\(/i.test(masked)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
-  if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"[^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|gz|zst)"/i.test(s)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
+  if (/\b(read_\w+|glob|load_extension|parquet_scan|parquet_metadata|parquet_schema|sniff_csv|query|query_table|getenv)"?\s*\(/i.test(maskQuoted(s, true))) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
+  if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"[^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|xlsx|gz|zst)"/i.test(s)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
   return { sql: s };
 }
 
