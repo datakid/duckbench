@@ -30,10 +30,36 @@
     }
     const types = kinds.map((k, c) => {
       if (k === 'date') return columns[c].every(v => v == null || v % 86400000 === 0) ? 'date' : 'datetime';
-      if (k === 'mixed') { for (let r = 0; r < n; r++) if (columns[c][r] != null && typeof columns[c][r] !== 'string') columns[c][r] = String(columns[c][r]); return 'text'; }
+      if (k === 'mixed') {
+        for (let r = 0; r < n; r++) {
+          const v = columns[c][r];
+          if (v == null || typeof v === 'string') continue;
+          const raw = body[r + start][c];
+          columns[c][r] = raw instanceof Date ? dateText(raw) : String(v);
+        }
+        return 'text';
+      }
       return k || 'text';
     });
     return { names, columns, types };
+  }
+
+  function dateText(d) {
+    const p = (x, w = 2) => String(x).padStart(w, '0');
+    const day = p(d.getFullYear(), 4) + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    return d.getHours() || d.getMinutes() || d.getSeconds() ? day + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) : day;
+  }
+
+  function sheetName(raw, used) {
+    const strip = (s) => s.replace(/^'+|'+$/g, '').trim();
+    const base = strip(strip(String(raw || 'Sheet1').replace(/[\\/?*[\]:]/g, ' ').trim()).slice(0, 31)) || 'Sheet1';
+    let name = base;
+    for (let i = 2; used.has(name.toLowerCase()); i++) {
+      const suffix = ' (' + i + ')';
+      name = base.slice(0, 31 - suffix.length).trimEnd() + suffix;
+    }
+    used.add(name.toLowerCase());
+    return name;
   }
 
   function handle(XLSX, method, args) {
@@ -49,9 +75,12 @@
     }
     if (method === 'write') {
       const wb = XLSX.utils.book_new();
+      const used = new Set();
       for (const sh of args.sheets) {
-        const aoa = [sh.fields.map(f => f.name)];
         const n = sh.columns[0] ? sh.columns[0].length : 0;
+        if (n > 1048575) throw new Error('"' + sh.name + '" has ' + n.toLocaleString('en-US') + ' rows; an Excel sheet holds at most 1,048,575 data rows plus the header. Export CSV or Parquet instead.');
+        if (sh.fields.length > 16384) throw new Error('"' + sh.name + '" has ' + sh.fields.length.toLocaleString('en-US') + ' columns; an Excel sheet holds at most 16,384. Export CSV or Parquet instead.');
+        const aoa = [sh.fields.map(f => f.name)];
         for (let r = 0; r < n; r++) {
           const row = new Array(sh.fields.length);
           for (let c = 0; c < sh.fields.length; c++) {
@@ -77,7 +106,7 @@
           return { wch: Math.min(60, Math.max(8, w + 2)) };
         });
         if (sh.fields.length) ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: n, c: sh.fields.length - 1 } }) };
-        XLSX.utils.book_append_sheet(wb, ws, String(sh.name || 'Sheet1').replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Sheet1');
+        XLSX.utils.book_append_sheet(wb, ws, sheetName(sh.name, used));
       }
       return { buffer: XLSX.write(wb, { type: 'array', bookType: 'xlsx', compression: true }) };
     }

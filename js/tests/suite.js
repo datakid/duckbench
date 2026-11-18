@@ -30,6 +30,12 @@ function duckEngine(steps, schemaFields = SALES_FIELDS) {
 const eq = (a, b, msg) => { const A = JSON.stringify(a), B = JSON.stringify(b); if (A !== B) throw new Error(`${msg || 'mismatch'}: expected ${B}, got ${A}`); };
 const ok = (c, msg) => { if (!c) throw new Error(msg || 'assertion failed'); };
 
+async function xlsxHandle() {
+  if (!globalThis.XLSX) await new Promise((res, rej) => { const s = document.createElement('script'); s.src = new URL('../../vendor/xlsx-0.20.3.full.min.js', import.meta.url).href; s.onload = res; s.onerror = () => rej(new Error('SheetJS did not load')); document.head.appendChild(s); });
+  await import('../io/xlsx-core.js');
+  return (method, args) => globalThis.DuckXlsx.handle(globalThis.XLSX, method, args);
+}
+
 function setup() {
   const e = new Engine();
   e.loadText({ id: 'sales', name: 'sales.csv', text: SAMPLE_SALES_CSV, format: 'csv' });
@@ -586,6 +592,29 @@ export const TESTS = [
     eq(info2.encoding, 'utf-8');
     const g = e2.sources.get('u').frame;
     eq(g.row(g.rowCount - 1), ['Café', 'Zürich']);
+  }],
+  ['xlsx import — dates in a mixed column become date text, not epoch numbers', async () => {
+    const h = await xlsxHandle();
+    const ws = globalThis.XLSX.utils.aoa_to_sheet([['when', 'n'], [new Date(2026, 0, 15), 1], ['tbd', 2], [new Date(2026, 2, 1, 13, 30), 3]], { cellDates: true });
+    const wb = globalThis.XLSX.utils.book_new();
+    globalThis.XLSX.utils.book_append_sheet(wb, ws, 'S');
+    const buffer = globalThis.XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const r = h('read', { buffer, options: {} });
+    eq(r.types, ['text', 'integer']);
+    eq(r.columns[0], ['2026-01-15', 'tbd', '2026-03-01 13:30:00']);
+  }],
+  ['xlsx export — sheet names are valid and unique, row limit is enforced', async () => {
+    const h = await xlsxHandle();
+    const sheet = (name) => ({ name, fields: [{ name: 'a', type: 'integer' }], columns: [[1, 2]] });
+    const long = 'Quarterly sales report for the whole of 2025';
+    const out = h('write', { sheets: [sheet(long + ' (north)'), sheet(long + ' (south)'), sheet('Sales'), sheet('sales'), sheet("'quoted'")] });
+    const names = globalThis.XLSX.read(out.buffer, { type: 'array', bookSheets: true }).SheetNames;
+    eq(names.length, 5);
+    ok(names.every(n => n.length <= 31 && !/^'|'$/.test(n)), 'valid names');
+    eq(new Set(names.map(n => n.toLowerCase())).size, 5);
+    let message = '';
+    try { h('write', { sheets: [{ name: 'big', fields: [{ name: 'a', type: 'integer' }], columns: [new Array(1048576).fill(1)] }] }); } catch (err) { message = err.message; }
+    ok(/1,048,575/.test(message), 'row limit message');
   }],
 ];
 
