@@ -1,6 +1,6 @@
 import { Engine } from '../engine/engine.js';
 import { TRANSFORMS, migrateStep } from '../core/transforms.js';
-import { parseCSV } from '../core/csv.js';
+import { parseCSV, csvEscape } from '../core/csv.js';
 import { inferColumnType, parseDateString, parseNumberString, formatValue } from '../core/types.js';
 import { evaluateFormula } from '../core/formula.js';
 import { Frame } from '../core/frame.js';
@@ -560,6 +560,17 @@ export const TESTS = [
     const f = e.sources.get('n').frame;
     eq(distinctValues(f, 'v').values.map(x => x.value), ['-10', '-2', '-1', '2.5', '3', '10']);
     eq(distinctValues(f, 'd').values.map(x => x.value), ['2026-01-15', '2026-02-10', '2026-03-01', '2026-12-31']);
+  }],
+  ['export — formula guard exempts only plain numbers', () => {
+    eq(csvEscape('-12.5'), '-12.5');
+    eq(csvEscape('+7'), '+7');
+    eq(csvEscape('-1e5'), '-1e5');
+    eq(csvEscape('-1,234'), '"-1,234"');
+    eq(csvEscape('-2+3+cmd|\' /C calc\'!A0'), '\'-2+3+cmd|\' /C calc\'!A0');
+    eq(csvEscape('+1-2'), "'+1-2");
+    eq(csvEscape('=1+1'), "'=1+1");
+    eq(csvEscape('@SUM(A1)'), "'@SUM(A1)");
+    eq(csvEscape('-2+3+cmd|x', ',', false), '-2+3+cmd|x');
   }],
 ];
 

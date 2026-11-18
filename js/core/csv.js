@@ -221,7 +221,7 @@ export function rowsToColumns(rows, { header = true, skipRows = 0 } = {}) {
 export function csvEscape(v, delim = ',', guard = true) {
   if (v == null) return '';
   let s = String(v);
-  if (guard && s.length && /^[=+\-@\t\r]/.test(s) && !/^[-+]?\d/.test(s)) s = "'" + s;
+  if (guard && s.length && /^[=+\-@\t\r]/.test(s) && !/^[-+]?[\d.,\s]*\d[\d.,\s]*(e[-+]?\d+)?%?$/i.test(s)) s = "'" + s;
   if (s.includes(delim) || s.includes('"') || s.includes('\n') || s.includes('\r')) return '"' + s.replace(/"/g, '""') + '"';
   return s;
 }
