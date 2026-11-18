@@ -639,6 +639,34 @@ export const TESTS = [
     ok(validateSql("SELECT E'a\\nb' AS x, 'it''s' AS y").sql, 'plain escape strings');
     ok(validateSql("SELECT $$drop table x$$ AS s").sql, 'keyword inside a dollar string');
   }],
+  ['sql validator — other scanners, secrets and data-modifying CTEs', () => {
+    for (const s of [
+      "SELECT * FROM read_parquet('x.parquet')",
+      "SELECT * FROM 'x.parquet'",
+      "SELECT * FROM iceberg_scan('t')",
+      "SELECT * FROM delta_scan('t')",
+      "SELECT * FROM sqlite_scan('a.db', 't')",
+      "SELECT * FROM postgres_scan('c', 's', 't')",
+      "SELECT * FROM mysql_scan('c', 's', 't')",
+      "SELECT http_get('https://example.com')",
+      "SELECT * FROM duckdb_secrets()",
+      "SELECT * FROM \"x.db\"",
+      "SELECT * FROM \"x.duckdb\"",
+      "SELECT * FROM \"s3://bucket/x\"",
+      "SELECT * FROM \"https://example.com/x\"",
+      "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d",
+    ]) ok(validateSql(s).error, 'must block: ' + s);
+    for (const s of [
+      'SELECT * FROM input',
+      'PIVOT input ON region USING sum(quantity)',
+      'UNPIVOT input ON quantity INTO NAME k VALUE v',
+      'SUMMARIZE input',
+      'DESCRIBE input',
+      "VALUES (1, 'a'), (2, 'b')",
+      'WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT * FROM r',
+      'SELECT list_transform([1, 2], lambda x: x + 1) AS y',
+    ]) ok(validateSql(s).sql, 'must allow: ' + s);
+  }],
 ];
 
 export async function runAll(onResult) {
