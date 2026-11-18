@@ -4,6 +4,7 @@ import { parseCSV } from '../core/csv.js';
 import { inferColumnType, parseDateString, parseNumberString, formatValue } from '../core/types.js';
 import { evaluateFormula } from '../core/formula.js';
 import { Frame } from '../core/frame.js';
+import { distinctValues } from '../core/profile.js';
 import { SAMPLE_SALES_CSV, SAMPLE_REGIONS_CSV } from '../app/samples.js';
 import { validateSql, withInput, tableNameFor, referencedNames, arrowType, convertValue as duckConvert, decimalFromWords, readerFor } from '../engine/duck.js';
 import { CsvStream, parseCSV as parseCsvAll } from '../core/csv.js';
@@ -552,6 +553,13 @@ export const TESTS = [
     const gone = e.findRows({ resultId: r.resultId, text: 'a', column: 'removed_column' });
     eq(gone.matches, []);
     ok(e.findRows({ resultId: r.resultId, text: 'north', column: 'region' }).matches.length > 0);
+  }],
+  ['filter values — numbers and dates list in value order', () => {
+    const e = new Engine();
+    e.loadText({ id: 'n', name: 'n.csv', text: 'v,d\n-2,2026-03-01\n-10,2026-01-15\n3,2026-12-31\n-1,2026-03-01\n10,2026-02-10\n2.5,2026-01-15\n', format: 'csv' });
+    const f = e.sources.get('n').frame;
+    eq(distinctValues(f, 'v').values.map(x => x.value), ['-10', '-2', '-1', '2.5', '3', '10']);
+    eq(distinctValues(f, 'd').values.map(x => x.value), ['2026-01-15', '2026-02-10', '2026-03-01', '2026-12-31']);
   }],
 ];
 

@@ -78,17 +78,20 @@ export function distinctValues(frame, name, { search = '', limit = 500 } = {}) {
   const col = frame.col(name);
   const type = frame.typeOf(name);
   const counts = new Map();
+  const raw = new Map();
   let nulls = 0;
   for (let r = 0; r < frame.rowCount; r++) {
     const v = col[r];
     if (v == null) { nulls++; continue; }
     const key = typeof v === 'string' ? v : formatValue(v, type);
+    if (!counts.has(key)) raw.set(key, v);
     counts.set(key, (counts.get(key) || 0) + 1);
   }
   const s = search.trim().toLowerCase();
   let entries = [...counts.entries()];
   if (s) entries = entries.filter(([k]) => k.toLowerCase().includes(s));
-  entries.sort((a, b) => compareValues(a[0], b[0]));
+  const byValue = isNumeric(type) || isTemporal(type);
+  entries.sort(byValue ? (a, b) => raw.get(a[0]) - raw.get(b[0]) : (a, b) => compareValues(a[0], b[0]));
   const total = entries.length;
   const values = entries.slice(0, limit).map(([value, count]) => ({ value, count }));
   if (nulls && (!s || 'empty'.includes(s) || '(empty)'.includes(s))) values.unshift({ value: null, count: nulls });
