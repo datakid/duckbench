@@ -122,6 +122,23 @@ export const TESTS = [
     ok(validateSql('COPY input TO \'x\'').error);
     ok(validateSql('').error);
   }],
+  ['sql — validator rejects other scanners, secrets and data-file paths', () => {
+    const blocked = [
+      "SELECT * FROM iceberg_scan('t')", "SELECT * FROM delta_scan('t')", "SELECT * FROM sqlite_scan('a.db', 't')", "SELECT * FROM postgres_scan('h', 's', 't')",
+      "SELECT * FROM arrow_scan(1, 2, 3)", "SELECT * FROM scan_arrow_ipc([])", "SELECT * FROM duckdb_secrets()", "SELECT * FROM which_secret('s3://x', 's3')",
+      'SELECT * FROM "x.xlsx"', 'SELECT * FROM "x.db"', 'SELECT * FROM "x.duckdb"', 'SELECT * FROM input JOIN "y.sqlite" USING (id)',
+      "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d", "SELECT * FROM 'x.parquet'", "SELECT * FROM read_parquet('x.parquet')",
+    ];
+    for (const q of blocked) ok(validateSql(q).error, `should be blocked: ${q}`);
+  }],
+  ['sql — validator keeps accepting DuckDB 2.0 read syntax', () => {
+    const allowed = [
+      'SELECT * FROM input', 'PIVOT input ON region USING sum(amount)', 'UNPIVOT input ON a, b INTO NAME k VALUE v', 'SUMMARIZE input', 'DESCRIBE input', 'VALUES (1), (2)',
+      'WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT * FROM r', 'SELECT list_transform([1, 2], lambda x: x + 1) FROM input',
+      "SELECT * FROM input WHERE name = 'x.parquet'", 'SELECT "my col.csv" FROM input', "SELECT 'sqlite_scan(' AS s FROM input", 'SELECT table_scan_count FROM input',
+    ];
+    for (const q of allowed) ok(validateSql(q).sql, `should be accepted: ${q}`);
+  }],
   ['sql — WITH composition', () => {
     eq(withInput('SELECT 1', 'SELECT * FROM input'), 'WITH input AS (SELECT 1) SELECT * FROM input');
     eq(withInput('SELECT 1', 'WITH b AS (SELECT * FROM input) SELECT * FROM b'), 'WITH input AS (SELECT 1), b AS (SELECT * FROM input) SELECT * FROM b');

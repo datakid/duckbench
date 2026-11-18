@@ -486,8 +486,8 @@ export function validateSql(sql) {
   if (!START.test(masked)) return { error: 'The query must start with SELECT, WITH, FROM, VALUES, PIVOT, UNPIVOT, SUMMARIZE or DESCRIBE.' };
   const m = FORBIDDEN.exec(masked);
   if (m) return { error: `“${m[1].toUpperCase()}” is not allowed in a SQL step. Steps are read-only.` };
-  if (/\b(read_\w+|glob|load_extension|parquet_scan|parquet_metadata|parquet_schema|sniff_csv|query|query_table|getenv)\s*\(/i.test(masked)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
-  if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"[^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|gz|zst)"/i.test(s)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
+  if (/\b(read_\w+|glob|load_extension|parquet_scan|\w+_scan|scan_\w+|parquet_metadata|parquet_schema|sniff_csv|query|query_table|getenv|duckdb_secrets|which_secret)\s*\(/i.test(masked)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
+  if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"[^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|gz|zst|xlsx|xls|db|duckdb|sqlite|sqlite3|arrow|avro)"/i.test(s)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
   return { sql: s };
 }
 
