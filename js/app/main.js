@@ -292,7 +292,7 @@ function renderImport() {
     el('footer', { class: 'hero-foot' },
       el('span', { class: `hf-engine is-${st}` }, el('span', { class: 'le-dot' }), engineLabel()),
       el('span', { class: 'hf-sep' }),
-      el('span', {}, `v2.3${isDesktop() ? ' desktop' : ''}`),
+      el('span', {}, `v2.4${isDesktop() ? ' desktop' : ''}`),
       el('span', { class: 'hf-sep' }),
       el('button', { class: 'hf-link', type: 'button', onclick: () => startTour({ force: true }) }, icon('play', 11), 'Tour'),
       el('span', { class: 'hf-sep' }),
@@ -1897,7 +1897,7 @@ function installDesktop() {
   renderMast();
   renderImport();
   $('#importScreen').hidden = false;
-  window.duckbench = { store, client, sql, duck, version: '2.3.0', desktop: isDesktop() };
+  window.duckbench = { store, client, sql, duck, version: '2.4.0', desktop: isDesktop() };
   const params = new URLSearchParams(location.search);
   if (params.has('notour')) prefs.set('tourDone', true);
   if (params.has('demo')) await loadSample();

@@ -40,8 +40,8 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 **Large files**
 - CSV files up to about 1 GB are streamed into memory
 - Larger files, or any file opened with "Open with DuckDB", are queried in place
-- On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, merge, date parts, index/duplicate/move columns, fill empty values, group by, joins, pivots and unpivots
-- Steps that can't be translated exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB and a `preview` badge when it ran on the preview. Exporting a result that contains preview-only steps asks you to confirm first.
+- On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, merge, date parts, index/duplicate/move columns, fill empty values, rank, running total, percent of total, group by, joins, pivots and unpivots
+- Steps that can't be translated exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB and a `preview` badge when it ran on the preview. Exporting a result that contains preview-only steps, or that stopped at the 1,000,000-row preview limit, asks you to confirm first.
 - Full-file export to Parquet (ZSTD), CSV, JSON or JSONL
 
 **Grid**
@@ -63,7 +63,8 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 
 - It does not upload files or call a server. The web app fetches its libraries from a CDN (see Privacy), and nothing else leaves the page.
 - Excel `.xls` and `.ods` files can be imported but not exported, and cannot be opened with DuckDB.
-- Extract text and window columns are not translated to SQL yet. Full and right joins, and loose key matching, are not in SQL yet.
+- Extract text is not translated to SQL yet. Full and right joins, and loose key matching, are not in SQL yet.
+- Excel exports stop at Excel's own limits of 1,048,575 data rows and 16,384 columns per sheet. Use CSV or Parquet for larger results.
 - The desktop app is a preview.
 - A step is never translated to SQL when SQL could give a different answer from the JavaScript engine.
 
@@ -183,7 +184,7 @@ cd desktop && cargo test --manifest-path src-tauri/Cargo.toml
 
 ## Roadmap
 
-- Translate extract text and window columns to SQL
+- Translate extract text to SQL
 - Full and right joins, and loose key matching, in SQL
 - Open `.xls` and `.ods` files with DuckDB
 

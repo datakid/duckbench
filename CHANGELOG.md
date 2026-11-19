@@ -1,14 +1,12 @@
 # Changelog
 
-## Unreleased — DuckDB 2.0
+## 2.4.0 — DuckDB 2.0 and show your work
 
 - **DuckDB 2.0.0.** The engine moves from DuckDB 1.4.3 (DuckDB-WASM 1.32.0) to DuckDB 2.0.0 (DuckDB-WASM 1.33.1-dev114.0). DuckDB-WASM publishes 2.0.0 builds on its `next` channel, so the version is pinned exactly. The desktop build now bundles the single `base` DuckDB-WASM bundle and mirrors only the `wasm_eh` Excel extension.
 - **SQL compatibility.** Compiled SQL uses `lambda x: …` instead of the arrow form that DuckDB 2.0 disables by default (and removes in 2.1). This works on 1.4, 1.5 and 2.0. SQL typed in the SQL console or an SQL step must use the new lambda syntax too; DuckDB's own error message explains the change.
 - **Behaviour changes in the SQL console.** From DuckDB 1.5, `date_trunc` on a date returns a timestamp, so queries that rely on a date result need `CAST(date_trunc(…) AS DATE)`; the built-in Month buckets pattern already does. The compiled steps are unaffected. Statements that DuckDB 2.0 adds (`CONNECT`, `CREATE TRIGGER`, `CREATE EXTENSION REPOSITORY`, data-modifying CTEs) stay blocked in the console.
 - **SQL console profile.** The operator timing view reads both the 1.x and 2.0 `EXPLAIN ANALYZE` JSON formats.
 - **Build.** The desktop dependency tree gains `qs` and a few small packages through the new DuckDB-WASM build. They are used at build time only and are not shipped.
-
-## Unreleased — Show your work
 
 - **Preview you can trust.** On DuckDB-backed files, steps that ran on the first 1,000,000 rows now carry a `preview` badge, the grid shows a warning naming the first such step, and exporting a result that includes one asks for confirmation (Cancel is focused). Exports of results that ran entirely in DuckDB are unchanged.
 - **Step deltas.** Each step shows rows and columns added or removed (`−1,204 rows · +2 cols`), or `no change` when the shape is the same. Counts on a preview are labelled as such.
@@ -21,6 +19,24 @@
 - **Clean-up suggestions.** A slim bar above the grid can offer up to three dismissible suggestions: change a text column to numbers (at least 20 non-empty values, 95% parse as numbers; codes with leading zeros and very long digit strings are skipped), trim a text column with padded values, and remove fully blank rows. They are computed once in the background on in-memory files only, never on DuckDB-backed files, and each adds a normal undoable step.
 - **Recent files (desktop).** The start screen lists the ten most recent files with one-click open, a Clear action, and matching palette commands. Missing files show an error with Remove from list. The browser version stores nothing. On desktop, Open file now uses the operating system's file dialog so Duckbench knows the file's path.
 - **Copy feedback and keyboard.** Copying values, selections and clipboard exports now say what was copied and show a select-and-copy box when the browser blocks the clipboard. Menus return focus to their trigger when they close.
+
+- **Window steps on the whole file.** Rank, running total and percent of total are translated to SQL on DuckDB-backed files. Ranking or ordering by a text column, and partitions on decimal-number columns, still run on the preview, so results never differ from the JavaScript engine.
+
+### Fixes
+- DuckDB-translated steps now treat tabs, line breaks and other Unicode spaces as blank, as the JavaScript engine does: remove blank rows, is empty and is not empty filters, group-by non-blank and distinct counts, merge skipping, unpivot and pivot distinct counts.
+- JSON files: a column that mixes numbers, text or true/false is stored as text, and a column's type is decided from every row instead of a 2,000-row sample. Text steps on such columns no longer fail.
+- CSV files over 1 MB that contain non-UTF-8 text after the first megabyte are read as Windows-1252 instead of showing replacement characters.
+- Filter value lists sort numbers and dates by value, so −10 comes before −2.
+- The CSV formula guard now exempts only plain numbers. Text such as `-2+3+cmd|…` gets the protective leading apostrophe.
+- Excel import keeps dates readable when a column also holds text. They used to turn into epoch numbers.
+- Excel export makes sheet names valid and unique, including after the 31-character cut and for names that differ only by case. Sheets beyond 1,048,575 rows or 16,384 columns are refused with a message instead of writing a file Excel cannot open.
+- Cancelling a long file load no longer loads the file again when the engine restarts.
+- Exporting a DuckDB-backed result that stopped at the 1,000,000-row preview limit now asks before writing only the first million rows. Full-file export is unchanged.
+- Find ignores a search column that no longer exists instead of failing.
+- DuckDB `INTERVAL` values show as text such as `3 days` instead of an empty object.
+- SQL console: the validator understands `E'…'` and `$$…$$` strings and blocks quoted reader names such as `"read_csv"(…)`, `*_scan` functions, `http_*` functions, `duckdb_secrets`, URLs and database or `.xlsx` file names used as tables.
+- A failed in-memory DuckDB start now reports its error.
+- Desktop: the app no longer checks GitHub for updates at launch. The updater needs signing keys that are not set up yet.
 
 ## 2.3.0 — Interface
 
