@@ -166,6 +166,19 @@ const CASES = [
   ["whitespace merge skip empty", "w", { type: "merge_columns", data: {"columns": ["name", "note"], "name": "m", "separator": "-", "skipEmpty": true} }],
   ["whitespace unpivot skips blanks", "w", { type: "unpivot", data: {"columns": ["name", "note"], "nameColumn": "k", "valueColumn": "v"} }],
   ["whitespace pivot count_distinct", "w", { type: "pivot", data: {"onColumn": "qty", "valueColumn": "name", "fn": "count_distinct", "groupColumns": []} }],
+  ["rank standard desc", "p", { type: "rank", data: {"column": "score", "direction": "desc", "mode": "rank", "partitionBy": [], "name": "Rank"} }],
+  ["rank dense asc per group", "p", { type: "rank", data: {"column": "amount", "direction": "asc", "mode": "dense", "partitionBy": ["grp"], "name": "Rank"} }],
+  ["rank unique per city", "p", { type: "rank", data: {"column": "score", "direction": "desc", "mode": "row_number", "partitionBy": ["city"], "name": "Rank"} }],
+  ["rank percentile per group", "p", { type: "rank", data: {"column": "score", "direction": "asc", "mode": "percent", "partitionBy": ["grp"], "name": "Pct"} }],
+  ["rank dates", "p", { type: "rank", data: {"column": "seen", "direction": "asc", "mode": "rank", "partitionBy": [], "name": "Rank"} }],
+  ["rank text refuses", "p", { type: "rank", data: {"column": "name", "direction": "asc", "mode": "rank", "partitionBy": [], "name": "Rank"} }, "refuse"],
+  ["running total integer", "p", { type: "running_total", data: {"column": "score", "orderBy": "", "partitionBy": [], "name": "Run"} }],
+  ["running total decimals ordered per group", "p", { type: "running_total", data: {"column": "amount", "orderBy": "seen", "partitionBy": ["grp"], "name": "Run"} }],
+  ["running total decimals row order", "p", { type: "running_total", data: {"column": "amount", "orderBy": "", "partitionBy": [], "name": "Run"} }],
+  ["running total text order refuses", "p", { type: "running_total", data: {"column": "score", "orderBy": "name", "partitionBy": [], "name": "Run"} }, "refuse"],
+  ["percent of total per group", "p", { type: "percent_of_total", data: {"column": "amount", "partitionBy": ["grp"], "name": "Share"} }],
+  ["percent of total integer", "p", { type: "percent_of_total", data: {"column": "score", "partitionBy": [], "name": "Share"} }],
+  ["percent of total text refuses", "p", { type: "percent_of_total", data: {"column": "note", "partitionBy": [], "name": "Share"} }, "refuse"],
 ];
 
 const list = document.getElementById('list');

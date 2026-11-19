@@ -498,7 +498,73 @@ function replaceNulls(d, fields, types) {
   return { sql: map.size ? `SELECT ${project(fields, map)} FROM input` : 'SELECT * FROM input', fields };
 }
 
+const ORDERABLE = new Set(['integer', 'number', 'boolean', 'date', 'datetime']);
+
+function windowStep(d, fields, types, build) {
+  const name = d.name?.trim();
+  const parts = d.partitionBy || [];
+  if (!name || types.has(name) || !types.has(d.column)) return null;
+  if (parts.some(p => !types.has(p) || !SIMPLE_KEY.has(types.get(p)))) return null;
+  const made = build(parts.length ? `PARTITION BY ${parts.map(qi).join(', ')} ` : '');
+  if (!made) return null;
+  const inner = made.inner.map(([alias, expr]) => `${expr} AS ${alias}`).join(', ');
+  return {
+    sql: `SELECT ${fields.map(f => qi(f.name)).join(', ')}, ${made.expr} AS ${qi(name)} FROM (SELECT *, ${inner} FROM (SELECT *, row_number() OVER () AS __db_rn FROM input) a) t ORDER BY __db_rn`,
+    fields: [...fields, { name, type: made.type }],
+  };
+}
+
+function rankStep(d, fields, types) {
+  return windowStep(d, fields, types, (part) => {
+    if (!ORDERABLE.has(types.get(d.column))) return null;
+    const c = qi(d.column);
+    const order = `${part}ORDER BY ${c} ${d.direction === 'asc' ? 'ASC' : 'DESC'} NULLS LAST`;
+    if (d.mode === 'dense') return { inner: [['__db_w', `dense_rank() OVER (${order})`]], expr: `CASE WHEN ${c} IS NULL THEN NULL ELSE __db_w END`, type: 'integer' };
+    if (d.mode === 'row_number') return { inner: [['__db_w', `row_number() OVER (${order}, __db_rn)`]], expr: `CASE WHEN ${c} IS NULL THEN NULL ELSE __db_w END`, type: 'integer' };
+    if (d.mode === 'percent') {
+      return {
+        inner: [['__db_w', `rank() OVER (${order})`], ['__db_c', `count(${c}) OVER (${part.trim()})`]],
+        expr: `CASE WHEN ${c} IS NULL THEN NULL WHEN __db_c > 1 THEN CAST(__db_w - 1 AS DOUBLE) / (__db_c - 1) ELSE 0 END`,
+        type: 'number',
+      };
+    }
+    return { inner: [['__db_w', `rank() OVER (${order})`]], expr: `CASE WHEN ${c} IS NULL THEN NULL ELSE __db_w END`, type: 'integer' };
+  });
+}
+
+function runningTotalStep(d, fields, types, ctx) {
+  return windowStep(d, fields, types, (part) => {
+    const kind = types.get(d.column);
+    if (kind !== 'integer' && kind !== 'number') return null;
+    if (d.orderBy && !ORDERABLE.has(types.get(d.orderBy))) return null;
+    const c = qi(d.column);
+    let type = 'integer';
+    if (kind === 'number') {
+      const fractional = ctx.probe(`SELECT EXISTS (SELECT 1 FROM input WHERE ${c} IS NOT NULL AND ${c} <> floor(${c}))`);
+      if (fractional !== true && fractional !== false) return null;
+      if (fractional) type = 'number';
+    }
+    const order = d.orderBy ? `${qi(d.orderBy)} ASC NULLS LAST, __db_rn` : '__db_rn';
+    const running = `coalesce(sum(CAST(${c} AS DOUBLE)) OVER (${part}ORDER BY ${order} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 0)`;
+    const rounded = `${jsRound('__db_w * 1e10')} / 1e10`;
+    return { inner: [['__db_w', running]], expr: type === 'integer' ? `CAST(${rounded} AS BIGINT)` : rounded, type };
+  });
+}
+
+function percentOfTotalStep(d, fields, types) {
+  return windowStep(d, fields, types, (part) => {
+    const kind = types.get(d.column);
+    if (kind !== 'integer' && kind !== 'number') return null;
+    const c = qi(d.column);
+    return {
+      inner: [['__db_w', `sum(CAST(${c} AS DOUBLE)) OVER (${part.trim()})`]],
+      expr: `CASE WHEN ${c} IS NULL OR __db_w = 0 THEN NULL ELSE CAST(${c} AS DOUBLE) / __db_w END`,
+      type: 'number',
+    };
+  });
+}
+
 const resetting = (fn) => (...a) => { seq = 0; return fn(...a); };
-export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep, index_column: indexColumn, duplicate_column: duplicateColumn, move_column: moveColumn, replace_nulls: replaceNulls }).map(([k, f]) => [k, resetting(f)]));
+export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep, index_column: indexColumn, duplicate_column: duplicateColumn, move_column: moveColumn, replace_nulls: replaceNulls, rank: rankStep, running_total: runningTotalStep, percent_of_total: percentOfTotalStep }).map(([k, f]) => [k, resetting(f)]));
 export const MORE_HELPERS = { bind, project, WS, NUM };
 
