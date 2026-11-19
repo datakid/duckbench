@@ -13,6 +13,8 @@ const PMESS = 'id,name,city,score,amount,grp,flag,seen,note\n1,Alice,Cairo,3,10.
 
 const WSP = 'id,name,qty,note\n1,Ann,5,a\n2,"\t",6,\n3,"\u00a0",7,x\n4,"\n",8,\n5,"  ",9,y\n6,Bob,10,"\u2003"\n7,,11,\n8,"\u3000x",12,z\n9,"\r",13,\n10," \ufeff",14,w\n';
 
+const ZERO = 'id,g,v,n,void\n1,a,5,3,\n2,a,-5,-3,\n3,b,0,0,\n4,b,,,\n5,c,1.5,2,\n6,c,2.5,2,\n7,d,,,\n8,,4,5,\n9,,-4,-5,\n10,e,0.1,1,\n11,e,0.2,1,\n12,e,-0.3,-2,\n';
+
 const CASES = [
   ['trim_clean', 'x', { type: 'trim_clean', data: {} }],
   ['replace whole text', 's', { type: 'replace_values', data: { columns: ['status'], match: 'whole', find: 'Pending', replace: 'Open', caseSensitive: true } }],
@@ -179,6 +181,13 @@ const CASES = [
   ["percent of total per group", "p", { type: "percent_of_total", data: {"column": "amount", "partitionBy": ["grp"], "name": "Share"} }],
   ["percent of total integer", "p", { type: "percent_of_total", data: {"column": "score", "partitionBy": [], "name": "Share"} }],
   ["percent of total text refuses", "p", { type: "percent_of_total", data: {"column": "note", "partitionBy": [], "name": "Share"} }, "refuse"],
+  ["percent of total zero and cancelling totals", "z", { type: "percent_of_total", data: {"column": "v", "partitionBy": ["g"], "name": "Share"} }],
+  ["percent of total integers summing to zero", "z", { type: "percent_of_total", data: {"column": "n", "partitionBy": ["g"], "name": "Share"} }],
+  ["percent of total whole column", "z", { type: "percent_of_total", data: {"column": "v", "partitionBy": [], "name": "Share"} }],
+  ["running total skips nulls per group", "z", { type: "running_total", data: {"column": "v", "orderBy": "id", "partitionBy": ["g"], "name": "Run"} }],
+  ["running total integers per group", "z", { type: "running_total", data: {"column": "n", "orderBy": "", "partitionBy": ["g"], "name": "Run"} }],
+  ["running total all-null column refuses", "z", { type: "running_total", data: {"column": "void", "orderBy": "", "partitionBy": [], "name": "Run"} }, "refuse"],
+  ["rank text keys refuse", "x", { type: "rank", data: {"column": "code", "direction": "asc", "mode": "rank", "partitionBy": [], "name": "Rank"} }, "refuse"],
 ];
 
 const list = document.getElementById('list');
@@ -209,8 +218,9 @@ try {
   e.loadText({ id: 'x', name: 'x.csv', text: EXTRA, format: 'csv' });
   e.loadText({ id: 'p', name: 'p.csv', text: PMESS, format: 'csv' });
   e.loadText({ id: 'w', name: 'w.csv', text: WSP, format: 'csv' });
+  e.loadText({ id: 'z', name: 'z.csv', text: ZERO, format: 'csv' });
   const base = {};
-  for (const id of ['s', 'r', 'x', 'p', 'w']) {
+  for (const id of ['s', 'r', 'x', 'p', 'w', 'z']) {
     e.setQueries({ queries: [{ id, name: id, source: { kind: 'file', sourceId: id }, steps: [] }] });
     const r = e.evaluate({ queryId: id, pageSize: 1e6 });
     const cols = r.fields.map((_, c) => r.page.rows.map(row => row[c]));
