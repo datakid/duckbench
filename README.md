@@ -40,7 +40,7 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 **Large files**
 - CSV files up to about 1 GB are streamed into memory
 - Larger files, or any file opened with "Open with DuckDB", are queried in place
-- On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, merge, date parts, index/duplicate/move columns, fill empty values, group by, joins, pivots and unpivots
+- On DuckDB-backed files, most visual steps are translated to SQL and run over the whole file: filters, sorts, column changes, type changes, replace, case, trim, split, merge, date parts, index/duplicate/move columns, fill empty values, rank, running total and percent of total, group by, joins, pivots and unpivots
 - Steps that can't be translated exactly run on a preview of the first 1,000,000 rows. Each step shows a `duck` badge when it ran in DuckDB and a `preview` badge when it ran on the preview. Exporting a result that contains preview-only steps asks you to confirm first.
 - Full-file export to Parquet (ZSTD), CSV, JSON or JSONL
 
@@ -63,13 +63,14 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 
 - It does not upload files or call a server. The web app fetches its libraries from a CDN (see Privacy), and nothing else leaves the page.
 - Excel `.xls` and `.ods` files can be imported but not exported, and cannot be opened with DuckDB.
-- Extract text and window columns are not translated to SQL yet. Full and right joins, and loose key matching, are not in SQL yet.
+- Extract text is not translated to SQL yet. Full and right joins, and loose key matching, are not in SQL yet.
+- Rank by a text column, and running total or percent of total on text, run on the preview: the JavaScript engine orders text with a locale collator that DuckDB cannot reproduce.
 - The desktop app is a preview.
 - A step is never translated to SQL when SQL could give a different answer from the JavaScript engine.
 
 ## Privacy
 
-Files never leave your device. The web app downloads DuckDB-WASM and the Parquet library from jsDelivr on first use. If you open an Excel file with DuckDB, it also downloads DuckDB's Excel extension from `extensions.duckdb.org`. No data is sent anywhere.
+Files never leave your device. The web app downloads DuckDB-WASM and the Parquet library from jsDelivr on first use. If you open an Excel file with DuckDB, it also downloads DuckDB's Excel extension from `extensions.duckdb.org`. DuckDB 2.0 builds for the browser do not include the Parquet and JSON extensions, so the first time a DuckDB feature needs them (reading Parquet or JSON with DuckDB, exporting Parquet or JSON with DuckDB, JSON functions in SQL) they are downloaded from the same host. No data is sent anywhere.
 
 A share link contains a query's steps, including column names and any values typed into steps. It never contains the file or its rows.
 
@@ -154,7 +155,7 @@ npm run build
 - **Desktop shell** (`desktop/src-tauri/`)
   - Atomic file saves, and batch exports that never overwrite
   - A local file protocol that lets DuckDB read large files directly from disk
-  - Auto-update and remembered window size
+  - Remembered window size, and an update check that stays inactive until signing keys and an update endpoint are configured
 
 ## Project structure
 
@@ -182,7 +183,7 @@ cd desktop && cargo test --manifest-path src-tauri/Cargo.toml
 
 ## Roadmap
 
-- Translate extract text and window columns to SQL
+- Translate extract text to SQL
 - Full and right joins, and loose key matching, in SQL
 - Open `.xls` and `.ods` files with DuckDB
 

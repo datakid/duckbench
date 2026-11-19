@@ -1,15 +1,12 @@
 # Changelog
 
-## Unreleased — DuckDB 2.0
+## 2.4.0 — DuckDB 2.0 and show your work
 
 - **DuckDB 2.0.0.** The engine moves from DuckDB 1.4.3 (DuckDB-WASM 1.32.0) to DuckDB 2.0.0 (DuckDB-WASM 1.33.1-dev114.0). DuckDB-WASM publishes 2.0.0 builds on its `next` channel, so the version is pinned exactly. The desktop build now bundles the single `base` DuckDB-WASM bundle and mirrors only the `wasm_eh` Excel extension.
 - **SQL compatibility.** Compiled SQL uses `lambda x: …` instead of the arrow form that DuckDB 2.0 disables by default (and removes in 2.1). This works on 1.4, 1.5 and 2.0. SQL typed in the SQL console or an SQL step must use the new lambda syntax too; DuckDB's own error message explains the change.
 - **Behaviour changes in the SQL console.** From DuckDB 1.5, `date_trunc` on a date returns a timestamp, so queries that rely on a date result need `CAST(date_trunc(…) AS DATE)`; the built-in Month buckets pattern already does. The compiled steps are unaffected. Statements that DuckDB 2.0 adds (`CONNECT`, `CREATE TRIGGER`, `CREATE EXTENSION REPOSITORY`, data-modifying CTEs) stay blocked in the console.
 - **SQL console profile.** The operator timing view reads both the 1.x and 2.0 `EXPLAIN ANALYZE` JSON formats.
 - **Build.** The desktop dependency tree gains `qs` and a few small packages through the new DuckDB-WASM build. They are used at build time only and are not shipped.
-
-## Unreleased — Show your work
-
 - **Preview you can trust.** On DuckDB-backed files, steps that ran on the first 1,000,000 rows now carry a `preview` badge, the grid shows a warning naming the first such step, and exporting a result that includes one asks for confirmation (Cancel is focused). Exports of results that ran entirely in DuckDB are unchanged.
 - **Step deltas.** Each step shows rows and columns added or removed (`−1,204 rows · +2 cols`), or `no change` when the shape is the same. Counts on a preview are labelled as such.
 - **Copy as SQL.** The steps menu and palette can copy the pipeline up to the selected step as one DuckDB statement with a short header. If a later step has no SQL equivalent, the SQL for the steps before it is copied and the step is named. In-memory files show a short explanation instead.
@@ -21,6 +18,17 @@
 - **Clean-up suggestions.** A slim bar above the grid can offer up to three dismissible suggestions: change a text column to numbers (at least 20 non-empty values, 95% parse as numbers; codes with leading zeros and very long digit strings are skipped), trim a text column with padded values, and remove fully blank rows. They are computed once in the background on in-memory files only, never on DuckDB-backed files, and each adds a normal undoable step.
 - **Recent files (desktop).** The start screen lists the ten most recent files with one-click open, a Clear action, and matching palette commands. Missing files show an error with Remove from list. The browser version stores nothing. On desktop, Open file now uses the operating system's file dialog so Duckbench knows the file's path.
 - **Copy feedback and keyboard.** Copying values, selections and clipboard exports now say what was copied and show a select-and-copy box when the browser blocks the clipboard. Menus return focus to their trigger when they close.
+- **Window columns in DuckDB.** Rank, running total and percent of total now run in DuckDB over the whole file instead of on the preview. Rank and running total accept numeric and date keys. Ranking by a text column, and a running total or percent of total on text, still run on the preview because the JavaScript engine orders text with a locale collator that DuckDB cannot reproduce. On decimal columns the DuckDB result matches the JavaScript engine to within 1e-14 (floating-point summation order), not always bit for bit.
+
+### Fixes
+
+- Stale DuckDB working databases in browser storage were never removed, because the cleanup looked in the wrong folder. They are now removed at startup unless another tab is using them, and a failed in-memory open now reports its error.
+- SQL steps now also reject other table scanners (`*_scan`), secret functions (`duckdb_secrets`, `which_secret`) and quoted paths to Excel, database and Arrow files.
+- DuckDB `INTERVAL` results showed meaningless values in the SQL console and grid. They now read like DuckDB's own text, for example `1 year 2 months 3 days 04:05:06`.
+
+### Known limits
+
+- DuckDB 2.0 builds for the browser do not include the Parquet and JSON extensions. DuckDB downloads them from `extensions.duckdb.org` the first time a feature needs them, so those features fail on a network that blocks that host. The desktop build bundles only the Excel extension and does not allow `extensions.duckdb.org`, so they may be unavailable there.
 
 ## 2.3.0 — Interface
 

@@ -1891,7 +1891,7 @@ function installDesktop() {
   renderMast();
   renderImport();
   $('#importScreen').hidden = false;
-  window.duckbench = { store, client, sql, duck, version: '2.3.0', desktop: isDesktop() };
+  window.duckbench = { store, client, sql, duck, version: '2.4.0', desktop: isDesktop() };
   const params = new URLSearchParams(location.search);
   if (params.has('notour')) prefs.set('tourDone', true);
   if (params.has('demo')) await loadSample();
