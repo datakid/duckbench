@@ -11,6 +11,8 @@ const EXTRA = 'id,code,tags,when_txt,amount_txt,flag,name\n1,A-1,"x, y",2026-01-
 
 const PMESS = 'id,name,city,score,amount,grp,flag,seen,note\n1,Alice,Cairo,3,10.5,A,yes,2026-01-05,plain\n2,alice,cairo,3,10.50,a,no,2026-01-05,dup case\n3,ALICE,CAIRO,1,-2.25,A,yes,2026-02-10,\n4,Jose,Madrid,2,0,B,true,2026-03-01,accent\n5,José,Madrid,2,0.0,B,false,,accent2\n6,josé,MADRID,,100,b,yes,2026-03-01,\n7,  Bob,Berlin,5,1000,C,no,2025-12-31,leading space\n8,Bob  ,Berlin,5,1000,C,yes,2026-12-31,trailing space\n9,Bob,Berlin,5,999.999,C,no,2026-01-01,\n10,,Paris,4,,A,yes,2026-04-04,missing name\n11,   ,Paris,4,7,A,no,2026-04-04,blank name\n12,محمد,القاهرة,6,3.14,D,yes,2026-05-05,arabic\n13,مُحمد,القاهرة,6,3.14,D,no,2026-05-05,arabic diacritic\n14,straße,Köln,7,12,E,yes,2026-06-06,eszett\n15,STRASSE,KÖLN,7,12.00,E,no,2026-06-06,\n16,Émile,Lyon,-1,-0.5,F,true,2026-07-07,neg\n17,emile,Lyon,0,0.5,F,false,2026-07-07,\n18,O\'Brien,Dublin,8,1234567.89,G,yes,2026-08-08,"quote ""x"" here"\n19,"Smith, J",Leeds,9,9007199254,G,no,2026-09-09,comma\n20,Zed,Oslo,9,0.1,H,yes,2026-10-10,"multi\nline"\n21,,,,,,,,\n22, , , , , , , ,\n23,Alice,Cairo,3,10.5,A,yes,2026-01-05,plain\n24,Bob,Berlin,5,999.999,C,no,2026-01-01,\n25,Yan,Taipei,2,,B,,,\n26,Yan,Taipei,2,5,B,yes,2026-11-11,x\n27,Ünal,İzmir,4,2,A,no,2026-02-02,turkish dotted\n28,ünal,izmir,4,2,A,no,2026-02-02,\n';
 
+const ZEROS = 'id,g,v,w\n1,a,5,2\n2,a,-5,2\n3,b,2.5,2\n4,b,,2\n5,b,-1,1\n6,c,0,1\n7,c,0,1\n8,,4,3\n9,,,3\n';
+
 const CASES = [
   ['trim_clean', 'x', { type: 'trim_clean', data: {} }],
   ['replace whole text', 's', { type: 'replace_values', data: { columns: ['status'], match: 'whole', find: 'Pending', replace: 'Open', caseSensitive: true } }],
@@ -156,6 +158,27 @@ const CASES = [
   ["sort sales status then quantity", "s", { type: "sort", data: {"keys":[{"column":"status","direction":"asc"},{"column":"quantity","direction":"desc"}],"nullsLast":true} }],
   ["sort sales product (hyphen) refuses", "s", { type: "sort", data: {"keys":[{"column":"product","direction":"asc"}],"nullsLast":true} }, 'refuse'],
   ["sort numbered text refuses", "x", { type: "sort", data: {"keys":[{"column":"code","direction":"asc"}],"nullsLast":true} }, 'refuse'],
+  ['rank score desc standard', 'p', { type: 'rank', data: { column: 'score', direction: 'desc', mode: 'rank', name: 'R' } }],
+  ['rank score asc dense per grp', 'p', { type: 'rank', data: { column: 'score', direction: 'asc', mode: 'dense', partitionBy: ['grp'], name: 'R' } }],
+  ['rank amount row_number per grp with blanks', 'p', { type: 'rank', data: { column: 'amount', direction: 'desc', mode: 'row_number', partitionBy: ['grp'], name: 'R' } }],
+  ['rank percent per grp', 'p', { type: 'rank', data: { column: 'score', direction: 'desc', mode: 'percent', partitionBy: ['grp'], name: 'R' } }],
+  ['rank default mode on sales per category', 's', { type: 'rank', data: { column: 'unit_price', partitionBy: ['category'], name: 'R' } }],
+  ['rank ties and null partition', 'z', { type: 'rank', data: { column: 'w', direction: 'asc', mode: 'rank', partitionBy: ['g'], name: 'R' } }],
+  ['rank order_date', 's', { type: 'rank', data: { column: 'order_date', direction: 'asc', mode: 'dense', name: 'R' } }],
+  ['rank text key refuses', 'x', { type: 'rank', data: { column: 'name', direction: 'asc', mode: 'rank', name: 'R' } }, 'refuse'],
+  ['rank text key on p refuses', 'p', { type: 'rank', data: { column: 'name', direction: 'desc', mode: 'dense', name: 'R' } }, 'refuse'],
+  ['running total amount with blanks', 'p', { type: 'running_total', data: { column: 'amount', name: 'Run' } }],
+  ['running total per grp ordered by score', 'p', { type: 'running_total', data: { column: 'amount', orderBy: 'score', partitionBy: ['grp'], name: 'Run' } }],
+  ['running total integer per region', 's', { type: 'running_total', data: { column: 'quantity', partitionBy: ['region'], name: 'Run' } }],
+  ['running total decimals ordered by date', 's', { type: 'running_total', data: { column: 'unit_price', orderBy: 'order_date', name: 'Run' } }],
+  ['running total with nulls and null partition', 'z', { type: 'running_total', data: { column: 'v', partitionBy: ['g'], name: 'Run' } }],
+  ['running total text column refuses', 'x', { type: 'running_total', data: { column: 'amount_txt', name: 'Run' } }, 'refuse'],
+  ['running total text order refuses', 'p', { type: 'running_total', data: { column: 'amount', orderBy: 'name', name: 'Run' } }, 'refuse'],
+  ['percent of total amount', 'p', { type: 'percent_of_total', data: { column: 'amount', name: 'Share' } }],
+  ['percent of total per grp', 'p', { type: 'percent_of_total', data: { column: 'amount', partitionBy: ['grp'], name: 'Share' } }],
+  ['percent of total zero totals, negatives, nulls', 'z', { type: 'percent_of_total', data: { column: 'v', partitionBy: ['g'], name: 'Share' } }],
+  ['percent of total integer on sales', 's', { type: 'percent_of_total', data: { column: 'quantity', partitionBy: ['region'], name: 'Share' } }],
+  ['percent of total text column refuses', 'x', { type: 'percent_of_total', data: { column: 'amount_txt', name: 'Share' } }, 'refuse'],
 ];
 
 const list = document.getElementById('list');
@@ -185,8 +208,9 @@ try {
   e.loadText({ id: 'r', name: 'r.csv', text: SAMPLE_REGIONS_CSV, format: 'csv' });
   e.loadText({ id: 'x', name: 'x.csv', text: EXTRA, format: 'csv' });
   e.loadText({ id: 'p', name: 'p.csv', text: PMESS, format: 'csv' });
+  e.loadText({ id: 'z', name: 'z.csv', text: ZEROS, format: 'csv' });
   const base = {};
-  for (const id of ['s', 'r', 'x', 'p']) {
+  for (const id of ['s', 'r', 'x', 'p', 'z']) {
     e.setQueries({ queries: [{ id, name: id, source: { kind: 'file', sourceId: id }, steps: [] }] });
     const r = e.evaluate({ queryId: id, pageSize: 1e6 });
     const cols = r.fields.map((_, c) => r.page.rows.map(row => row[c]));
