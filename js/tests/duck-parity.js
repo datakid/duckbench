@@ -307,5 +307,31 @@ try {
     } catch (err) { report(`file import: ${name}`, false, err.message); }
   }
 } catch (err) { report('reader setup', false, err.message); }
+if (duck.opfsAvailable()) {
+  total++;
+  let holder = null;
+  const fsDir = async () => { const root = await navigator.storage.getDirectory(); return (await root.getDirectoryHandle('duckdb', { create: true })).getDirectoryHandle('fs', { create: true }); };
+  const exists = async (dir, name) => { try { await dir.getFileHandle(name); return true; } catch { return false; } };
+  try {
+    const dir = await fsDir();
+    const live = 'duckbench_work_selftest_live.db';
+    const names = ['duckbench_work_selftest_stale.db', 'duckbench_work_selftest_stale.db.wal', live, live + '.wal'];
+    for (const n of names) await dir.getFileHandle(n, { create: true });
+    const code = `self.onmessage = async (e) => { const root = await navigator.storage.getDirectory(); const d = await (await root.getDirectoryHandle('duckdb')).getDirectoryHandle('fs'); const h = await (await d.getFileHandle(e.data)).createSyncAccessHandle(); self.postMessage('held'); self.onmessage = () => { h.close(); self.postMessage('closed'); }; };`;
+    holder = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+    await new Promise((res, rej) => { holder.onmessage = () => res(); holder.onerror = (e) => rej(new Error(e.message)); holder.postMessage(live); });
+    await duck.clearOpfsWork();
+    const left = {};
+    for (const n of names) left[n] = await exists(dir, n);
+    if (left[names[0]] || left[names[1]]) throw new Error('stale work database was not removed');
+    if (!left[live]) throw new Error('a database held by another tab was removed');
+    if (!left[live + '.wal']) throw new Error('the log of a database held by another tab was removed');
+    report('opfs cleanup keeps databases in use and removes stale ones', true); pass++;
+  } catch (err) { report('opfs cleanup keeps databases in use and removes stale ones', false, err.message); }
+  finally {
+    try { if (holder) { await new Promise((res) => { holder.onmessage = () => res(); holder.postMessage('close'); }); holder.terminate(); } } catch {}
+    try { await duck.clearOpfsWork(); } catch {}
+  }
+}
 document.getElementById('score').textContent = `DuckDB parity ${pass}/${total}`;
 console.log(`PARITY ${pass}/${total}`);
