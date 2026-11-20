@@ -85,6 +85,7 @@ export async function ensureDuck() {
       if (workerUrl) URL.revokeObjectURL(workerUrl);
       const storage = await openStorage(db, duckdb);
       const conn = await db.connect();
+      if (LOCAL_LIBS) for (const setting of ['custom_extension_repository', 'autoinstall_extension_repository']) await conn.query(`SET ${setting} = ${sqlStr(LOCAL_EXTENSIONS)}`).catch(() => {});
       let engineVersion = DUCKDB_VERSION;
       try { const v = await conn.query('SELECT version() AS v'); engineVersion = String(v.getChildAt(0).get(0)).replace(/^v/, ''); } catch {}
       Object.assign(state, { duckdb, db, conn, worker, ready: true, engineVersion, storage });
@@ -167,10 +168,12 @@ export async function dropFile(name) {
   try { await state.db.dropFile(name); } catch {}
 }
 
+const LOCAL_EXTENSIONS = new URL('../../vendor/duckdb/extensions', import.meta.url).href;
+
 let excelReady = null;
 export function ensureExcel() {
   if (!excelReady) excelReady = (async () => {
-    if (LOCAL_LIBS) await exec(`SET custom_extension_repository = ${sqlStr(new URL('../../vendor/duckdb/extensions', import.meta.url).href)}`);
+    if (LOCAL_LIBS) await exec(`SET custom_extension_repository = ${sqlStr(LOCAL_EXTENSIONS)}`);
     await exec('INSTALL excel'); await exec('LOAD excel'); return true;
   })().catch((e) => { excelReady = null; throw new Error(`The DuckDB Excel extension could not be loaded (${e.message.split('\n')[0]}). Import the file normally, or save the sheet as CSV.`); });
   return excelReady;

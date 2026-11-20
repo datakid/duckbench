@@ -70,11 +70,13 @@ jobs:
       - name: Prepare bundle and run Rust tests
         run: npm run check
 
-      - name: Check offline Excel extension was bundled
+      - name: Check offline DuckDB extensions were bundled
         shell: bash
         run: |
           for p in wasm_eh; do
-            test -s "dist/vendor/duckdb/extensions/v2.0.0/$p/excel.duckdb_extension.wasm"
+            for e in excel parquet json; do
+              test -s "dist/vendor/duckdb/extensions/v2.0.0/$p/$e.duckdb_extension.wasm"
+            done
           done
 
       - name: Build installer
