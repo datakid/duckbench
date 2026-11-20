@@ -42,7 +42,7 @@
 
 ### Known limits
 
-- DuckDB 2.0 builds for the browser do not include the Parquet and JSON extensions. DuckDB downloads them from `extensions.duckdb.org` the first time a feature needs them (reading Parquet or JSON with DuckDB, exporting Parquet or JSON with DuckDB, JSON functions in SQL), so those features fail on a network that blocks that host. The desktop build mirrors only the Excel extension and does not allow `extensions.duckdb.org`, so they may be unavailable there. Not yet checked on a desktop run.
+- DuckDB 2.0 builds for the browser do not include the Parquet and JSON extensions. DuckDB downloads them from `extensions.duckdb.org` the first time a feature needs them (reading Parquet or JSON with DuckDB, exporting Parquet or JSON with DuckDB, JSON functions in SQL), so those features fail on a network that blocks that host. The desktop build mirrors only the Excel extension and does not allow `extensions.duckdb.org`, so they may be unavailable there. Not yet checked on a desktop run. DuckDB 2.0 made extension linking a link-time choice, and DuckDB-Wasm has not restored static linking of the default extensions yet (duckdb-wasm#2281), so a later DuckDB-Wasm build may remove this limit.
 
 ## 2.3.0 — Interface
 
