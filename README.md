@@ -70,7 +70,7 @@ Duckbench uses two engines. A fast JavaScript engine handles everyday files. [Du
 
 ## Privacy
 
-Files never leave your device. The web app downloads DuckDB-WASM and the Parquet library from jsDelivr on first use. If you open an Excel file with DuckDB, it also downloads DuckDB's Excel extension from `extensions.duckdb.org`. No data is sent anywhere.
+Files never leave your device. The web app downloads DuckDB-WASM and the Parquet library from jsDelivr on first use. If you open an Excel file with DuckDB, it also downloads DuckDB's Excel extension from `extensions.duckdb.org`. DuckDB 2.0 builds for the browser do not include the Parquet and JSON extensions, so the first time a DuckDB feature needs them (reading Parquet or JSON with DuckDB, exporting Parquet or JSON with DuckDB, JSON functions in SQL) they are downloaded from the same host. No data is sent anywhere.
 
 A share link contains a query's steps, including column names and any values typed into steps. It never contains the file or its rows.
 
