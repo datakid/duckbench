@@ -528,6 +528,11 @@ export function maskQuoted(sql, keepIdentifiers = false) {
 const FORBIDDEN = /\b(copy|attach|detach|install|load|pragma|export|import|create|drop|alter|insert|update|delete|truncate|set|reset|call|checkpoint|vacuum|use)\b/i;
 const START = /^\s*(select|with|from|values|pivot|unpivot|summarize|describe|\()/i;
 
+const FILE_EXT = 'csv|tsv|txt|parquet|json|jsonl|ndjson|xlsx|db|duckdb|sqlite|arrow|gz|zst';
+const TABLE_LIST = String.raw`\b(?:from|join)\s+(?:(?:"[^"]*"|[\w.]+|\([^()]*\))(?:\s+(?:as\s+)?[\w"]+)?\s*,\s*)+`;
+const COMMA_JOIN_LITERAL = new RegExp(`${TABLE_LIST}'`, 'i');
+const COMMA_JOIN_QUOTED = new RegExp(`${TABLE_LIST}"(?:[^"]*\\.(?:${FILE_EXT})|[a-z][a-z0-9+.-]*:\\/\\/[^"]*)"`, 'i');
+
 export function validateSql(sql) {
   const s = stripComments(String(sql || '')).trim().replace(/;+\s*$/, '').trim();
   if (!s) return { error: 'Write a SELECT query.' };
@@ -537,7 +542,7 @@ export function validateSql(sql) {
   const m = FORBIDDEN.exec(masked);
   if (m) return { error: `“${m[1].toUpperCase()}” is not allowed in a SQL step. Steps are read-only.` };
   if (/\b(read_\w+|\w+_scan|glob|load_extension|parquet_metadata|parquet_schema|parquet_file_metadata|parquet_kv_metadata|sniff_csv|query|query_table|getenv|http_\w+|duckdb_secrets|which_secret)"?\s*\(/i.test(maskQuoted(s, true))) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
-  if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"([^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|xlsx|db|duckdb|sqlite|arrow|gz|zst)|[a-z][a-z0-9+.-]*:\/\/[^"]*)"/i.test(s)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
+  if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"([^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|xlsx|db|duckdb|sqlite|arrow|gz|zst)|[a-z][a-z0-9+.-]*:\/\/[^"]*)"/i.test(s) || COMMA_JOIN_LITERAL.test(maskQuoted(s, true)) || COMMA_JOIN_QUOTED.test(maskQuoted(s, true))) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
   return { sql: s };
 }
 

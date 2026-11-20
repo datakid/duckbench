@@ -220,6 +220,12 @@ export const TESTS = [
     ok(validateSql('SELECT * FROM "x.parquet"').error, 'quoted file read rejected');
     ok(validateSql("SELECT 'a' FROM input WHERE x = 'from'").sql, 'strings are fine');
   }],
+  ['sql — validator rejects quoted files in comma joins and keeps legitimate commas', () => {
+    const blocked = ["SELECT * FROM input, 'x.csv'", "SELECT * FROM input t, 'x.csv'", "SELECT * FROM input AS t, other o, 'https://example.com/a'", "SELECT * FROM (SELECT 1) t, 'x.parquet'", 'SELECT * FROM input, "x.csv"'];
+    for (const q of blocked) ok(validateSql(q).error, `should be blocked: ${q}`);
+    const allowed = ["SELECT a, 'x.csv' AS f FROM input", "SELECT * FROM input WHERE b IN ('a.csv', 'b.csv')", "SELECT * FROM input ORDER BY a, 'k'", "SELECT * FROM input GROUP BY 1, 'x'", "SELECT * FROM input t, regions r", "SELECT * FROM input WHERE a = 1 AND b IN (1, 'x')"];
+    for (const q of allowed) ok(validateSql(q).sql, `should be accepted: ${q}`);
+  }],
   ['sql — referenced table detection', () => { eq(referencedNames('SELECT * FROM input JOIN regions USING (region)', ['input', 'regions', 'sales']), ['input', 'regions']); eq(referencedNames("SELECT 'sales' FROM input", ['sales', 'input']), ['input']); }],
   ['sql — chained leading SQL steps push down to DuckDB', () => {
     const e = new Engine();
