@@ -2,7 +2,7 @@
 
 The Duckbench desktop app, built with Tauri 2. It runs the same code as the web app. `scripts/prepare.mjs` copies the web app into `dist/` and changes it for desktop:
 
-- **Offline libraries.** DuckDB-WASM, hyparquet and DuckDB's Excel extension are bundled. The app never contacts a CDN.
+- **Offline libraries.** DuckDB-WASM, hyparquet and DuckDB's Excel, Parquet and JSON extensions are bundled. The app never contacts a CDN.
 - **Native files.**
   - Open, Save and Choose-folder use system dialogs.
   - Large files are served to DuckDB through a local `dbfile://` protocol and read directly from disk, without copying.

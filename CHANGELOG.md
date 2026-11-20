@@ -39,10 +39,11 @@
 - Desktop: the app no longer checks GitHub for updates at launch. The updater needs signing keys that are not set up yet.
 - Stale DuckDB working databases in browser storage were never removed, because the cleanup looked in the wrong folder. They are now removed at startup unless another tab is using them.
 - SQL steps now also reject a quoted file in a comma join, such as `FROM input, 'x.csv'`.
+- Desktop: DuckDB Parquet and JSON features work offline. The app now bundles the Parquet and JSON extensions the way it already bundled Excel, and points DuckDB at them.
 
 ### Known limits
 
-- DuckDB 2.0 builds for the browser do not include the Parquet and JSON extensions. DuckDB downloads them from `extensions.duckdb.org` the first time a feature needs them (reading Parquet or JSON with DuckDB, exporting Parquet or JSON with DuckDB, JSON functions in SQL), so those features fail on a network that blocks that host. The desktop build mirrors only the Excel extension and does not allow `extensions.duckdb.org`, so they may be unavailable there. Not yet checked on a desktop run. DuckDB 2.0 made extension linking a link-time choice, and DuckDB-Wasm has not restored static linking of the default extensions yet (duckdb-wasm#2281), so a later DuckDB-Wasm build may remove this limit.
+- DuckDB 2.0 builds for the browser do not include the Parquet and JSON extensions. The web app downloads them from `extensions.duckdb.org` the first time a DuckDB feature needs them (reading Parquet or JSON with DuckDB, exporting Parquet or JSON with DuckDB, JSON functions in SQL), so those features fail in the browser without a connection to that host. The desktop app bundles them, so it works offline. DuckDB 2.0 made extension linking a link-time choice, and DuckDB-Wasm has not restored static linking of the default extensions yet (duckdb-wasm#2281), so a later DuckDB-Wasm build may remove this limit.
 
 ## 2.3.0 — Interface
 
