@@ -10,7 +10,8 @@ const dist = join(desktop, 'dist');
 
 const WEB_ENTRIES = ['index.html', 'demo.html', 'tests.html', 'parity.html', 'selftest.html', 'favicon.svg', 'css', 'fonts', 'js', 'vendor'];
 const DUCKDB_VERSION = '2.0.0';
-const EXCEL_EXT = ['wasm_eh'].map(p => ({ p, url: `https://extensions.duckdb.org/v${DUCKDB_VERSION}/${p}/excel.duckdb_extension.wasm` }));
+const EXTENSIONS = ['excel', 'parquet', 'json'];
+const EXTENSION_FILES = ['wasm_eh'].flatMap(p => EXTENSIONS.map(name => ({ p, name, url: `https://extensions.duckdb.org/v${DUCKDB_VERSION}/${p}/${name}.duckdb_extension.wasm` })));
 
 function fail(msg) {
   console.error(`prepare: ${msg}`);
@@ -83,15 +84,15 @@ async function bundleLibs() {
   await bundle("export * from 'hyparquet-writer';", join(hpOut, 'hyparquet-writer.mjs'));
 }
 
-async function bundleExcelExtension() {
+async function bundleExtensions() {
   const out = join(dist, 'vendor/duckdb/extensions');
-  for (const { p, url } of EXCEL_EXT) {
+  for (const { p, name, url } of EXTENSION_FILES) {
     const dir = join(out, `v${DUCKDB_VERSION}`, p);
     mkdirSync(dir, { recursive: true });
-    const target = join(dir, 'excel.duckdb_extension.wasm');
+    const target = join(dir, `${name}.duckdb_extension.wasm`);
     if (existsSync(target)) continue;
     const res = await fetch(url).catch(() => null);
-    if (!res?.ok) { console.warn(`prepare: could not fetch ${url}; Excel-in-DuckDB will be unavailable offline`); continue; }
+    if (!res?.ok) { console.warn(`prepare: could not fetch ${url}; the DuckDB ${name} extension will be unavailable offline`); continue; }
     writeFileSync(target, Buffer.from(await res.arrayBuffer()));
   }
 }
@@ -119,6 +120,6 @@ copyWeb();
 patchLibs();
 patchCsp();
 await bundleLibs();
-await bundleExcelExtension();
+await bundleExtensions();
 ensureIcons();
 console.log(`prepare: desktop/dist ready (${(sizeOf(dist) / 1048576).toFixed(1)} MB, libraries bundled for offline use)`);
