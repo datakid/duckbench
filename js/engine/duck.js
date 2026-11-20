@@ -29,12 +29,22 @@ function wantsOpfs() {
   try { return JSON.parse(localStorage.getItem('duckbench2.duckOpfs') || 'true') !== false; } catch { return true; }
 }
 
-async function clearOpfsWork() {
+export async function clearOpfsWork() {
   try {
     const root = await navigator.storage.getDirectory();
-    const names = [];
-    for await (const name of root.keys()) if (name.startsWith(OPFS_PREFIX) || name === 'duckbench_tmp') names.push(name);
-    for (const n of names) { try { await root.removeEntry(n, { recursive: true }); } catch {} }
+    const dirs = [root];
+    try { dirs.push(await (await root.getDirectoryHandle('duckdb')).getDirectoryHandle('fs')); } catch {}
+    for (const dir of dirs) {
+      const names = [];
+      for await (const name of dir.keys()) if (name.startsWith(OPFS_PREFIX) || name === 'duckbench_tmp') names.push(name);
+      names.sort((a, b) => a.endsWith('.wal') - b.endsWith('.wal'));
+      const gone = new Set();
+      for (const n of names) {
+        const base = n.endsWith('.wal') ? n.slice(0, -4) : null;
+        if (base && names.includes(base) && !gone.has(base)) continue;
+        try { await dir.removeEntry(n, { recursive: true }); gone.add(n); } catch {}
+      }
+    }
   } catch {}
 }
 
@@ -528,6 +538,11 @@ export function maskQuoted(sql, keepIdentifiers = false) {
 const FORBIDDEN = /\b(copy|attach|detach|install|load|pragma|export|import|create|drop|alter|insert|update|delete|truncate|set|reset|call|checkpoint|vacuum|use)\b/i;
 const START = /^\s*(select|with|from|values|pivot|unpivot|summarize|describe|\()/i;
 
+const FILE_EXT = 'csv|tsv|txt|parquet|json|jsonl|ndjson|xlsx|db|duckdb|sqlite|arrow|gz|zst';
+const TABLE_LIST = String.raw`\b(?:from|join)\s+(?:(?:"[^"]*"|[\w.]+|\([^()]*\))(?:\s+(?:as\s+)?[\w"]+)?\s*,\s*)+`;
+const COMMA_JOIN_LITERAL = new RegExp(`${TABLE_LIST}'`, 'i');
+const COMMA_JOIN_QUOTED = new RegExp(`${TABLE_LIST}"(?:[^"]*\\.(?:${FILE_EXT})|[a-z][a-z0-9+.-]*:\\/\\/[^"]*)"`, 'i');
+
 export function validateSql(sql) {
   const s = stripComments(String(sql || '')).trim().replace(/;+\s*$/, '').trim();
   if (!s) return { error: 'Write a SELECT query.' };
@@ -537,7 +552,7 @@ export function validateSql(sql) {
   const m = FORBIDDEN.exec(masked);
   if (m) return { error: `“${m[1].toUpperCase()}” is not allowed in a SQL step. Steps are read-only.` };
   if (/\b(read_\w+|\w+_scan|glob|load_extension|parquet_metadata|parquet_schema|parquet_file_metadata|parquet_kv_metadata|sniff_csv|query|query_table|getenv|http_\w+|duckdb_secrets|which_secret)"?\s*\(/i.test(maskQuoted(s, true))) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
-  if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"([^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|xlsx|db|duckdb|sqlite|arrow|gz|zst)|[a-z][a-z0-9+.-]*:\/\/[^"]*)"/i.test(s)) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
+  if (/\b(from|join)\s*\(?\s*'/i.test(masked) || /\b(from|join)\s*"([^"]*\.(csv|tsv|txt|parquet|json|jsonl|ndjson|xlsx|db|duckdb|sqlite|arrow|gz|zst)|[a-z][a-z0-9+.-]*:\/\/[^"]*)"/i.test(s) || COMMA_JOIN_LITERAL.test(maskQuoted(s, true)) || COMMA_JOIN_QUOTED.test(maskQuoted(s, true))) return { error: 'SQL steps cannot read files directly. Use the step input and other queries.' };
   return { sql: s };
 }
 
