@@ -7,62 +7,126 @@ on:
         description: Release tag whose Linux packages to test
         required: true
         default: v2.4.0-alpha.4
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag whose packages to download (empty uses the linux-packages artifact of this run)
+        type: string
+        default: ''
 
 jobs:
-  ubuntu:
-    name: ${{ matrix.os }}
+  driver:
+    name: Build tauri-driver
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:22.04
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install base tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libssl-dev zstd
+      - name: Restore tauri-driver
+        id: driver
+        uses: actions/cache@v4
+        with:
+          path: /root/.cargo/bin/tauri-driver
+          key: tauri-driver-ubuntu-22.04-v1
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.driver.outputs.cache-hit != 'true'
+      - name: Install tauri-driver
+        if: steps.driver.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-driver
+          path: /root/.cargo/bin/tauri-driver
+          if-no-files-found: error
+
+  fetch:
+    name: Download release packages
+    if: ${{ inputs.tag != '' }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download
+        run: |
+          mkdir linux-dist
+          cd linux-dist
+          gh release download "${{ inputs.tag }}" --repo "${{ github.repository }}" --pattern '*.deb' --pattern '*.AppImage'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: linux-dist
+          if-no-files-found: error
+
+  test:
+    name: ${{ matrix.name }}
+    needs: [driver, fetch]
+    if: ${{ !cancelled() && needs.driver.result == 'success' && (needs.fetch.result == 'success' || needs.fetch.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    continue-on-error: ${{ !matrix.required }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
+        include:
+          - name: ubuntu-24.04
+            os: ubuntu-24.04
+            container: ''
+            required: true
+          - name: ubuntu-26.04
+            os: ubuntu-26.04
+            container: ''
+            required: true
+          - name: ubuntu-22.04 (container)
+            os: ubuntu-24.04
+            container: ubuntu:22.04
+            required: true
+          - name: ubuntu-26.10 (container)
+            os: ubuntu-24.04
+            container: ubuntu:26.10
+            required: false
     env:
-      TAG: ${{ github.event.inputs.tag || 'v2.4.0-alpha.4' }}
-      GH_TOKEN: ${{ github.token }}
+      DEBIAN_FRONTEND: noninteractive
+      WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: ${{ matrix.container != '' && '1' || '' }}
     steps:
+      - name: Prepare the container
+        if: ${{ matrix.container != '' }}
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl sudo
+
       - uses: actions/checkout@v7
 
-      - name: Download the released Linux packages
-        run: gh release download "$TAG" --repo "${{ github.repository }}" --pattern '*.deb' --pattern '*.AppImage'
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: pkgs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-driver
+          path: bin
 
       - name: System information
         run: |
           . /etc/os-release
-          echo "::notice title=${{ matrix.os }} system::$PRETTY_NAME, glibc $(ldd --version | head -1 | awk '{print $NF}'), kernel $(uname -r)"
-
-      - name: Package availability
-        if: always()
-        run: |
-          sudo apt-get update >/dev/null 2>&1 || true
-          for p in libwebkit2gtk-4.1-0 libwebkit2gtk-6.0-4 webkit2gtk-driver webkitgtk-6.0-driver libgtk-3-0 libgtk-3-0t64 xvfb python3-venv libfuse2 libfuse2t64; do
-            echo "$p => $(apt-cache policy $p 2>/dev/null | sed -n 's/^ *Candidate: //p' | head -1)"
-          done > /tmp/avail.txt
-          echo "::notice title=${{ matrix.os }} packages::$(tr '\n' ';' < /tmp/avail.txt)"
-          echo "::notice title=${{ matrix.os }} search::$(apt-cache search webdriver | grep -i webkit | head -5 | tr '\n' ';')"
-          dpkg-deb -f ./*.deb Depends | sed 's/^/deb depends: /' | head -2
-          echo "::notice title=${{ matrix.os }} deb-depends::$(dpkg-deb -f ./*.deb Depends)"
-          sudo apt-get install -y --dry-run ./*.deb > /tmp/dry.txt 2>&1; echo "dry-run exit=$?"
-          echo "::notice title=${{ matrix.os }} dry-run::$(grep -iE 'E:|unmet|not installable|depends:|but it is not' /tmp/dry.txt | head -6 | tr '\n' ';')"
+          echo "::notice title=${{ matrix.name }} system::$PRETTY_NAME, glibc $(ldd --version | head -1 | awk '{print $NF}'), kernel $(uname -r)"
 
       - name: Install the deb and test tools
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb python3-venv
           sudo apt-get install -y webkit2gtk-driver || sudo apt-get install -y webkitgtk-webdriver
-          sudo apt-get install -y ./*.deb
-          echo "::notice title=${{ matrix.os }} webkit::$(dpkg-query -W -f='${Package} ${Version}' libwebkit2gtk-4.1-0) driver=$(which WebKitWebDriver) gtk=$(dpkg-query -W -f='${Package} ${Version}' 'libgtk-3-0*' 2>/dev/null | head -2 | tr '\n' ' ')"
-
-      - name: Restore tauri-driver
-        id: driver
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/tauri-driver
-          key: tauri-driver-${{ matrix.os }}-v1
-
-      - name: Install tauri-driver
-        if: steps.driver.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver --locked
+          sudo apt-get install -y ./pkgs/*.deb
+          chmod +x bin/tauri-driver
+          sudo cp bin/tauri-driver /usr/local/bin/tauri-driver
+          echo "::notice title=${{ matrix.name }} webkit::$(dpkg-query -W -f='${Package} ${Version}' libwebkit2gtk-4.1-0) driver=$(which WebKitWebDriver)"
 
       - name: Test data
         run: |
@@ -86,5 +150,6 @@ jobs:
         if: always()
         run: |
           export WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11 APPIMAGE_EXTRACT_AND_RUN=1
-          chmod +x ./*.AppImage
-          xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/desktop_smoke_linux.py "$PWD/$(ls *.AppImage | head -1)"
+          APPIMG="$(ls $PWD/pkgs/*.AppImage | head -1)"
+          chmod +x "$APPIMG"
+          xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/desktop_smoke_linux.py "$APPIMG"
