@@ -7,8 +7,6 @@ on:
         description: Release tag whose Linux packages to test
         required: true
         default: v2.4.0-alpha.4
-  push:
-    branches: ['docs/linux-support-details']
 
 jobs:
   ubuntu:

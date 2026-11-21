@@ -34,8 +34,9 @@ chmod +x Duckbench_*_amd64.AppImage && ./Duckbench_*_amd64.AppImage
 
 Both are built on Ubuntu 22.04, which sets those glibc floors.
 
-- **Tested:** Ubuntu 22.04 only, with WebKitGTK 2.50 on a virtual X11 display (Xvfb, software rendering). CI installs the `.deb`, starts the app with the network blocked, and checks the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a 250,000-row CSV and Parquet file from disk. The AppImage was tested the same way in extract-and-run mode.
-- **Expected to work, never run:** Ubuntu 24.04 and Debian 12 (`.deb`); Fedora 36 or newer, openSUSE and Arch (AppImage).
+- **Tested by CI on every release:** Ubuntu 22.04, with WebKitGTK 2.50 on a virtual X11 display (Xvfb, software rendering). CI installs the `.deb`, starts the app with the network blocked, and checks the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a 250,000-row CSV and Parquet file from disk. The AppImage was tested the same way in extract-and-run mode.
+- **Also tested for v2.4.0-alpha.4:** Ubuntu 24.04 (glibc 2.39, WebKitGTK 2.52) and Ubuntu 26.04 (glibc 2.43, WebKitGTK 2.52), both the `.deb` and the AppImage, with the same checks. Run the *Linux compatibility* workflow (Actions tab, with a release tag) to repeat this for another release; it is not part of the release pipeline.
+- **Expected to work, never run:** Debian 12 (`.deb`); Fedora 36 or newer, openSUSE and Arch (AppImage).
 - **Not supported:** Ubuntu 20.04, Debian 11 and older, RHEL, Rocky and AlmaLinux 9 and older, 32-bit systems, ARM.
 - **Not tested at all:** real hardware or GPU rendering, Wayland, the native Open and Save dialogs, drag and drop, and large-file speed.
 - The Linux web view has no OPFS, so DuckDB works in memory. Files are still read in place from disk, but very large sorts or group-bys are limited by free memory.

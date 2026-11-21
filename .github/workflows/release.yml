@@ -240,11 +240,12 @@ jobs:
           | Needs | `libwebkit2gtk-4.1-0` and `libgtk-3-0` from your distribution, and glibc 2.34 or newer | glibc 2.35 or newer. It bundles WebKitGTK 4.1 and GTK, so it is large (about 90 MB, 259 MB unpacked) |
           | Run it | `sudo apt install ./Duckbench___VERSION___amd64.deb` | `chmod +x` the file and run it. It needs FUSE to mount; without FUSE run it with `--appimage-extract-and-run` |
 
-          **What was actually tested.** Only Ubuntu 22.04 on x86_64 (GitHub's CI runner), with WebKitGTK 2.50 on a virtual X11 display (Xvfb, software rendering). CI installs the `.deb`, starts the app and checks, with the network blocked: the DuckDB 2.0 engine starts, Parquet export, JSON export and the Excel extension work offline, and DuckDB reads a 250,000-row CSV and a 250,000-row Parquet file straight from disk. The AppImage was tested the same way, using `--appimage-extract-and-run` (FUSE mounting was not tested).
+          **What CI tests on every release.** Ubuntu 22.04 on x86_64 (GitHub's runner), with WebKitGTK 2.50 on a virtual X11 display (Xvfb, software rendering). CI installs the `.deb`, starts the app and checks, with the network blocked: the DuckDB 2.0 engine starts, Parquet export, JSON export and the Excel extension work offline, and DuckDB reads a 250,000-row CSV and a 250,000-row Parquet file straight from disk. The AppImage was tested the same way, using `--appimage-extract-and-run` (FUSE mounting was not tested).
 
           **Distributions**
-          - **Tested:** Ubuntu 22.04.
-          - **Expected to work, never run:** Ubuntu 24.04 and Debian 12 (use the `.deb`); Fedora 36 or newer, openSUSE and Arch (use the AppImage). They meet the requirements above, but nobody has started the app on them.
+          - **Tested by CI on every release:** Ubuntu 22.04.
+          - **Also tested by hand for v2.4.0-alpha.4 only:** Ubuntu 24.04 and Ubuntu 26.04, both the `.deb` and the AppImage, with the same checks (the *Linux compatibility* workflow). Later releases get that check only when someone runs it.
+          - **Expected to work, never run:** Debian 12 (use the `.deb`); Fedora 36 or newer, openSUSE and Arch (use the AppImage). They meet the requirements above, but nobody has started the app on them.
           - **Not supported:** Ubuntu 20.04, Debian 11 and older (no WebKitGTK 4.1, older glibc). RHEL, Rocky and AlmaLinux 9 and older (glibc below 2.35 for the AppImage, and there is no `.rpm`). 32-bit systems. ARM and aarch64 machines such as a Raspberry Pi (not built). There is no `.rpm`, Flatpak or Snap.
 
           **Limits you should know about**
