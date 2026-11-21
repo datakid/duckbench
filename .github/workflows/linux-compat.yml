@@ -1,0 +1,77 @@
+name: Linux compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose Linux packages to test
+        required: true
+        default: v2.4.0-alpha.4
+  push:
+    branches: ['docs/linux-support-details']
+
+jobs:
+  ubuntu:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
+    env:
+      TAG: ${{ github.event.inputs.tag || 'v2.4.0-alpha.4' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the released Linux packages
+        run: gh release download "$TAG" --repo "${{ github.repository }}" --pattern '*.deb' --pattern '*.AppImage'
+
+      - name: System information
+        run: |
+          . /etc/os-release
+          echo "::notice title=${{ matrix.os }} system::$PRETTY_NAME, glibc $(ldd --version | head -1 | awk '{print $NF}'), kernel $(uname -r)"
+
+      - name: Install the deb and test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb webkit2gtk-driver python3-venv
+          sudo apt-get install -y ./*.deb
+          echo "::notice title=${{ matrix.os }} webkit::$(dpkg-query -W -f='${Package} ${Version}' libwebkit2gtk-4.1-0) driver=$(dpkg-query -W -f='${Version}' webkit2gtk-driver)"
+
+      - name: Restore tauri-driver
+        id: driver
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-${{ matrix.os }}-v1
+
+      - name: Install tauri-driver
+        if: steps.driver.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+
+      - name: Test data
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install selenium duckdb
+          mkdir -p /tmp/probe
+          /tmp/venv/bin/python - <<'PY'
+          import duckdb
+          c = duckdb.connect()
+          c.execute("COPY (SELECT range AS id, 'name_' || range AS name, random() AS v FROM range(250000)) TO '/tmp/probe/big.csv' (HEADER)")
+          c.execute("COPY (SELECT range AS id, 'name_' || range AS name, random() AS v FROM range(250000)) TO '/tmp/probe/data.parquet' (FORMAT PARQUET)")
+          PY
+          echo "127.0.0.1 extensions.duckdb.org cdn.jsdelivr.net" | sudo tee -a /etc/hosts
+
+      - name: Smoke-test the installed deb
+        run: |
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11
+          xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/desktop_smoke_linux.py "$(which duckbench)"
+
+      - name: Smoke-test the AppImage
+        if: always()
+        run: |
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11 APPIMAGE_EXTRACT_AND_RUN=1
+          chmod +x ./*.AppImage
+          xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/desktop_smoke_linux.py "$PWD/$(ls *.AppImage | head -1)"
