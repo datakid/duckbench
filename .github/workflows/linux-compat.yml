@@ -50,9 +50,10 @@ jobs:
       - name: Install the deb and test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb webkit2gtk-driver python3-venv
+          sudo apt-get install -y xvfb python3-venv
+          sudo apt-get install -y webkit2gtk-driver || sudo apt-get install -y webkitgtk-webdriver
           sudo apt-get install -y ./*.deb
-          echo "::notice title=${{ matrix.os }} webkit::$(dpkg-query -W -f='${Package} ${Version}' libwebkit2gtk-4.1-0) driver=$(dpkg-query -W -f='${Version}' webkit2gtk-driver)"
+          echo "::notice title=${{ matrix.os }} webkit::$(dpkg-query -W -f='${Package} ${Version}' libwebkit2gtk-4.1-0) driver=$(which WebKitWebDriver) gtk=$(dpkg-query -W -f='${Package} ${Version}' 'libgtk-3-0*' 2>/dev/null | head -2 | tr '\n' ' ')"
 
       - name: Restore tauri-driver
         id: driver
