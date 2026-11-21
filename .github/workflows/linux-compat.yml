@@ -33,6 +33,20 @@ jobs:
           . /etc/os-release
           echo "::notice title=${{ matrix.os }} system::$PRETTY_NAME, glibc $(ldd --version | head -1 | awk '{print $NF}'), kernel $(uname -r)"
 
+      - name: Package availability
+        if: always()
+        run: |
+          sudo apt-get update >/dev/null 2>&1 || true
+          for p in libwebkit2gtk-4.1-0 libwebkit2gtk-6.0-4 webkit2gtk-driver webkitgtk-6.0-driver libgtk-3-0 libgtk-3-0t64 xvfb python3-venv libfuse2 libfuse2t64; do
+            echo "$p => $(apt-cache policy $p 2>/dev/null | sed -n 's/^ *Candidate: //p' | head -1)"
+          done > /tmp/avail.txt
+          echo "::notice title=${{ matrix.os }} packages::$(tr '\n' ';' < /tmp/avail.txt)"
+          echo "::notice title=${{ matrix.os }} search::$(apt-cache search webdriver | grep -i webkit | head -5 | tr '\n' ';')"
+          dpkg-deb -f ./*.deb Depends | sed 's/^/deb depends: /' | head -2
+          echo "::notice title=${{ matrix.os }} deb-depends::$(dpkg-deb -f ./*.deb Depends)"
+          sudo apt-get install -y --dry-run ./*.deb > /tmp/dry.txt 2>&1; echo "dry-run exit=$?"
+          echo "::notice title=${{ matrix.os }} dry-run::$(grep -iE 'E:|unmet|not installable|depends:|but it is not' /tmp/dry.txt | head -6 | tr '\n' ';')"
+
       - name: Install the deb and test tools
         run: |
           sudo apt-get update
