@@ -20,16 +20,27 @@ The Duckbench desktop app, built with Tauri 2. It runs the same code as the web 
 
 ## Linux
 
-Releases include a `.deb` (Debian, Ubuntu) and an `.AppImage` (other distributions) for x86_64. Both need WebKitGTK 4.1, which Ubuntu 22.04, Debian 12 and Fedora 36 or newer provide.
+Releases include two x86_64 packages. There is no ARM, 32-bit, `.rpm`, Flatpak or Snap build.
+
+| | `.deb` | `.AppImage` |
+|---|---|---|
+| For | Debian, Ubuntu and derivatives | Any other x86_64 distribution |
+| Needs | `libwebkit2gtk-4.1-0` and `libgtk-3-0` from the distribution, glibc 2.34 or newer | glibc 2.35 or newer. It bundles WebKitGTK 4.1 and GTK (about 90 MB, 259 MB unpacked) and needs FUSE to mount, or `--appimage-extract-and-run` |
 
 ```bash
 sudo apt install ./Duckbench_*_amd64.deb
 chmod +x Duckbench_*_amd64.AppImage && ./Duckbench_*_amd64.AppImage
 ```
 
+Both are built on Ubuntu 22.04, which sets those glibc floors.
+
+- **Tested:** Ubuntu 22.04 only, with WebKitGTK 2.50 on a virtual X11 display (Xvfb, software rendering). CI installs the `.deb`, starts the app with the network blocked, and checks the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a 250,000-row CSV and Parquet file from disk. The AppImage was tested the same way in extract-and-run mode.
+- **Expected to work, never run:** Ubuntu 24.04 and Debian 12 (`.deb`); Fedora 36 or newer, openSUSE and Arch (AppImage).
+- **Not supported:** Ubuntu 20.04, Debian 11 and older, RHEL, Rocky and AlmaLinux 9 and older, 32-bit systems, ARM.
+- **Not tested at all:** real hardware or GPU rendering, Wayland, the native Open and Save dialogs, drag and drop, and large-file speed.
 - The Linux web view has no OPFS, so DuckDB works in memory. Files are still read in place from disk, but very large sorts or group-bys are limited by free memory.
-- CI installs the built `.deb`, starts the app under a virtual display with the network blocked, and checks the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a CSV and a Parquet file from disk.
 - Linux builds are unsigned and have no auto-update.
+- The release notes are generated from the text in `.github/workflows/release.yml`. Keep the two in step.
 
 ## Commands
 

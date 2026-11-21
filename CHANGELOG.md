@@ -22,7 +22,7 @@
 
 - **Window steps on the whole file.** Rank, running total and percent of total are translated to SQL on DuckDB-backed files. Ranking or ordering by a text column, and partitions on decimal-number columns, still run on the preview, so results never differ from the JavaScript engine.
 
-- **Linux packages.** Releases now also include a `.deb` and an `.AppImage` for x86_64. CI builds them, installs the `.deb` and smoke-tests the app with the network blocked: the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a CSV and a Parquet file from disk all pass. The Linux web view has no OPFS, so DuckDB runs in memory there.
+- **Linux packages (x86_64).** Releases now also include a `.deb` (Debian, Ubuntu and derivatives; needs WebKitGTK 4.1 and glibc 2.34 or newer) and an `.AppImage` (other distributions; bundles WebKitGTK; needs glibc 2.35 or newer). Both are built on Ubuntu 22.04, and Ubuntu 22.04 is the only distribution tested. CI installs the `.deb` and smoke-tests the app with the network blocked: the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a CSV and a Parquet file from disk all pass. Wayland, real GPU rendering, the native file dialogs and every other distribution are untested. The Linux web view has no OPFS, so DuckDB runs in memory there.
 
 ### Fixes
 - DuckDB-translated steps now treat tabs, line breaks and other Unicode spaces as blank, as the JavaScript engine does: remove blank rows, is empty and is not empty filters, group-by non-blank and distinct counts, merge skipping, unpivot and pivot distinct counts.

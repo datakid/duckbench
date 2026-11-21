@@ -223,13 +223,36 @@ jobs:
           ls -la
 
       - name: Attach packages to the release
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           gh release upload "$TAG" linux-dist/* --clobber
           BODY="$(gh release view "$TAG" --json body --jq .body)"
-          if ! printf '%s' "$BODY" | grep -q 'Linux packages'; then
-            {
-              printf '%s\n\n' "$BODY"
-              echo "Linux packages (x86_64): a \`.deb\` for Debian and Ubuntu (\`sudo apt install ./Duckbench_*_amd64.deb\`) and an \`.AppImage\` for other distributions (make it executable, then run it). They need a distribution that ships WebKitGTK 4.1, such as Ubuntu 22.04, Debian 12 or Fedora 36 or newer. They are not signed and have no auto-update. The Linux web view has no OPFS, so DuckDB works in memory there and very large sorts or group-bys are limited by free memory."
-            } > notes-all.md
+          if ! printf '%s' "$BODY" | grep -q '^## Linux'; then
+            cat > linux-notes.md <<'NOTES'
+          ## Linux (x86_64 only, pre-alpha)
+
+          Two packages are attached, each with a `.sha256` file:
+
+          | | `Duckbench___VERSION___amd64.deb` | `Duckbench___VERSION___amd64.AppImage` |
+          |---|---|---|
+          | For | Debian, Ubuntu and derivatives such as Linux Mint and Pop!_OS | Any other x86_64 distribution (Fedora, openSUSE, Arch and so on) |
+          | Needs | `libwebkit2gtk-4.1-0` and `libgtk-3-0` from your distribution, and glibc 2.34 or newer | glibc 2.35 or newer. It bundles WebKitGTK 4.1 and GTK, so it is large (about 90 MB, 259 MB unpacked) |
+          | Run it | `sudo apt install ./Duckbench___VERSION___amd64.deb` | `chmod +x` the file and run it. It needs FUSE to mount; without FUSE run it with `--appimage-extract-and-run` |
+
+          **What was actually tested.** Only Ubuntu 22.04 on x86_64 (GitHub's CI runner), with WebKitGTK 2.50 on a virtual X11 display (Xvfb, software rendering). CI installs the `.deb`, starts the app and checks, with the network blocked: the DuckDB 2.0 engine starts, Parquet export, JSON export and the Excel extension work offline, and DuckDB reads a 250,000-row CSV and a 250,000-row Parquet file straight from disk. The AppImage was tested the same way, using `--appimage-extract-and-run` (FUSE mounting was not tested).
+
+          **Distributions**
+          - **Tested:** Ubuntu 22.04.
+          - **Expected to work, never run:** Ubuntu 24.04 and Debian 12 (use the `.deb`); Fedora 36 or newer, openSUSE and Arch (use the AppImage). They meet the requirements above, but nobody has started the app on them.
+          - **Not supported:** Ubuntu 20.04, Debian 11 and older (no WebKitGTK 4.1, older glibc). RHEL, Rocky and AlmaLinux 9 and older (glibc below 2.35 for the AppImage, and there is no `.rpm`). 32-bit systems. ARM and aarch64 machines such as a Raspberry Pi (not built). There is no `.rpm`, Flatpak or Snap.
+
+          **Limits you should know about**
+          - DuckDB runs in memory on Linux, because the WebKitGTK web view has no OPFS. Files are still read in place from disk, but very large sorts and group-bys are limited by free memory.
+          - Not tested at all: real hardware or GPU rendering, Wayland, the native Open and Save dialogs, drag and drop, and the speed on large files (the test used 250,000 rows). Expect rough edges.
+          - The Linux builds are unsigned and have no auto-update.
+          NOTES
+            sed -i "s/__VERSION__/$VERSION/g" linux-notes.md
+            { printf '%s\n\n' "$BODY"; cat linux-notes.md; } > notes-all.md
             gh release edit "$TAG" --notes-file notes-all.md
           fi
