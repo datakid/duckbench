@@ -139,3 +139,97 @@ jobs:
               --notes-file notes.md \
               $FLAGS
           fi
+
+  linux:
+    name: Build Linux packages
+    needs: release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev patchelf
+
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          VERSION="${TAG#v}"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Tag '$TAG' is not a valid version (expected e.g. v2.3.0-alpha.1)" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp version into app config
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const f = 'desktop/src-tauri/tauri.conf.json';
+            const c = JSON.parse(fs.readFileSync(f, 'utf8'));
+            c.version = process.env.VERSION;
+            fs.writeFileSync(f, JSON.stringify(c, null, 2) + '\n');
+          "
+
+      - name: Install JS dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Prepare bundle and run Rust tests
+        working-directory: desktop
+        run: npm run check
+
+      - name: Check offline DuckDB extensions were bundled
+        working-directory: desktop
+        run: |
+          for p in wasm_eh; do
+            for e in excel parquet json; do
+              test -s "dist/vendor/duckdb/extensions/v2.0.0/$p/$e.duckdb_extension.wasm"
+            done
+          done
+
+      - name: Build packages
+        working-directory: desktop
+        run: npx tauri build --bundles deb,appimage --config src-tauri/tauri.ci.conf.json
+
+      - name: Collect packages and checksums
+        run: |
+          mkdir -p linux-dist
+          cp desktop/src-tauri/target/release/bundle/deb/*.deb linux-dist/
+          cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage linux-dist/
+          cd linux-dist
+          for f in *; do
+            sha256sum "$f" > "$f.sha256"
+          done
+          ls -la
+
+      - name: Attach packages to the release
+        run: |
+          gh release upload "$TAG" linux-dist/* --clobber
+          BODY="$(gh release view "$TAG" --json body --jq .body)"
+          if ! printf '%s' "$BODY" | grep -q 'Linux packages'; then
+            {
+              printf '%s\n\n' "$BODY"
+              echo "Linux packages (x86_64): a \`.deb\` for Debian and Ubuntu (\`sudo apt install ./Duckbench_*_amd64.deb\`) and an \`.AppImage\` for other distributions (make it executable, then run it). They need a distribution that ships WebKitGTK 4.1, such as Ubuntu 22.04, Debian 12 or Fedora 36 or newer. They are not signed and have no auto-update. The Linux web view has no OPFS, so DuckDB works in memory there and very large sorts or group-bys are limited by free memory."
+            } > notes-all.md
+            gh release edit "$TAG" --notes-file notes-all.md
+          fi
