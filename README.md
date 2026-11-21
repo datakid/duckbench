@@ -110,7 +110,7 @@ To deploy on Vercel, use the "Other" framework preset with no build command. `ve
 
 ### Desktop
 
-The desktop app (Tauri 2) bundles every library, works offline and uses native file dialogs. Large files are read directly from disk without being copied into memory.
+The desktop app (Tauri 2) bundles every library, works offline and uses native file dialogs. Releases include a Windows installer and Linux packages (`.deb` and `.AppImage`). Large files are read directly from disk without being copied into memory.
 
 The desktop app is in preview.
 

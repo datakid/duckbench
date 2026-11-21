@@ -7,7 +7,7 @@ The Duckbench desktop app, built with Tauri 2. It runs the same code as the web 
   - Open, Save and Choose-folder use system dialogs.
   - Large files are served to DuckDB through a local `dbfile://` protocol and read directly from disk, without copying.
   - Saves are atomic, and batch exports never overwrite existing files.
-- **Updates.** The app checks for new releases and installs them on restart.
+- **Updates.** Not enabled yet. The update check stays off until signing keys and an update endpoint are set up (see Signing and updates below).
 - **Window state.** Window size and position are remembered between launches.
 
 ## Requirements
@@ -15,8 +15,21 @@ The Duckbench desktop app, built with Tauri 2. It runs the same code as the web 
 - Node 18+
 - Rust 1.77.2+
 - Platform prerequisites: https://v2.tauri.app/start/prerequisites/
-  - Linux: `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`
+  - Linux: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev patchelf`
   - Windows: WebView2 (the installer downloads it if missing)
+
+## Linux
+
+Releases include a `.deb` (Debian, Ubuntu) and an `.AppImage` (other distributions) for x86_64. Both need WebKitGTK 4.1, which Ubuntu 22.04, Debian 12 and Fedora 36 or newer provide.
+
+```bash
+sudo apt install ./Duckbench_*_amd64.deb
+chmod +x Duckbench_*_amd64.AppImage && ./Duckbench_*_amd64.AppImage
+```
+
+- The Linux web view has no OPFS, so DuckDB works in memory. Files are still read in place from disk, but very large sorts or group-bys are limited by free memory.
+- CI installs the built `.deb`, starts the app under a virtual display with the network blocked, and checks the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a CSV and a Parquet file from disk.
+- Linux builds are unsigned and have no auto-update.
 
 ## Commands
 
@@ -41,13 +54,14 @@ npm run icons
 
 `.github/workflows/ci.yml` runs on every push to `main`, every pull request, and on demand:
 - **Web self-tests:** the browser test suite (`tests.html`) runs in headless Chromium.
+- **Desktop packages (Linux):** runs `npm run check`, builds the `.deb` and `.AppImage`, installs the `.deb` and smoke-tests the installed app (`.github/scripts/desktop_smoke_linux.py`).
 - **Desktop installer (Windows):** runs `npm run check` (bundle preparation and the Rust tests), then builds the NSIS installer and uploads it as the `duckbench-windows-installer` artifact (kept 14 days).
 
 CI builds use `src-tauri/tauri.ci.conf.json`, which turns off update artifacts so no signing key is needed.
 
 ### Pre-alpha releases
 
-`.github/workflows/release.yml` builds the Windows installer and publishes it on the Releases page with a SHA-256 file. Push a tag to start one:
+`.github/workflows/release.yml` builds the Windows installer and publishes it on the Releases page with a SHA-256 file. A second job then builds the Linux `.deb` and `.AppImage` and attaches them to the same release. Push a tag to start one:
 
 ```bash
 git tag v2.3.0-alpha.1
@@ -57,7 +71,7 @@ git push origin v2.3.0-alpha.1
 - The version in the tag is written into the installer, so version numbers don't need editing by hand.
 - A tag with a suffix (`-alpha.1`, `-beta.1`) is published as a **pre-release**. A plain tag such as `v2.3.0` is a normal release.
 - It can also be started from the Actions tab (**Run workflow**) with a tag name.
-- These builds are unsigned and have no auto-update. macOS and Linux builds are not part of the workflow yet.
+- These builds are unsigned and have no auto-update. macOS builds are not part of the workflow yet.
 
 ### Signing and updates (not enabled yet)
 
