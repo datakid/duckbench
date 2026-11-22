@@ -1,0 +1,160 @@
+name: Linux compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose Linux packages to test
+        required: true
+        default: v2.4.0-alpha.4
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag whose packages to download (empty uses the linux-packages artifact of this run)
+        type: string
+        default: ''
+
+jobs:
+  driver:
+    name: Build tauri-driver
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:22.04
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install base tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libssl-dev zstd
+      - name: Restore tauri-driver
+        id: driver
+        uses: actions/cache@v4
+        with:
+          path: driver-root/bin/tauri-driver
+          key: tauri-driver-ubuntu-22.04-v2
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.driver.outputs.cache-hit != 'true'
+      - name: Install tauri-driver
+        if: steps.driver.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked --root driver-root
+      - name: Collect tauri-driver
+        run: |
+          mkdir driver-dist
+          cp driver-root/bin/tauri-driver driver-dist/tauri-driver
+          ls -la driver-dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-driver
+          path: driver-dist
+          if-no-files-found: error
+
+  fetch:
+    name: Download release packages
+    if: ${{ inputs.tag != '' }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download
+        run: |
+          mkdir linux-dist
+          cd linux-dist
+          gh release download "${{ inputs.tag }}" --repo "${{ github.repository }}" --pattern '*.deb' --pattern '*.AppImage'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: linux-dist
+          if-no-files-found: error
+
+  test:
+    name: ${{ matrix.name }}
+    needs: [driver, fetch]
+    if: ${{ !cancelled() && needs.driver.result == 'success' && (needs.fetch.result == 'success' || needs.fetch.result == 'skipped') }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    continue-on-error: ${{ !matrix.required }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-24.04
+            os: ubuntu-24.04
+            container: ''
+            required: true
+          - name: ubuntu-26.04
+            os: ubuntu-26.04
+            container: ''
+            required: true
+          - name: ubuntu-22.04 (container)
+            os: ubuntu-24.04
+            container: ubuntu:22.04
+            required: true
+          - name: ubuntu-26.10 (container)
+            os: ubuntu-24.04
+            container: ubuntu:26.10
+            required: false
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: ${{ matrix.container != '' && '1' || '' }}
+    steps:
+      - name: Prepare the container
+        if: ${{ matrix.container != '' }}
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl sudo
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: pkgs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-driver
+          path: bin
+
+      - name: System information
+        run: |
+          . /etc/os-release
+          echo "::notice title=${{ matrix.name }} system::$PRETTY_NAME, glibc $(ldd --version | head -1 | awk '{print $NF}'), kernel $(uname -r)"
+
+      - name: Install the deb and test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-venv
+          sudo apt-get install -y webkit2gtk-driver || sudo apt-get install -y webkitgtk-webdriver
+          sudo apt-get install -y ./pkgs/*.deb
+          chmod +x bin/tauri-driver
+          sudo cp bin/tauri-driver /usr/local/bin/tauri-driver
+          echo "::notice title=${{ matrix.name }} webkit::$(dpkg-query -W -f='${Package} ${Version}' libwebkit2gtk-4.1-0) driver=$(which WebKitWebDriver)"
+
+      - name: Test data
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install selenium duckdb
+          mkdir -p /tmp/probe
+          /tmp/venv/bin/python - <<'PY'
+          import duckdb
+          c = duckdb.connect()
+          c.execute("COPY (SELECT range AS id, 'name_' || range AS name, random() AS v FROM range(250000)) TO '/tmp/probe/big.csv' (HEADER)")
+          c.execute("COPY (SELECT range AS id, 'name_' || range AS name, random() AS v FROM range(250000)) TO '/tmp/probe/data.parquet' (FORMAT PARQUET)")
+          PY
+          echo "127.0.0.1 extensions.duckdb.org cdn.jsdelivr.net" | sudo tee -a /etc/hosts
+
+      - name: Smoke-test the installed deb
+        run: |
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11
+          xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/desktop_smoke_linux.py "$(which duckbench)"
+
+      - name: Smoke-test the AppImage
+        if: always()
+        run: |
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11 APPIMAGE_EXTRACT_AND_RUN=1
+          APPIMG="$(ls $PWD/pkgs/*.AppImage | head -1)"
+          chmod +x "$APPIMG"
+          xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/desktop_smoke_linux.py "$APPIMG"

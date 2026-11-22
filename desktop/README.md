@@ -34,8 +34,10 @@ chmod +x Duckbench_*_amd64.AppImage && ./Duckbench_*_amd64.AppImage
 
 Both are built on Ubuntu 22.04, which sets those glibc floors.
 
-- **Tested:** Ubuntu 22.04 only, with WebKitGTK 2.50 on a virtual X11 display (Xvfb, software rendering). CI installs the `.deb`, starts the app with the network blocked, and checks the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a 250,000-row CSV and Parquet file from disk. The AppImage was tested the same way in extract-and-run mode.
-- **Expected to work, never run:** Ubuntu 24.04 and Debian 12 (`.deb`); Fedora 36 or newer, openSUSE and Arch (AppImage).
+- **Tested before a release publishes the Linux packages:** Ubuntu 22.04, 24.04 and 26.04, both the `.deb` and the AppImage. The packages are built in an Ubuntu 22.04 container, which sets the glibc floor. The tests use WebKitGTK on a virtual X11 display (Xvfb, software rendering). They install the `.deb`, start the app with the network blocked, and check the DuckDB engine, the bundled Parquet, JSON and Excel extensions, and reading a 250,000-row CSV and Parquet file from disk. The AppImage is started in extract-and-run mode. If a required test fails, the Linux packages are not published.
+- **How the environments run:** Ubuntu 24.04 and 26.04 on real runner VMs. Ubuntu 22.04 inside a container with the WebKit sandbox switched off, because GitHub is retiring its 22.04 runner image. Ubuntu 26.10 also runs in a container, but a failure there does not block publishing.
+- **Run it by hand:** the *Linux compatibility* workflow (Actions tab) repeats these tests on the packages of any existing release tag.
+- **Expected to work, never run:** Debian 12 (`.deb`); Fedora 36 or newer, openSUSE and Arch (AppImage).
 - **Not supported:** Ubuntu 20.04, Debian 11 and older, RHEL, Rocky and AlmaLinux 9 and older, 32-bit systems, ARM.
 - **Not tested at all:** real hardware or GPU rendering, Wayland, the native Open and Save dialogs, drag and drop, and large-file speed.
 - The Linux web view has no OPFS, so DuckDB works in memory. Files are still read in place from disk, but very large sorts or group-bys are limited by free memory.
@@ -65,14 +67,14 @@ npm run icons
 
 `.github/workflows/ci.yml` runs on every push to `main`, every pull request, and on demand:
 - **Web self-tests:** the browser test suite (`tests.html`) runs in headless Chromium.
-- **Desktop packages (Linux):** runs `npm run check`, builds the `.deb` and `.AppImage`, installs the `.deb` and smoke-tests the installed app (`.github/scripts/desktop_smoke_linux.py`).
+- **Desktop packages (Linux):** builds the `.deb` and `.AppImage` in an Ubuntu 22.04 container (so the packages keep a glibc 2.35 floor after GitHub retires its 22.04 runners), then the *Linux compatibility* workflow installs and smoke-tests them on Ubuntu 22.04, 24.04, 26.04 and 26.10 (`.github/scripts/desktop_smoke_linux.py`).
 - **Desktop installer (Windows):** runs `npm run check` (bundle preparation and the Rust tests), then builds the NSIS installer and uploads it as the `duckbench-windows-installer` artifact (kept 14 days).
 
 CI builds use `src-tauri/tauri.ci.conf.json`, which turns off update artifacts so no signing key is needed.
 
 ### Pre-alpha releases
 
-`.github/workflows/release.yml` builds the Windows installer and publishes it on the Releases page with a SHA-256 file. A second job then builds the Linux `.deb` and `.AppImage` and attaches them to the same release. Push a tag to start one:
+`.github/workflows/release.yml` builds the Windows installer and publishes it on the Releases page with a SHA-256 file. A second set of jobs builds the Linux `.deb` and `.AppImage`, tests them with the *Linux compatibility* workflow, and attaches them to the same release only if the required tests pass. Push a tag to start one:
 
 ```bash
 git tag v2.3.0-alpha.1
