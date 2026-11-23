@@ -299,10 +299,16 @@ function splitColumn(d, fields, types, ctx) {
 
 const SIMPLE_KEY = new Set(['text', 'integer', 'boolean', 'date']);
 
+export const looseKeySql = (expr) => `NULLIF(regexp_replace(regexp_replace(lower(${expr}), '[ \\t\\n\\x0b\\f\\r]+', ' ', 'g'), '^ | $', '', 'g'), '')`;
+export const asciiOnlySql = (exprs, from) => `SELECT coalesce(bool_and(${exprs.map(e => `NOT regexp_matches(${e}, '[^\\x00-\\x7f]')`).join(' AND ')}), true) FROM ${from}`;
+const MATCH_MODES_SQL = new Set(['exact', 'loose', 'arabic']);
+
+
 function join(d, fields, types, ctx) {
   const jt = d.joinType || 'left';
   if (!['left', 'inner', 'left_anti', 'left_semi', 'right', 'full', 'right_anti'].includes(jt)) return null;
-  if ((d.matchMode && d.matchMode !== 'exact') || d.matchCount) return null;
+  const mm = d.matchMode || 'exact';
+  if (!MATCH_MODES_SQL.has(mm) || d.matchCount) return null;
   const right = ctx.dep?.(d.rightSource);
   if (!right?.fields?.length || !d.keys?.length) return null;
   const rtypes = new Map(right.fields.map(f => [f.name, f.type]));
@@ -310,14 +316,21 @@ function join(d, fields, types, ctx) {
     const lt = types.get(k.left), rt = rtypes.get(k.right);
     if (!lt || !rt || lt !== rt || !SIMPLE_KEY.has(lt)) return null;
   }
-  const on = d.keys.map(k => `l.${qi(k.left)} = r.${qi(k.right)}`).join(' AND ');
+  const loose = mm !== 'exact';
+  const textKeys = loose ? d.keys.filter(k => types.get(k.left) === 'text') : [];
+  if (textKeys.length) {
+    const leftAscii = ctx.probe(asciiOnlySql(textKeys.map(k => qi(k.left)), 'input'));
+    const rightAscii = ctx.probe(asciiOnlySql(textKeys.map(k => qi(k.right)), `(${right.sql}) t`));
+    if (leftAscii !== true || rightAscii !== true) return null;
+  }
+  const keyEq = (k) => (loose && types.get(k.left) === 'text' ? `${looseKeySql(`l.${qi(k.left)}`)} = ${looseKeySql(`r.${qi(k.right)}`)}` : `l.${qi(k.left)} = r.${qi(k.right)}`);
+  const on = d.keys.map(keyEq).join(' AND ');
   const R = `(${right.sql})`;
   const L = '(SELECT *, row_number() OVER () AS __db_lrn FROM input)';
   const lcols = fields.map(f => `l.${qi(f.name)}`).join(', ');
   if (jt === 'right_anti') {
     const rsrc = `(SELECT *, row_number() OVER () AS __db_rrn FROM ${R})`;
-    const ron = d.keys.map(k => `l.${qi(k.left)} = r.${qi(k.right)}`).join(' AND ');
-    return { sql: `SELECT ${right.fields.map(f => `r.${qi(f.name)}`).join(', ')} FROM ${rsrc} r WHERE NOT EXISTS (SELECT 1 FROM input l WHERE ${ron}) ORDER BY r.__db_rrn`, fields: right.fields.map(f => ({ name: f.name, type: f.type })) };
+    return { sql: `SELECT ${right.fields.map(f => `r.${qi(f.name)}`).join(', ')} FROM ${rsrc} r WHERE NOT EXISTS (SELECT 1 FROM input l WHERE ${on}) ORDER BY r.__db_rrn`, fields: right.fields.map(f => ({ name: f.name, type: f.type })) };
   }
   if (jt === 'left_semi' || jt === 'left_anti') {
     return { sql: `SELECT ${lcols} FROM ${L} l WHERE ${jt === 'left_anti' ? 'NOT ' : ''}EXISTS (SELECT 1 FROM ${R} r WHERE ${on}) ORDER BY l.__db_lrn`, fields };

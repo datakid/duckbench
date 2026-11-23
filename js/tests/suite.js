@@ -244,6 +244,24 @@ export const TESTS = [
     eq(named.fields.map(f => f.name).join(','), 't,n 2,n');
     eq(run({ mode: 'length' }).fields[0].type, 'integer');
   }],
+  ['sql — loose key matching only compiles after an ASCII-only check', () => {
+    const fields = [{ name: 'k', type: 'text' }, { name: 'n', type: 'integer' }];
+    const types = new Map(fields.map(f => [f.name, f.type]));
+    const right = { sql: 'SELECT * FROM rt', fields: [{ name: 'k', type: 'text' }, { name: 'w', type: 'text' }] };
+    const data = { rightSource: 'R', joinType: 'full', matchMode: 'loose', keys: [{ left: 'k', right: 'k' }] };
+    const run = (probe, extra = {}) => MORE.join({ ...data, ...extra }, fields, types, { probe, dep: () => right });
+    ok(run(() => null) === null, 'unknown probe result refuses');
+    ok(run(() => false) === null, 'non-ASCII data refuses');
+    const probed = [];
+    const c = run((sql) => { probed.push(sql); return true; });
+    ok(c && c.sql.includes('lower(l."k")') && c.sql.includes('lower(r."k")'), 'normalises both sides');
+    ok(probed.length === 2 && probed[0].includes('FROM input') && probed[1].includes('FROM (SELECT * FROM rt)'), 'probes both sides');
+    ok(run(() => true, { matchMode: 'arabic' }), 'arabic mode on ASCII data compiles');
+    ok(run(() => true, { matchMode: 'fuzzy' }) === null, 'unknown match modes refuse');
+    ok(run(() => true, { matchCount: true }) === null, 'match counts still refuse');
+    const intKeys = MORE.join({ ...data, keys: [{ left: 'n', right: 'n' }] }, fields, types, { probe: () => null, dep: () => ({ sql: 'SELECT 1', fields: [{ name: 'n', type: 'integer' }] }) });
+    ok(intKeys && !intKeys.sql.includes('lower('), 'non-text keys need no probe');
+  }],
   ['sql — referenced table detection', () => { eq(referencedNames('SELECT * FROM input JOIN regions USING (region)', ['input', 'regions', 'sales']), ['input', 'regions']); eq(referencedNames("SELECT 'sales' FROM input", ['sales', 'input']), ['input']); }],
   ['sql — chained leading SQL steps push down to DuckDB', () => {
     const e = new Engine();

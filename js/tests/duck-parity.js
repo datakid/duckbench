@@ -18,6 +18,11 @@ const ZERO = 'id,g,v,n,void\n1,a,5,3,\n2,a,-5,-3,\n3,b,0,0,\n4,b,,,\n5,c,1.5,2,\
 const JOIN_L = 'id,k,n,v\n1,a,1,10\n2,b,1,20\n3,b,2,30\n4,,1,40\n5,c,1,50\n6,a,2,60\n7,d,9,70\n';
 const JOIN_R = 'k,n,w,z\na,1,ax1,1.5\na,1,ax2,2.5\nb,2,by,3\nc,7,cq,4\ne,1,ex,5\n,1,nullkey,6\nb,1,bx,7\n';
 
+const LOOSE_L = 'id,name,code,n\n1,Alice Smith,A-1,1\n2,"bob  jones",b-2,2\n3," Carol ",C-3,3\n4,DAVE,d-4,4\n5,"eve\tlin",E-5,5\n6,,F-6,6\n7,frank,G-7,7\n8,alice smith,a-1,8\n9,"  ",H-8,9\n10,Dave,d-4,10\n';
+const LOOSE_R = 'name,code,info\nalice smith,a-1,first\nBOB JONES,B-2,second\ncarol,c-3,third\n"dave ",D-4,fourth\nEVE LIN,e-5,fifth\nzed,z-9,sixth\n" ",q-1,blank\nFRANK,g-7,seventh\nAlice  Smith,A-1,again\n';
+const LOOSE_N = 'id,name,n\n1,Zoë,1\n2,zoe,2\n3,ÉLAN,3\n4,elan,4\n5,plain,5\n';
+const LOOSE_M = 'name,info\nzoe,a\nelan,b\nPLAIN,c\n';
+
 const CASES = [
   ['trim_clean', 'x', { type: 'trim_clean', data: {} }],
   ['replace whole text', 's', { type: 'replace_values', data: { columns: ['status'], match: 'whole', find: 'Pending', replace: 'Open', caseSensitive: true } }],
@@ -238,8 +243,26 @@ const CASES = [
   ['join full sales and regions', 's', { type: 'join', data: { rightSource: 'r', joinType: 'full', keys: [{ left: 'region', right: 'region' }] } }],
   ['join right sales and regions', 's', { type: 'join', data: { rightSource: 'r', joinType: 'right', keys: [{ left: 'region', right: 'region' }] } }],
   ['join full with a match count refuses', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }], matchCount: true } }, 'refuse'],
-  ['join right with loose matching refuses', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'k', right: 'k' }], matchMode: 'loose' } }, 'refuse'],
+  ['join right with loose matching on ascii keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'k', right: 'k' }], matchMode: 'loose' } }],
   ['join full with mismatched key types refuses', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'n' }] } }, 'refuse'],
+  ['join left loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'left', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join inner loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'inner', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join right loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'right', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join full loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'full', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join left_anti loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'left_anti', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join left_semi loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'left_semi', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join right_anti loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'right_anti', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join left loose two keys', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'left', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }, { left: 'code', right: 'code' }] } }],
+  ['join full arabic mode on ascii data', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'full', matchMode: 'arabic', keys: [{ left: 'name', right: 'name' }], prefix: 'r_' } }],
+  ['join loose with accented data refuses', 'ln', { type: 'join', data: { rightSource: 'lm', joinType: 'left', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }, 'refuse'],
+  ['join full loose with accented data refuses', 'ln', { type: 'join', data: { rightSource: 'lm', joinType: 'full', matchMode: 'arabic', keys: [{ left: 'name', right: 'name' }] } }, 'refuse'],
+  ['dedupe loose keep first', 'll', { type: 'remove_duplicates', data: { columns: ['name'], matchMode: 'loose' } }],
+  ['dedupe loose keep last', 'll', { type: 'remove_duplicates', data: { columns: ['name'], matchMode: 'loose', keep: 'last' } }],
+  ['dedupe loose ordered', 'll', { type: 'remove_duplicates', data: { columns: ['name'], matchMode: 'loose', orderBy: 'n' } }],
+  ['dedupe loose two columns', 'll', { type: 'remove_duplicates', data: { columns: ['name', 'code'], matchMode: 'loose' } }],
+  ['dedupe arabic mode on ascii data', 'll', { type: 'remove_duplicates', data: { columns: ['code'], matchMode: 'arabic' } }],
+  ['dedupe loose whole row', 'll', { type: 'remove_duplicates', data: { matchMode: 'loose' } }],
+  ['dedupe loose with accented data refuses', 'ln', { type: 'remove_duplicates', data: { columns: ['name'], matchMode: 'loose' } }, 'refuse'],
 ];
 
 const list = document.getElementById('list');
@@ -273,8 +296,12 @@ try {
   e.loadText({ id: 'z', name: 'z.csv', text: ZERO, format: 'csv' });
   e.loadText({ id: 'jl', name: 'jl.csv', text: JOIN_L, format: 'csv' });
   e.loadText({ id: 'jr', name: 'jr.csv', text: JOIN_R, format: 'csv' });
+  e.loadText({ id: 'll', name: 'll.csv', text: LOOSE_L, format: 'csv' });
+  e.loadText({ id: 'lr', name: 'lr.csv', text: LOOSE_R, format: 'csv' });
+  e.loadText({ id: 'ln', name: 'ln.csv', text: LOOSE_N, format: 'csv' });
+  e.loadText({ id: 'lm', name: 'lm.csv', text: LOOSE_M, format: 'csv' });
   const base = {};
-  for (const id of ['s', 'r', 'x', 'p', 'w', 'z', 'jl', 'jr']) {
+  for (const id of ['s', 'r', 'x', 'p', 'w', 'z', 'jl', 'jr', 'll', 'lr', 'ln', 'lm']) {
     e.setQueries({ queries: [{ id, name: id, source: { kind: 'file', sourceId: id }, steps: [] }] });
     const r = e.evaluate({ queryId: id, pageSize: 1e6 });
     const cols = r.fields.map((_, c) => r.page.rows.map(row => row[c]));
