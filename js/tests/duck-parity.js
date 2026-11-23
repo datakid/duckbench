@@ -15,6 +15,9 @@ const WSP = 'id,name,qty,note\n1,Ann,5,a\n2,"\t",6,\n3,"\u00a0",7,x\n4,"\n",8,\n
 
 const ZERO = 'id,g,v,n,void\n1,a,5,3,\n2,a,-5,-3,\n3,b,0,0,\n4,b,,,\n5,c,1.5,2,\n6,c,2.5,2,\n7,d,,,\n8,,4,5,\n9,,-4,-5,\n10,e,0.1,1,\n11,e,0.2,1,\n12,e,-0.3,-2,\n';
 
+const JOIN_L = 'id,k,n,v\n1,a,1,10\n2,b,1,20\n3,b,2,30\n4,,1,40\n5,c,1,50\n6,a,2,60\n7,d,9,70\n';
+const JOIN_R = 'k,n,w,z\na,1,ax1,1.5\na,1,ax2,2.5\nb,2,by,3\nc,7,cq,4\ne,1,ex,5\n,1,nullkey,6\nb,1,bx,7\n';
+
 const CASES = [
   ['trim_clean', 'x', { type: 'trim_clean', data: {} }],
   ['replace whole text', 's', { type: 'replace_values', data: { columns: ['status'], match: 'whole', find: 'Pending', replace: 'Open', caseSensitive: true } }],
@@ -222,6 +225,21 @@ const CASES = [
   ['extract from a number column refuses', 'p', { type: 'extract_text', data: { column: 'score', mode: 'first', count: 1 } }, 'refuse'],
   ['extract empty delimiter refuses', 'x', { type: 'extract_text', data: { column: 'code', mode: 'before', delimiter: '' } }, 'refuse'],
   ['extract letters refuses', 'p', { type: 'extract_text', data: { column: 'name', mode: 'letters' } }, 'refuse'],
+  ['join full one key', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }] } }],
+  ['join full two keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }, { left: 'n', right: 'n' }] } }],
+  ['join full integer key', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'n', right: 'n' }] } }],
+  ['join full prefix and bring subset', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }], prefix: 'r_', bring: ['w'] } }],
+  ['join full with differently named keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'v', right: 'z' }] } }, 'refuse'],
+  ['join right one key', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'k', right: 'k' }] } }],
+  ['join right two keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'k', right: 'k' }, { left: 'n', right: 'n' }] } }],
+  ['join right integer key and prefix', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'n', right: 'n' }], prefix: 'r_' } }],
+  ['join right anti', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right_anti', keys: [{ left: 'k', right: 'k' }] } }],
+  ['join right anti two keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right_anti', keys: [{ left: 'k', right: 'k' }, { left: 'n', right: 'n' }] } }],
+  ['join full sales and regions', 's', { type: 'join', data: { rightSource: 'r', joinType: 'full', keys: [{ left: 'region', right: 'region' }] } }],
+  ['join right sales and regions', 's', { type: 'join', data: { rightSource: 'r', joinType: 'right', keys: [{ left: 'region', right: 'region' }] } }],
+  ['join full with a match count refuses', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }], matchCount: true } }, 'refuse'],
+  ['join right with loose matching refuses', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'k', right: 'k' }], matchMode: 'loose' } }, 'refuse'],
+  ['join full with mismatched key types refuses', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'n' }] } }, 'refuse'],
 ];
 
 const list = document.getElementById('list');
@@ -253,8 +271,10 @@ try {
   e.loadText({ id: 'p', name: 'p.csv', text: PMESS, format: 'csv' });
   e.loadText({ id: 'w', name: 'w.csv', text: WSP, format: 'csv' });
   e.loadText({ id: 'z', name: 'z.csv', text: ZERO, format: 'csv' });
+  e.loadText({ id: 'jl', name: 'jl.csv', text: JOIN_L, format: 'csv' });
+  e.loadText({ id: 'jr', name: 'jr.csv', text: JOIN_R, format: 'csv' });
   const base = {};
-  for (const id of ['s', 'r', 'x', 'p', 'w', 'z']) {
+  for (const id of ['s', 'r', 'x', 'p', 'w', 'z', 'jl', 'jr']) {
     e.setQueries({ queries: [{ id, name: id, source: { kind: 'file', sourceId: id }, steps: [] }] });
     const r = e.evaluate({ queryId: id, pageSize: 1e6 });
     const cols = r.fields.map((_, c) => r.page.rows.map(row => row[c]));
@@ -266,10 +286,11 @@ try {
     total++;
     try {
       const step = { id: 'p', ...migrateStep(raw) };
-      e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: src }, steps: [step] }, { id: 'r', name: 'regions', source: { kind: 'file', sourceId: 'r' }, steps: [] }] });
+      const rs = step.data?.rightSource && step.data.rightSource !== 'r' && base[step.data.rightSource] ? step.data.rightSource : null;
+      e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: src }, steps: [step] }, { id: 'r', name: 'regions', source: { kind: 'file', sourceId: 'r' }, steps: [] }, ...(rs ? [{ id: rs, name: rs, source: { kind: 'file', sourceId: rs }, steps: [] }] : [])] });
       const js = e.evaluate({ queryId: 'q', pageSize: 1e6 });
       if (js.error || js.fullError) throw new Error('JS: ' + (js.error || js.fullError.message));
-      const c = await compileWithProbes(step, base[src].sql, base[src].fields, { r: base.r });
+      const c = await compileWithProbes(step, base[src].sql, base[src].fields, { r: base.r, ...(rs ? { [rs]: base[rs] } : {}) });
       if (expect === 'refuse') { if (c) throw new Error('compiled but should refuse'); report(name, true); pass++; continue; }
       if (!c) {
         const { MORE } = await import('../engine/compile-sql.js');

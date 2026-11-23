@@ -301,7 +301,7 @@ const SIMPLE_KEY = new Set(['text', 'integer', 'boolean', 'date']);
 
 function join(d, fields, types, ctx) {
   const jt = d.joinType || 'left';
-  if (!['left', 'inner', 'left_anti', 'left_semi'].includes(jt)) return null;
+  if (!['left', 'inner', 'left_anti', 'left_semi', 'right', 'full', 'right_anti'].includes(jt)) return null;
   if ((d.matchMode && d.matchMode !== 'exact') || d.matchCount) return null;
   const right = ctx.dep?.(d.rightSource);
   if (!right?.fields?.length || !d.keys?.length) return null;
@@ -314,6 +314,11 @@ function join(d, fields, types, ctx) {
   const R = `(${right.sql})`;
   const L = '(SELECT *, row_number() OVER () AS __db_lrn FROM input)';
   const lcols = fields.map(f => `l.${qi(f.name)}`).join(', ');
+  if (jt === 'right_anti') {
+    const rsrc = `(SELECT *, row_number() OVER () AS __db_rrn FROM ${R})`;
+    const ron = d.keys.map(k => `l.${qi(k.left)} = r.${qi(k.right)}`).join(' AND ');
+    return { sql: `SELECT ${right.fields.map(f => `r.${qi(f.name)}`).join(', ')} FROM ${rsrc} r WHERE NOT EXISTS (SELECT 1 FROM input l WHERE ${ron}) ORDER BY r.__db_rrn`, fields: right.fields.map(f => ({ name: f.name, type: f.type })) };
+  }
   if (jt === 'left_semi' || jt === 'left_anti') {
     return { sql: `SELECT ${lcols} FROM ${L} l WHERE ${jt === 'left_anti' ? 'NOT ' : ''}EXISTS (SELECT 1 FROM ${R} r WHERE ${on}) ORDER BY l.__db_lrn`, fields };
   }
@@ -329,8 +334,17 @@ function join(d, fields, types, ctx) {
     sel.push(`r.${qi(b)} AS ${qi(name)}`);
   }
   const rsrc = `(SELECT *, row_number() OVER () AS __db_rrn FROM ${R})`;
+  const fromRight = jt === 'right' || jt === 'full';
+  const lsel = fromRight
+    ? fields.map(f => {
+      const kp = d.keys.findIndex(k => k.left === f.name);
+      return kp >= 0 ? `CASE WHEN l.__db_lrn IS NULL THEN r.${qi(d.keys[kp].right)} ELSE l.${qi(f.name)} END AS ${qi(f.name)}` : `l.${qi(f.name)}`;
+    }).join(', ')
+    : lcols;
+  const joinWord = { inner: 'INNER', left: 'LEFT', right: 'RIGHT', full: 'FULL OUTER' }[jt];
+  const order = jt === 'right' ? 'r.__db_rrn, l.__db_lrn' : jt === 'full' ? 'l.__db_lrn NULLS LAST, r.__db_rrn' : 'l.__db_lrn, r.__db_rrn NULLS FIRST';
   return {
-    sql: `SELECT ${[lcols, ...sel].join(', ')} FROM ${L} l ${jt === 'inner' ? 'INNER' : 'LEFT'} JOIN ${rsrc} r ON ${on} ORDER BY l.__db_lrn, r.__db_rrn NULLS FIRST`,
+    sql: `SELECT ${[lsel, ...sel].join(', ')} FROM ${L} l ${joinWord} JOIN ${rsrc} r ON ${on} ORDER BY ${order}`,
     fields: [...fields, ...extra],
   };
 }
