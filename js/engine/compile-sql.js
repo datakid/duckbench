@@ -299,10 +299,16 @@ function splitColumn(d, fields, types, ctx) {
 
 const SIMPLE_KEY = new Set(['text', 'integer', 'boolean', 'date']);
 
+export const looseKeySql = (expr) => `NULLIF(regexp_replace(regexp_replace(lower(${expr}), '[ \\t\\n\\x0b\\f\\r]+', ' ', 'g'), '^ | $', '', 'g'), '')`;
+export const asciiOnlySql = (exprs, from) => `SELECT coalesce(bool_and(${exprs.map(e => `NOT regexp_matches(${e}, '[^\\x00-\\x7f]')`).join(' AND ')}), true) FROM ${from}`;
+const MATCH_MODES_SQL = new Set(['exact', 'loose', 'arabic']);
+
+
 function join(d, fields, types, ctx) {
   const jt = d.joinType || 'left';
-  if (!['left', 'inner', 'left_anti', 'left_semi'].includes(jt)) return null;
-  if ((d.matchMode && d.matchMode !== 'exact') || d.matchCount) return null;
+  if (!['left', 'inner', 'left_anti', 'left_semi', 'right', 'full', 'right_anti'].includes(jt)) return null;
+  const mm = d.matchMode || 'exact';
+  if (!MATCH_MODES_SQL.has(mm) || d.matchCount) return null;
   const right = ctx.dep?.(d.rightSource);
   if (!right?.fields?.length || !d.keys?.length) return null;
   const rtypes = new Map(right.fields.map(f => [f.name, f.type]));
@@ -310,10 +316,22 @@ function join(d, fields, types, ctx) {
     const lt = types.get(k.left), rt = rtypes.get(k.right);
     if (!lt || !rt || lt !== rt || !SIMPLE_KEY.has(lt)) return null;
   }
-  const on = d.keys.map(k => `l.${qi(k.left)} = r.${qi(k.right)}`).join(' AND ');
+  const loose = mm !== 'exact';
+  const textKeys = loose ? d.keys.filter(k => types.get(k.left) === 'text') : [];
+  if (textKeys.length) {
+    const leftAscii = ctx.probe(asciiOnlySql(textKeys.map(k => qi(k.left)), 'input'));
+    const rightAscii = ctx.probe(asciiOnlySql(textKeys.map(k => qi(k.right)), `(${right.sql}) t`));
+    if (leftAscii !== true || rightAscii !== true) return null;
+  }
+  const keyEq = (k) => (loose && types.get(k.left) === 'text' ? `${looseKeySql(`l.${qi(k.left)}`)} = ${looseKeySql(`r.${qi(k.right)}`)}` : `l.${qi(k.left)} = r.${qi(k.right)}`);
+  const on = d.keys.map(keyEq).join(' AND ');
   const R = `(${right.sql})`;
   const L = '(SELECT *, row_number() OVER () AS __db_lrn FROM input)';
   const lcols = fields.map(f => `l.${qi(f.name)}`).join(', ');
+  if (jt === 'right_anti') {
+    const rsrc = `(SELECT *, row_number() OVER () AS __db_rrn FROM ${R})`;
+    return { sql: `SELECT ${right.fields.map(f => `r.${qi(f.name)}`).join(', ')} FROM ${rsrc} r WHERE NOT EXISTS (SELECT 1 FROM input l WHERE ${on}) ORDER BY r.__db_rrn`, fields: right.fields.map(f => ({ name: f.name, type: f.type })) };
+  }
   if (jt === 'left_semi' || jt === 'left_anti') {
     return { sql: `SELECT ${lcols} FROM ${L} l WHERE ${jt === 'left_anti' ? 'NOT ' : ''}EXISTS (SELECT 1 FROM ${R} r WHERE ${on}) ORDER BY l.__db_lrn`, fields };
   }
@@ -329,8 +347,17 @@ function join(d, fields, types, ctx) {
     sel.push(`r.${qi(b)} AS ${qi(name)}`);
   }
   const rsrc = `(SELECT *, row_number() OVER () AS __db_rrn FROM ${R})`;
+  const fromRight = jt === 'right' || jt === 'full';
+  const lsel = fromRight
+    ? fields.map(f => {
+      const kp = d.keys.findIndex(k => k.left === f.name);
+      return kp >= 0 ? `CASE WHEN l.__db_lrn IS NULL THEN r.${qi(d.keys[kp].right)} ELSE l.${qi(f.name)} END AS ${qi(f.name)}` : `l.${qi(f.name)}`;
+    }).join(', ')
+    : lcols;
+  const joinWord = { inner: 'INNER', left: 'LEFT', right: 'RIGHT', full: 'FULL OUTER' }[jt];
+  const order = jt === 'right' ? 'r.__db_rrn, l.__db_lrn' : jt === 'full' ? 'l.__db_lrn NULLS LAST, r.__db_rrn' : 'l.__db_lrn, r.__db_rrn NULLS FIRST';
   return {
-    sql: `SELECT ${[lcols, ...sel].join(', ')} FROM ${L} l ${jt === 'inner' ? 'INNER' : 'LEFT'} JOIN ${rsrc} r ON ${on} ORDER BY l.__db_lrn, r.__db_rrn NULLS FIRST`,
+    sql: `SELECT ${[lsel, ...sel].join(', ')} FROM ${L} l ${joinWord} JOIN ${rsrc} r ON ${on} ORDER BY ${order}`,
     fields: [...fields, ...extra],
   };
 }
@@ -564,7 +591,97 @@ function percentOfTotalStep(d, fields, types) {
   });
 }
 
+const RE_SYNTAX = new Set(['^', '$', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '/']);
+const RE_DOT = '[^\\n\\r\\x{2028}\\x{2029}]';
+
+function re2Pattern(pattern) {
+  try { new RegExp(pattern, 'u'); } catch { return null; }
+  let out = '', groups = 0, i = 0;
+  const p = String(pattern);
+  while (i < p.length) {
+    const ch = p[i];
+    if (ch === '\\') {
+      const n = p[i + 1];
+      if (n === undefined || !(/[dDwWbBtnr]/.test(n) || RE_SYNTAX.has(n))) return null;
+      out += ch + n; i += 2;
+    } else if (ch === '(') {
+      if (p[i + 1] === '?') { if (p[i + 2] !== ':') return null; out += '(?:'; i += 3; } else { groups++; out += ch; i++; }
+    } else if (ch === '[') {
+      out += ch; i++;
+      if (p[i] === '^') { out += '^'; i++; }
+      if (p[i] === ']' || p[i] === undefined) return null;
+      while (p[i] !== ']') {
+        if (p[i] === undefined || p[i] === '[') return null;
+        if (p[i] === '\\') {
+          const n = p[i + 1];
+          if (n === undefined || !(/[dDwWtnr\-]/.test(n) || RE_SYNTAX.has(n))) return null;
+          out += p[i] + n; i += 2;
+        } else { out += p[i]; i++; }
+      }
+      out += ']'; i++;
+    } else if (ch === '{') {
+      const m = /^\{(\d+)(?:,(\d*))?\}/.exec(p.slice(i));
+      if (!m || Number(m[1]) > 1000 || (m[2] && Number(m[2]) > 1000)) return null;
+      out += m[0]; i += m[0].length;
+    } else if (ch === '.') { out += RE_DOT; i++; }
+    else if (ch === ']' || ch === '}') return null;
+    else { out += ch; i++; }
+  }
+  return { re: out, groups };
+}
+
+const re2Literal = (str) => [...str].map((ch) => {
+  const cp = ch.codePointAt(0);
+  if (cp > 127 || /[A-Za-z0-9_ ]/.test(ch)) return ch;
+  return /[!-/:-@[-`{-~]/.test(ch) ? `\\${ch}` : `\\x{${cp.toString(16)}}`;
+}).join('');
+
+function extractText(d, fields, types, ctx) {
+  const col = d.column;
+  if (types.get(col) !== 'text') return null;
+  const c = qi(col);
+  const n = Math.trunc(Math.max(0, Number(d.count) || 0));
+  const dl = unescapeDelimiter(d.delimiter ?? ''), dl2 = unescapeDelimiter(d.delimiter2 ?? '');
+  let e, type = 'text', retype = false;
+  switch (d.mode) {
+    case 'first': e = `left(${c}, ${n})`; break;
+    case 'last': e = `right(${c}, ${n})`; break;
+    case 'range': e = `substring(${c}, ${Math.trunc(Math.max(1, Number(d.start) || 1))}, ${n})`; break;
+    case 'before': if (!dl) return null; e = `regexp_extract(${c}, ${sqlStr(`(?s)^(.*${d.fromEnd ? '' : '?'})${re2Literal(dl)}`)}, 1)`; break;
+    case 'after': if (!dl) return null; e = `regexp_extract(${c}, ${sqlStr(`(?s)^.*${d.fromEnd ? '' : '?'}${re2Literal(dl)}(.*)$`)}, 1)`; break;
+    case 'between': if (!dl || !dl2) return null; e = `regexp_extract(${c}, ${sqlStr(`(?s)${re2Literal(dl)}(.*?)${re2Literal(dl2)}`)}, 1)`; break;
+    case 'regex': {
+      const r = re2Pattern(d.pattern);
+      if (!r) return null;
+      e = r.groups ? `regexp_extract(${c}, ${sqlStr(r.re)}, 1)` : `regexp_extract(${c}, ${sqlStr(r.re)})`;
+      retype = true;
+      break;
+    }
+    case 'digits': e = `regexp_replace(${c}, '[^0-9]+', '', 'g')`; retype = true; break;
+    case 'length': e = `length(${c})`; type = 'integer'; break;
+    default: return null;
+  }
+  let out = type === 'integer' ? e : `NULLIF(${e}, '')`;
+  if (retype) {
+    const kinds = parseKinds(ctx.probe(inferSql([out])));
+    if (!kinds) return null;
+    const t = kindsToType(kinds[0]);
+    if (!t) return null;
+    type = t;
+    out = castInferred(out, t);
+  }
+  const name = d.name?.trim();
+  const outName = name ? uniqueName(name, new Set(fields.map(f => f.name)), ' ') : col;
+  const sel = [], outFields = [];
+  for (const f of fields) {
+    if (f.name === col && !name) { sel.push(`${out} AS ${qi(col)}`); outFields.push({ name: col, type }); continue; }
+    sel.push(qi(f.name)); outFields.push(f);
+    if (f.name === col && name) { sel.push(`${out} AS ${qi(outName)}`); outFields.push({ name: outName, type }); }
+  }
+  return { sql: `SELECT ${sel.join(', ')} FROM input`, fields: outFields };
+}
+
 const resetting = (fn) => (...a) => { seq = 0; return fn(...a); };
-export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep, index_column: indexColumn, duplicate_column: duplicateColumn, move_column: moveColumn, replace_nulls: replaceNulls, rank: rankStep, running_total: runningTotalStep, percent_of_total: percentOfTotalStep }).map(([k, f]) => [k, resetting(f)]));
+export const MORE = Object.fromEntries(Object.entries({ trim_clean: trimClean, replace_values: replaceValues, change_type: changeType, change_case: changeCase, split_column: splitColumn, join, pivot, merge_columns: mergeColumns, unpivot: unpivotStep, date_part: datePartStep, index_column: indexColumn, duplicate_column: duplicateColumn, move_column: moveColumn, replace_nulls: replaceNulls, rank: rankStep, running_total: runningTotalStep, extract_text: extractText, percent_of_total: percentOfTotalStep }).map(([k, f]) => [k, resetting(f)]));
 export const MORE_HELPERS = { bind, project, WS, NUM };
 

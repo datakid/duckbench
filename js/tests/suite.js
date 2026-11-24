@@ -6,6 +6,7 @@ import { evaluateFormula } from '../core/formula.js';
 import { Frame } from '../core/frame.js';
 import { distinctValues } from '../core/profile.js';
 import { SAMPLE_SALES_CSV, SAMPLE_REGIONS_CSV } from '../app/samples.js';
+import { MORE } from '../engine/compile-sql.js';
 import { validateSql, withInput, tableNameFor, referencedNames, arrowType, convertValue as duckConvert, decimalFromWords, readerFor, intervalColumn } from '../engine/duck.js';
 import { CsvStream, parseCSV as parseCsvAll } from '../core/csv.js';
 import { highlightSql } from '../ui/sqleditor.js';
@@ -226,6 +227,41 @@ export const TESTS = [
     const allowed = ["SELECT a, 'x.csv' AS f FROM input", "SELECT * FROM input WHERE b IN ('a.csv', 'b.csv')", "SELECT * FROM input ORDER BY a, 'k'", "SELECT * FROM input GROUP BY 1, 'x'", "SELECT * FROM input t, regions r", "SELECT * FROM input WHERE a = 1 AND b IN (1, 'x')"];
     for (const q of allowed) ok(validateSql(q).sql, `should be accepted: ${q}`);
   }],
+  ['sql — extract text only translates what JavaScript and RE2 agree on', () => {
+    const fields = [{ name: 't', type: 'text' }, { name: 'n', type: 'integer' }];
+    const types = new Map(fields.map(f => [f.name, f.type]));
+    const ctx = { probe: () => 'T', dep: () => null };
+    const run = (data) => MORE.extract_text({ column: 't', ...data }, fields, types, ctx);
+    const unsafe = ['(', '[a', '(?=a)a', '(?<=a)b', '(?!a)b', '(?<n>a)', '\\s+', '\\S', '\\p{L}+', '(a)\\1', '\\u0041', '\\x41', '\\0', '[a[:]', '[]a]', 'a{1001}', '\\k<n>'];
+    for (const pattern of unsafe) ok(run({ mode: 'regex', pattern }) === null, `should refuse: ${pattern}`);
+    for (const pattern of ['(\\d+)', '.', '[a-z]+', '^(\\w+)-', '(?:ab)+(c)?', 'a{2,4}', '[\\]x]+', '\\/']) ok(run({ mode: 'regex', pattern }), `should compile: ${pattern}`);
+    ok(run({ mode: 'regex', pattern: 'a.b' }).sql.includes('[^\\n\\r\\x{2028}\\x{2029}]'), 'dot becomes the JavaScript definition');
+    ok(run({ mode: 'before', delimiter: '.(' }).sql.includes('\\.\\('), 'delimiters are escaped');
+    ok(run({ mode: 'before', delimiter: '' }) === null && run({ mode: 'between', delimiter: '-', delimiter2: '' }) === null, 'empty delimiters refuse');
+    ok(run({ mode: 'letters' }) === null && run({ mode: 'nope' }) === null && run({}) === null, 'letters and unknown modes refuse');
+    ok(MORE.extract_text({ column: 'n', mode: 'first', count: 1 }, fields, types, ctx) === null, 'non-text columns refuse');
+    const named = run({ mode: 'first', count: 2, name: 'n' });
+    eq(named.fields.map(f => f.name).join(','), 't,n 2,n');
+    eq(run({ mode: 'length' }).fields[0].type, 'integer');
+  }],
+  ['sql — loose key matching only compiles after an ASCII-only check', () => {
+    const fields = [{ name: 'k', type: 'text' }, { name: 'n', type: 'integer' }];
+    const types = new Map(fields.map(f => [f.name, f.type]));
+    const right = { sql: 'SELECT * FROM rt', fields: [{ name: 'k', type: 'text' }, { name: 'w', type: 'text' }] };
+    const data = { rightSource: 'R', joinType: 'full', matchMode: 'loose', keys: [{ left: 'k', right: 'k' }] };
+    const run = (probe, extra = {}) => MORE.join({ ...data, ...extra }, fields, types, { probe, dep: () => right });
+    ok(run(() => null) === null, 'unknown probe result refuses');
+    ok(run(() => false) === null, 'non-ASCII data refuses');
+    const probed = [];
+    const c = run((sql) => { probed.push(sql); return true; });
+    ok(c && c.sql.includes('lower(l."k")') && c.sql.includes('lower(r."k")'), 'normalises both sides');
+    ok(probed.length === 2 && probed[0].includes('FROM input') && probed[1].includes('FROM (SELECT * FROM rt)'), 'probes both sides');
+    ok(run(() => true, { matchMode: 'arabic' }), 'arabic mode on ASCII data compiles');
+    ok(run(() => true, { matchMode: 'fuzzy' }) === null, 'unknown match modes refuse');
+    ok(run(() => true, { matchCount: true }) === null, 'match counts still refuse');
+    const intKeys = MORE.join({ ...data, keys: [{ left: 'n', right: 'n' }] }, fields, types, { probe: () => null, dep: () => ({ sql: 'SELECT 1', fields: [{ name: 'n', type: 'integer' }] }) });
+    ok(intKeys && !intKeys.sql.includes('lower('), 'non-text keys need no probe');
+  }],
   ['sql — referenced table detection', () => { eq(referencedNames('SELECT * FROM input JOIN regions USING (region)', ['input', 'regions', 'sales']), ['input', 'regions']); eq(referencedNames("SELECT 'sales' FROM input", ['sales', 'input']), ['input']); }],
   ['sql — chained leading SQL steps push down to DuckDB', () => {
     const e = new Engine();
@@ -325,7 +361,7 @@ export const TESTS = [
   ['vNext — preview taint: first preview-only step', () => { const d = [{ pushed: true }, { preview: true }, { preview: true }]; eq(firstPreviewOnlyIndex(d), 1); eq(previewTaintedAt(d, 0), -1); eq(previewTaintedAt(d, 2), 1); }],
   ['vNext — preview taint: disabled never taints, in-memory is clean', () => { eq(firstPreviewOnlyIndex([{ disabled: true, preview: true }, { rows: 3 }]), -1); eq(firstPreviewOnlyIndex([{ rows: 1 }, { rows: 2 }]), -1); }],
   ['vNext — engine flags steps that ran on a truncated DuckDB preview', () => {
-    const e = duckEngine([{ type: 'sort', data: { keys: [{ column: 'order_id', direction: 'asc' }] } }, { type: 'extract_text', data: { column: 'region', mode: 'first', count: 2 } }, { type: 'keep_rows', data: { mode: 'first', count: 1 } }]);
+    const e = duckEngine([{ type: 'sort', data: { keys: [{ column: 'order_id', direction: 'asc' }] } }, { type: 'extract_text', data: { column: 'region', mode: 'letters' } }, { type: 'keep_rows', data: { mode: 'first', count: 1 } }]);
     const first = e.evaluate({ queryId: 'd' });
     ok(first.needsSql && first.needsSql.source, 'wants source rows');
     e.putSqlResult({ key: first.needsSql.key, fields: [{ name: 'region', type: 'text' }], columns: [['North', 'South', 'East']], truncated: true });
@@ -342,7 +378,7 @@ export const TESTS = [
     eq(firstPreviewOnlyIndex(r.diag), -1);
   }],
   ['vNext — engine ignores disabled steps for the preview flag', () => {
-    const e = duckEngine([{ type: 'sort', data: { keys: [{ column: 'order_id', direction: 'asc' }] } }, { type: 'extract_text', data: { column: 'region', mode: 'first', count: 2 }, disabled: true }]);
+    const e = duckEngine([{ type: 'sort', data: { keys: [{ column: 'order_id', direction: 'asc' }] } }, { type: 'extract_text', data: { column: 'region', mode: 'letters' }, disabled: true }]);
     const first = e.evaluate({ queryId: 'd' });
     e.putSqlResult({ key: first.needsSql.key, fields: [{ name: 'region', type: 'text' }], columns: [['North', 'South']], truncated: true });
     const r = e.evaluate({ queryId: 'd' });

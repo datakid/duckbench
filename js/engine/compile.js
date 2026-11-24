@@ -2,9 +2,9 @@ import { qi, sqlStr } from './duck.js';
 import { formatDate, formatDateTime, parseNumberString, parseBoolString, convertValue, isNumeric, isTemporal } from '../core/types.js';
 import { aggType, aggDefaultName } from '../core/transforms.js';
 import { parseList } from '../core/util.js';
-import { MORE, jsTrim } from './compile-sql.js';
+import { MORE, jsTrim, looseKeySql, asciiOnlySql } from './compile-sql.js';
 
-const PUSHABLE = new Set(['filter', 'sort', 'select_columns', 'remove_columns', 'rename_columns', 'keep_rows', 'remove_blank_rows', 'remove_duplicates', 'group_by', 'trim_clean', 'replace_values', 'change_type', 'change_case', 'split_column', 'join', 'pivot', 'merge_columns', 'unpivot', 'date_part', 'index_column', 'duplicate_column', 'move_column', 'replace_nulls', 'rank', 'running_total', 'percent_of_total']);
+const PUSHABLE = new Set(['filter', 'sort', 'select_columns', 'remove_columns', 'rename_columns', 'keep_rows', 'remove_blank_rows', 'remove_duplicates', 'group_by', 'trim_clean', 'replace_values', 'change_type', 'change_case', 'split_column', 'join', 'pivot', 'merge_columns', 'unpivot', 'date_part', 'index_column', 'duplicate_column', 'move_column', 'replace_nulls', 'rank', 'running_total', 'extract_text', 'percent_of_total']);
 const RN = '__duckbench_rn';
 const TEXT_OPS = new Set(['contains', 'not_contains', 'starts_with', 'ends_with']);
 
@@ -16,7 +16,7 @@ export function mayCompile(step) {
   switch (step.type) {
     case 'filter': return (d.mode === 'rules' || d.mode === 'values' || !d.mode) && !d.loose;
     case 'keep_rows': return d.mode === 'first' || d.mode === 'range' || d.mode === 'remove_first';
-    case 'remove_duplicates': return !d.matchMode || d.matchMode === 'exact';
+    case 'remove_duplicates': return !d.matchMode || ['exact', 'loose', 'arabic'].includes(d.matchMode);
     default: return true;
   }
 }
@@ -173,17 +173,22 @@ const COMPILERS = {
     return { where: `NOT (${parts.join(d.mode === 'any' ? ' OR ' : ' AND ')})`, fields };
   },
 
-  remove_duplicates(d, fields, types) {
-    if (d.matchMode && d.matchMode !== 'exact') return null;
+  remove_duplicates(d, fields, types, ctx) {
+    const mode = d.matchMode || 'exact';
+    if (!['exact', 'loose', 'arabic'].includes(mode)) return null;
     const keys = d.columns?.length ? d.columns : fields.map(f => f.name);
     if (!keys.length || keys.some(k => !types.has(k))) return null;
+    const loose = mode !== 'exact';
+    const textKeys = loose ? keys.filter(k => types.get(k) === 'text') : [];
+    if (textKeys.length && ctx.probe(asciiOnlySql(textKeys.map(qi), 'input')) !== true) return null;
+    const parts = keys.map(k => (loose && types.get(k) === 'text' ? looseKeySql(qi(k)) : qi(k)));
     let order;
     if (d.orderBy) {
       const t = types.get(d.orderBy);
       if (!t || t === 'text') return null;
       order = `${qi(d.orderBy)} ASC NULLS LAST, ${RN}`;
     } else order = d.keep === 'last' ? `${RN} DESC` : RN;
-    return { sql: `SELECT ${selectList(fields)} FROM ${numbered()} QUALIFY row_number() OVER (PARTITION BY ${keys.map(qi).join(', ')} ORDER BY ${order}) = 1 ORDER BY ${RN}`, fields };
+    return { sql: `SELECT ${selectList(fields)} FROM ${numbered()} QUALIFY row_number() OVER (PARTITION BY ${parts.join(', ')} ORDER BY ${order}) = 1 ORDER BY ${RN}`, fields };
   },
 
   group_by(d, fields, types) {

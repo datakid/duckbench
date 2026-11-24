@@ -15,6 +15,14 @@ const WSP = 'id,name,qty,note\n1,Ann,5,a\n2,"\t",6,\n3,"\u00a0",7,x\n4,"\n",8,\n
 
 const ZERO = 'id,g,v,n,void\n1,a,5,3,\n2,a,-5,-3,\n3,b,0,0,\n4,b,,,\n5,c,1.5,2,\n6,c,2.5,2,\n7,d,,,\n8,,4,5,\n9,,-4,-5,\n10,e,0.1,1,\n11,e,0.2,1,\n12,e,-0.3,-2,\n';
 
+const JOIN_L = 'id,k,n,v\n1,a,1,10\n2,b,1,20\n3,b,2,30\n4,,1,40\n5,c,1,50\n6,a,2,60\n7,d,9,70\n';
+const JOIN_R = 'k,n,w,z\na,1,ax1,1.5\na,1,ax2,2.5\nb,2,by,3\nc,7,cq,4\ne,1,ex,5\n,1,nullkey,6\nb,1,bx,7\n';
+
+const LOOSE_L = 'id,name,code,n\n1,Alice Smith,A-1,1\n2,"bob  jones",b-2,2\n3," Carol ",C-3,3\n4,DAVE,d-4,4\n5,"eve\tlin",E-5,5\n6,,F-6,6\n7,frank,G-7,7\n8,alice smith,a-1,8\n9,"  ",H-8,9\n10,Dave,d-4,10\n';
+const LOOSE_R = 'name,code,info\nalice smith,a-1,first\nBOB JONES,B-2,second\ncarol,c-3,third\n"dave ",D-4,fourth\nEVE LIN,e-5,fifth\nzed,z-9,sixth\n" ",q-1,blank\nFRANK,g-7,seventh\nAlice  Smith,A-1,again\n';
+const LOOSE_N = 'id,name,n\n1,Zoë,1\n2,zoe,2\n3,ÉLAN,3\n4,elan,4\n5,plain,5\n';
+const LOOSE_M = 'name,info\nzoe,a\nelan,b\nPLAIN,c\n';
+
 const CASES = [
   ['trim_clean', 'x', { type: 'trim_clean', data: {} }],
   ['replace whole text', 's', { type: 'replace_values', data: { columns: ['status'], match: 'whole', find: 'Pending', replace: 'Open', caseSensitive: true } }],
@@ -188,6 +196,73 @@ const CASES = [
   ["running total integers per group", "z", { type: "running_total", data: {"column": "n", "orderBy": "", "partitionBy": ["g"], "name": "Run"} }],
   ["running total all-null column refuses", "z", { type: "running_total", data: {"column": "void", "orderBy": "", "partitionBy": [], "name": "Run"} }, "refuse"],
   ["rank text keys refuse", "x", { type: "rank", data: {"column": "code", "direction": "asc", "mode": "rank", "partitionBy": [], "name": "Rank"} }, "refuse"],
+  ['extract first 3 in place', 'p', { type: 'extract_text', data: { column: 'name', mode: 'first', count: 3 } }],
+  ['extract last 2 into a new column', 'p', { type: 'extract_text', data: { column: 'city', mode: 'last', count: 2, name: 'Tail' } }],
+  ['extract last 0', 'p', { type: 'extract_text', data: { column: 'city', mode: 'last', count: 0 } }],
+  ['extract range', 'x', { type: 'extract_text', data: { column: 'name', mode: 'range', count: 3, start: 2 } }],
+  ['extract range fractional count, zero start', 'p', { type: 'extract_text', data: { column: 'note', mode: 'range', count: 2.7, start: 0 } }],
+  ['extract before dash', 'x', { type: 'extract_text', data: { column: 'code', mode: 'before', delimiter: '-' } }],
+  ['extract before last occurrence', 'x', { type: 'extract_text', data: { column: 'tags', mode: 'before', delimiter: ',', fromEnd: true } }],
+  ['extract after dash', 'x', { type: 'extract_text', data: { column: 'code', mode: 'after', delimiter: '-' } }],
+  ['extract after last occurrence', 'x', { type: 'extract_text', data: { column: 'tags', mode: 'after', delimiter: ',', fromEnd: true, name: 'Last tag' } }],
+  ['extract between quotes', 'p', { type: 'extract_text', data: { column: 'note', mode: 'between', delimiter: '"', delimiter2: '"' } }],
+  ['extract after a space in names', 'p', { type: 'extract_text', data: { column: 'name', mode: 'after', delimiter: ' ' } }],
+  ['extract before a multi-character delimiter', 'p', { type: 'extract_text', data: { column: 'note', mode: 'before', delimiter: 'ar' } }],
+  ['extract after an escaped tab delimiter', 'p', { type: 'extract_text', data: { column: 'note', mode: 'after', delimiter: '\\t' } }],
+  ['extract between regex-special delimiters', 'p', { type: 'extract_text', data: { column: 'name', mode: 'between', delimiter: ' ', delimiter2: "'" } }],
+  ['extract digits', 'x', { type: 'extract_text', data: { column: 'code', mode: 'digits' } }],
+  ['extract digits into a new column', 'x', { type: 'extract_text', data: { column: 'amount_txt', mode: 'digits', name: 'Digits' } }],
+  ['extract length', 'p', { type: 'extract_text', data: { column: 'name', mode: 'length', name: 'Len' } }],
+  ['extract length in place', 'x', { type: 'extract_text', data: { column: 'name', mode: 'length' } }],
+  ['extract regex with a group', 'x', { type: 'extract_text', data: { column: 'code', mode: 'regex', pattern: '(\\d+)' } }],
+  ['extract regex without a group', 'x', { type: 'extract_text', data: { column: 'code', mode: 'regex', pattern: '[A-Z]+' } }],
+  ['extract regex lazy dot', 'p', { type: 'extract_text', data: { column: 'note', mode: 'regex', pattern: '^(.+?) ' } }],
+  ['extract regex optional group', 'p', { type: 'extract_text', data: { column: 'note', mode: 'regex', pattern: '(x)?(\\w+)' } }],
+  ['extract regex alternation and anchors', 'p', { type: 'extract_text', data: { column: 'note', mode: 'regex', pattern: '^(plain|accent2?)$' } }],
+  ['extract regex class and quantifier', 'p', { type: 'extract_text', data: { column: 'note', mode: 'regex', pattern: '[a-z]{4,}' } }],
+  ['extract name collision', 'p', { type: 'extract_text', data: { column: 'name', mode: 'first', count: 2, name: 'city' } }],
+  ['extract regex lookbehind refuses', 'x', { type: 'extract_text', data: { column: 'code', mode: 'regex', pattern: '(?<=-)\\d+' } }, 'refuse'],
+  ['extract regex whitespace class refuses', 'p', { type: 'extract_text', data: { column: 'note', mode: 'regex', pattern: '\\s+(\\w+)' } }, 'refuse'],
+  ['extract regex unicode property refuses', 'p', { type: 'extract_text', data: { column: 'name', mode: 'regex', pattern: '\\p{L}+' } }, 'refuse'],
+  ['extract regex backreference refuses', 'p', { type: 'extract_text', data: { column: 'note', mode: 'regex', pattern: '(\\w)\\1' } }, 'refuse'],
+  ['extract regex named group refuses', 'p', { type: 'extract_text', data: { column: 'note', mode: 'regex', pattern: '(?<w>\\w+)' } }, 'refuse'],
+  ['extract regex bracket inside a class refuses', 'p', { type: 'extract_text', data: { column: 'note', mode: 'regex', pattern: '[a[:]+' } }, 'refuse'],
+  ['extract from a number column refuses', 'p', { type: 'extract_text', data: { column: 'score', mode: 'first', count: 1 } }, 'refuse'],
+  ['extract empty delimiter refuses', 'x', { type: 'extract_text', data: { column: 'code', mode: 'before', delimiter: '' } }, 'refuse'],
+  ['extract letters refuses', 'p', { type: 'extract_text', data: { column: 'name', mode: 'letters' } }, 'refuse'],
+  ['join full one key', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }] } }],
+  ['join full two keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }, { left: 'n', right: 'n' }] } }],
+  ['join full integer key', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'n', right: 'n' }] } }],
+  ['join full prefix and bring subset', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }], prefix: 'r_', bring: ['w'] } }],
+  ['join full with differently named keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'v', right: 'z' }] } }, 'refuse'],
+  ['join right one key', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'k', right: 'k' }] } }],
+  ['join right two keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'k', right: 'k' }, { left: 'n', right: 'n' }] } }],
+  ['join right integer key and prefix', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'n', right: 'n' }], prefix: 'r_' } }],
+  ['join right anti', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right_anti', keys: [{ left: 'k', right: 'k' }] } }],
+  ['join right anti two keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right_anti', keys: [{ left: 'k', right: 'k' }, { left: 'n', right: 'n' }] } }],
+  ['join full sales and regions', 's', { type: 'join', data: { rightSource: 'r', joinType: 'full', keys: [{ left: 'region', right: 'region' }] } }],
+  ['join right sales and regions', 's', { type: 'join', data: { rightSource: 'r', joinType: 'right', keys: [{ left: 'region', right: 'region' }] } }],
+  ['join full with a match count refuses', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'k' }], matchCount: true } }, 'refuse'],
+  ['join right with loose matching on ascii keys', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'right', keys: [{ left: 'k', right: 'k' }], matchMode: 'loose' } }],
+  ['join full with mismatched key types refuses', 'jl', { type: 'join', data: { rightSource: 'jr', joinType: 'full', keys: [{ left: 'k', right: 'n' }] } }, 'refuse'],
+  ['join left loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'left', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join inner loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'inner', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join right loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'right', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join full loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'full', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join left_anti loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'left_anti', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join left_semi loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'left_semi', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join right_anti loose', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'right_anti', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }],
+  ['join left loose two keys', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'left', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }, { left: 'code', right: 'code' }] } }],
+  ['join full arabic mode on ascii data', 'll', { type: 'join', data: { rightSource: 'lr', joinType: 'full', matchMode: 'arabic', keys: [{ left: 'name', right: 'name' }], prefix: 'r_' } }],
+  ['join loose with accented data refuses', 'ln', { type: 'join', data: { rightSource: 'lm', joinType: 'left', matchMode: 'loose', keys: [{ left: 'name', right: 'name' }] } }, 'refuse'],
+  ['join full loose with accented data refuses', 'ln', { type: 'join', data: { rightSource: 'lm', joinType: 'full', matchMode: 'arabic', keys: [{ left: 'name', right: 'name' }] } }, 'refuse'],
+  ['dedupe loose keep first', 'll', { type: 'remove_duplicates', data: { columns: ['name'], matchMode: 'loose' } }],
+  ['dedupe loose keep last', 'll', { type: 'remove_duplicates', data: { columns: ['name'], matchMode: 'loose', keep: 'last' } }],
+  ['dedupe loose ordered', 'll', { type: 'remove_duplicates', data: { columns: ['name'], matchMode: 'loose', orderBy: 'n' } }],
+  ['dedupe loose two columns', 'll', { type: 'remove_duplicates', data: { columns: ['name', 'code'], matchMode: 'loose' } }],
+  ['dedupe arabic mode on ascii data', 'll', { type: 'remove_duplicates', data: { columns: ['code'], matchMode: 'arabic' } }],
+  ['dedupe loose whole row', 'll', { type: 'remove_duplicates', data: { matchMode: 'loose' } }],
+  ['dedupe loose with accented data refuses', 'ln', { type: 'remove_duplicates', data: { columns: ['name'], matchMode: 'loose' } }, 'refuse'],
 ];
 
 const list = document.getElementById('list');
@@ -219,8 +294,14 @@ try {
   e.loadText({ id: 'p', name: 'p.csv', text: PMESS, format: 'csv' });
   e.loadText({ id: 'w', name: 'w.csv', text: WSP, format: 'csv' });
   e.loadText({ id: 'z', name: 'z.csv', text: ZERO, format: 'csv' });
+  e.loadText({ id: 'jl', name: 'jl.csv', text: JOIN_L, format: 'csv' });
+  e.loadText({ id: 'jr', name: 'jr.csv', text: JOIN_R, format: 'csv' });
+  e.loadText({ id: 'll', name: 'll.csv', text: LOOSE_L, format: 'csv' });
+  e.loadText({ id: 'lr', name: 'lr.csv', text: LOOSE_R, format: 'csv' });
+  e.loadText({ id: 'ln', name: 'ln.csv', text: LOOSE_N, format: 'csv' });
+  e.loadText({ id: 'lm', name: 'lm.csv', text: LOOSE_M, format: 'csv' });
   const base = {};
-  for (const id of ['s', 'r', 'x', 'p', 'w', 'z']) {
+  for (const id of ['s', 'r', 'x', 'p', 'w', 'z', 'jl', 'jr', 'll', 'lr', 'ln', 'lm']) {
     e.setQueries({ queries: [{ id, name: id, source: { kind: 'file', sourceId: id }, steps: [] }] });
     const r = e.evaluate({ queryId: id, pageSize: 1e6 });
     const cols = r.fields.map((_, c) => r.page.rows.map(row => row[c]));
@@ -232,10 +313,11 @@ try {
     total++;
     try {
       const step = { id: 'p', ...migrateStep(raw) };
-      e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: src }, steps: [step] }, { id: 'r', name: 'regions', source: { kind: 'file', sourceId: 'r' }, steps: [] }] });
+      const rs = step.data?.rightSource && step.data.rightSource !== 'r' && base[step.data.rightSource] ? step.data.rightSource : null;
+      e.setQueries({ queries: [{ id: 'q', name: 'q', source: { kind: 'file', sourceId: src }, steps: [step] }, { id: 'r', name: 'regions', source: { kind: 'file', sourceId: 'r' }, steps: [] }, ...(rs ? [{ id: rs, name: rs, source: { kind: 'file', sourceId: rs }, steps: [] }] : [])] });
       const js = e.evaluate({ queryId: 'q', pageSize: 1e6 });
       if (js.error || js.fullError) throw new Error('JS: ' + (js.error || js.fullError.message));
-      const c = await compileWithProbes(step, base[src].sql, base[src].fields, { r: base.r });
+      const c = await compileWithProbes(step, base[src].sql, base[src].fields, { r: base.r, ...(rs ? { [rs]: base[rs] } : {}) });
       if (expect === 'refuse') { if (c) throw new Error('compiled but should refuse'); report(name, true); pass++; continue; }
       if (!c) {
         const { MORE } = await import('../engine/compile-sql.js');
@@ -332,6 +414,41 @@ if (duck.opfsAvailable()) {
     try { if (holder) { await new Promise((res) => { holder.onmessage = () => res(); holder.postMessage('close'); }); holder.terminate(); } } catch {}
     try { await duck.clearOpfsWork(); } catch {}
   }
+}
+if (duck.duckStorage() === 'opfs') {
+  total++;
+  try {
+    const sql = "SELECT range AS id, 'n' || range AS name, (range % 7)::DOUBLE / 3 AS v FROM range(60000) ORDER BY id";
+    const bytes = async (b) => new Uint8Array(b instanceof Blob ? await b.arrayBuffer() : b);
+    const problems = [];
+    const formats = ['csv'];
+    for (const f of ['json', 'jsonl', 'parquet']) { try { await duck.copyTo('SELECT 1 AS a', f); formats.push(f); } catch {} }
+    for (const format of formats) {
+      const blob = await duck.copyToBlob(sql, format);
+      const buf = await duck.copyTo(sql, format);
+      if (!(blob instanceof Blob)) { problems.push(`${format}: not a Blob`); continue; }
+      const a = await bytes(blob), b = await bytes(buf);
+      if (format !== 'parquet') {
+        if (a.length !== b.length || a.some((x, i) => x !== b[i])) problems.push(`${format}: bytes differ (${a.length} vs ${b.length})`);
+      } else {
+        const s = await duck.ensureDuck();
+        await s.db.registerFileBuffer('exp_a.parquet', a);
+        await s.db.registerFileBuffer('exp_b.parquet', b);
+        const r = await duck.runQuery("SELECT (SELECT count(*) || ':' || sum(id) || ':' || sum(v) FROM read_parquet('exp_a.parquet')) AS a, (SELECT count(*) || ':' || sum(id) || ':' || sum(v) FROM read_parquet('exp_b.parquet')) AS b");
+        if (r.columns[0][0] !== r.columns[1][0]) problems.push(`parquet: contents differ (${r.columns[0][0]} vs ${r.columns[1][0]})`);
+        await s.db.dropFile('exp_a.parquet'); await s.db.dropFile('exp_b.parquet');
+      }
+    }
+    const dir = async () => { const root = await navigator.storage.getDirectory(); return (await root.getDirectoryHandle('duckdb')).getDirectoryHandle('fs'); };
+    const exports = async () => { const names = []; for await (const k of (await dir()).keys()) if (k.startsWith('duckbench_work_export_')) names.push(k); return names; };
+    if ((await exports()).length !== 1) problems.push(`expected one leftover export file after several exports, found ${(await exports()).length}`);
+    let failed = false;
+    try { await duck.copyToBlob('SELECT nope FROM nowhere', 'csv'); } catch { failed = true; }
+    if (!failed) problems.push('a failing export did not throw');
+    if ((await exports()).length > 1) problems.push('a failed export left a file behind');
+    if (problems.length) throw new Error(problems.slice(0, 3).join(' | '));
+    report(`export through OPFS matches the in-memory export and cleans up (${formats.join(', ')})`, true); pass++;
+  } catch (err) { report('export through OPFS matches the in-memory export and cleans up', false, err.message); }
 }
 document.getElementById('score').textContent = `DuckDB parity ${pass}/${total}`;
 console.log(`PARITY ${pass}/${total}`);
