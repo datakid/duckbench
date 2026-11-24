@@ -484,6 +484,45 @@ export async function copyTo(sql, format) {
   finally { await s.db.dropFile(out).catch(() => {}); }
 }
 
+let lastExport = null;
+
+async function opfsFsDir() {
+  const root = await navigator.storage.getDirectory();
+  return (await root.getDirectoryHandle('duckdb')).getDirectoryHandle('fs');
+}
+
+async function removeOpfsExport(name) {
+  try { await (await opfsFsDir()).removeEntry(name); } catch {}
+}
+
+export async function copyToBlob(sql, format) {
+  const s = await ensureDuck();
+  const opt = COPY_OPTIONS[format];
+  if (!opt) throw new Error(`DuckDB can’t write ${format}.`);
+  if (state?.storage !== 'opfs') return new Blob([await copyTo(sql, format)]);
+  if (lastExport) { const old = lastExport; lastExport = null; await removeOpfsExport(old); }
+  const name = `${OPFS_PREFIX}export_${Date.now().toString(36)}_${++fileSeq}.${format}`;
+  const path = `opfs://${name}`;
+  try { await s.db.registerOPFSFileName(path); } catch { return new Blob([await copyTo(sql, format)]); }
+  try {
+    await s.conn.query(`COPY (${sql}) TO ${sqlStr(path)} ${opt}`);
+  } catch (e) {
+    await s.db.dropFile(path).catch(() => {});
+    await removeOpfsExport(name);
+    throw e;
+  }
+  try {
+    await s.db.flushFiles();
+    await s.db.dropFile(path);
+    const file = await (await (await opfsFsDir()).getFileHandle(name)).getFile();
+    lastExport = name;
+    return file;
+  } catch {
+    await removeOpfsExport(name);
+    return new Blob([await copyTo(sql, format)]);
+  }
+}
+
 export async function cancelDuck() {
   if (!state?.ready) return false;
   try { return await state.conn.cancelSent(); } catch { return false; }

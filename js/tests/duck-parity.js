@@ -415,5 +415,40 @@ if (duck.opfsAvailable()) {
     try { await duck.clearOpfsWork(); } catch {}
   }
 }
+if (duck.duckStorage() === 'opfs') {
+  total++;
+  try {
+    const sql = "SELECT range AS id, 'n' || range AS name, (range % 7)::DOUBLE / 3 AS v FROM range(60000) ORDER BY id";
+    const bytes = async (b) => new Uint8Array(b instanceof Blob ? await b.arrayBuffer() : b);
+    const problems = [];
+    const formats = ['csv'];
+    for (const f of ['json', 'jsonl', 'parquet']) { try { await duck.copyTo('SELECT 1 AS a', f); formats.push(f); } catch {} }
+    for (const format of formats) {
+      const blob = await duck.copyToBlob(sql, format);
+      const buf = await duck.copyTo(sql, format);
+      if (!(blob instanceof Blob)) { problems.push(`${format}: not a Blob`); continue; }
+      const a = await bytes(blob), b = await bytes(buf);
+      if (format !== 'parquet') {
+        if (a.length !== b.length || a.some((x, i) => x !== b[i])) problems.push(`${format}: bytes differ (${a.length} vs ${b.length})`);
+      } else {
+        const s = await duck.ensureDuck();
+        await s.db.registerFileBuffer('exp_a.parquet', a);
+        await s.db.registerFileBuffer('exp_b.parquet', b);
+        const r = await duck.runQuery("SELECT (SELECT count(*) || ':' || sum(id) || ':' || sum(v) FROM read_parquet('exp_a.parquet')) AS a, (SELECT count(*) || ':' || sum(id) || ':' || sum(v) FROM read_parquet('exp_b.parquet')) AS b");
+        if (r.columns[0][0] !== r.columns[1][0]) problems.push(`parquet: contents differ (${r.columns[0][0]} vs ${r.columns[1][0]})`);
+        await s.db.dropFile('exp_a.parquet'); await s.db.dropFile('exp_b.parquet');
+      }
+    }
+    const dir = async () => { const root = await navigator.storage.getDirectory(); return (await root.getDirectoryHandle('duckdb')).getDirectoryHandle('fs'); };
+    const exports = async () => { const names = []; for await (const k of (await dir()).keys()) if (k.startsWith('duckbench_work_export_')) names.push(k); return names; };
+    if ((await exports()).length !== 1) problems.push(`expected one leftover export file after several exports, found ${(await exports()).length}`);
+    let failed = false;
+    try { await duck.copyToBlob('SELECT nope FROM nowhere', 'csv'); } catch { failed = true; }
+    if (!failed) problems.push('a failing export did not throw');
+    if ((await exports()).length > 1) problems.push('a failed export left a file behind');
+    if (problems.length) throw new Error(problems.slice(0, 3).join(' | '));
+    report(`export through OPFS matches the in-memory export and cleans up (${formats.join(', ')})`, true); pass++;
+  } catch (err) { report('export through OPFS matches the in-memory export and cleans up', false, err.message); }
+}
 document.getElementById('score').textContent = `DuckDB parity ${pass}/${total}`;
 console.log(`PARITY ${pass}/${total}`);

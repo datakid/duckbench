@@ -1187,9 +1187,9 @@ async function exportFullViaDuck() {
       m.close();
       const dismiss = toast('Exporting with DuckDB…', { duration: 600000 });
       try {
-        const buf = await duck.copyTo(plan.sql, format);
+        const blob = await duck.copyToBlob(plan.sql, format);
         dismiss();
-        await saveOut(new Blob([buf]), `${q.name.replace(/[\\/:*?"<>|]+/g, '_')}.${format}`, 'application/octet-stream', 'Exported');
+        await saveOut(blob, `${q.name.replace(/[\\/:*?"<>|]+/g, '_')}.${format}`, 'application/octet-stream', 'Exported');
       } catch (e) { dismiss(); toast(`Export failed: ${e.message}`, { kind: 'error' }); }
     } }, 'Export')] });
 }
