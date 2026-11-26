@@ -79,12 +79,16 @@ jobs:
           node-version: 24
 
       - name: Run the native adapter tests
-        run: node --test desktop/scripts/native-adapter.test.mjs
+        run: |
+          node --test desktop/scripts/native-adapter.test.mjs
 
   rust-linux:
     name: Engine tests (Linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    outputs:
+      tests: ${{ steps.tests.outcome }}
+      standard: ${{ steps.standard.outcome }}
     defaults:
       run:
         working-directory: desktop
@@ -113,18 +117,41 @@ jobs:
         run: npm ci
 
       - name: Prepare the native bundle
-        run: node scripts/prepare.mjs --native
+        run: |
+          node scripts/prepare.mjs --native
+
+      - name: Compile the engine tests
+        working-directory: desktop/src-tauri
+        run: cargo test --features native-duckdb --no-run
 
       - name: Engine and conversion tests with the real DuckDB
+        id: tests
+        continue-on-error: true
         working-directory: desktop/src-tauri
         env:
           DUCKBENCH_TEST_EXCEL_EXT: ${{ github.workspace }}/desktop/src-tauri/native-resources/excel.duckdb_extension
           DUCKBENCH_TEST_XLSX: ${{ github.workspace }}/desktop/src-tauri/tests/fixtures/book.xlsx
-        run: cargo test --features native-duckdb -- --nocapture --test-threads=4
+        run: |
+          set -o pipefail
+          cargo test --features native-duckdb -- --nocapture --test-threads=4 2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      - name: Test log
+        if: always()
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.tests.outcome == 'success' && 'notice' || 'error' }}" "Rust tests (Linux): ${{ steps.tests.outcome }}" "$RUNNER_TEMP/tests.log" 45000
 
       - name: The web-engine build still compiles and passes
+        id: standard
+        continue-on-error: true
         working-directory: desktop/src-tauri
-        run: cargo test
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee "$RUNNER_TEMP/standard.log"
+
+      - name: Standard build log
+        if: always()
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.standard.outcome == 'success' && 'notice' || 'error' }}" "Rust tests, standard build: ${{ steps.standard.outcome }}" "$RUNNER_TEMP/standard.log" 4000
 
       - name: Keep the resolved lock file
         uses: actions/upload-artifact@v4
@@ -136,6 +163,9 @@ jobs:
     name: Packaged app smoke test (Linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      selfcheck: ${{ steps.selfcheck.outcome }}
+      smoke: ${{ steps.smoke.outcome }}
     defaults:
       run:
         working-directory: desktop
@@ -211,14 +241,32 @@ jobs:
           which duckbench
 
       - name: Headless self-check of the installed binary
+        id: selfcheck
+        continue-on-error: true
         run: |
-          xvfb-run -a /usr/bin/duckbench --selfcheck /tmp/selfcheck.json /tmp/probe/book.xlsx || true
+          rm -f /tmp/selfcheck.json
+          /usr/bin/duckbench --selfcheck /tmp/selfcheck.json /tmp/probe/book.xlsx || true
           cat /tmp/selfcheck.json
           grep -q '"passed": true' /tmp/selfcheck.json
 
+      - name: Self-check report
+        if: always()
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.selfcheck.outcome == 'success' && 'notice' || 'error' }}" "Self-check (Linux): ${{ steps.selfcheck.outcome }}" /tmp/selfcheck.json 8000
+
       - name: Smoke-test the installed app
+        id: smoke
+        continue-on-error: true
         working-directory: ${{ github.workspace }}
-        run: xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/native_smoke_linux.py "$(which duckbench)"
+        run: |
+          set -o pipefail
+          xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/native_smoke_linux.py "$(which duckbench)" 2>&1 | tee /tmp/smoke.log
+
+      - name: Smoke report
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          node .github/scripts/annotate.mjs "${{ steps.smoke.outcome == 'success' && 'notice' || 'error' }}" "Smoke test (Linux): ${{ steps.smoke.outcome }}" /tmp/smoke.log 30000
 
   windows:
     name: Native installer (Windows)
@@ -228,6 +276,9 @@ jobs:
     defaults:
       run:
         working-directory: desktop
+    outputs:
+      tests: ${{ steps.tests.outcome }}
+      selfcheck: ${{ steps.selfcheck.outcome }}
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:
@@ -261,18 +312,34 @@ jobs:
         run: npm ci
 
       - name: Prepare the native bundle
-        run: node scripts/prepare.mjs --native
+        run: |
+          node scripts/prepare.mjs --native
 
       - name: Check the Excel extension was bundled
         shell: bash
         run: test -s src-tauri/native-resources/excel.duckdb_extension
 
+      - name: Compile the engine tests
+        working-directory: desktop/src-tauri
+        run: cargo test --features native-duckdb --no-run
+
       - name: Engine and conversion tests with the real DuckDB
+        id: tests
+        continue-on-error: true
+        shell: bash
         working-directory: desktop/src-tauri
         env:
           DUCKBENCH_TEST_EXCEL_EXT: ${{ github.workspace }}/desktop/src-tauri/native-resources/excel.duckdb_extension
           DUCKBENCH_TEST_XLSX: ${{ github.workspace }}/desktop/src-tauri/tests/fixtures/book.xlsx
-        run: cargo test --features native-duckdb -- --nocapture --test-threads=4
+        run: |
+          set -o pipefail
+          cargo test --features native-duckdb -- --nocapture --test-threads=4 2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      - name: Test log
+        if: always()
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.tests.outcome == 'success' && 'notice' || 'error' }}" "Rust tests (Windows): ${{ steps.tests.outcome }}" "$RUNNER_TEMP/tests.log" 45000
 
       - name: Build the installer
         run: npx tauri build --bundles nsis --features native-duckdb --config src-tauri/tauri.native.conf.json
@@ -289,6 +356,8 @@ jobs:
           ls -la
 
       - name: Install it silently and run the self-check on the installed app
+        id: selfcheck
+        continue-on-error: true
         shell: pwsh
         run: |
           $installer = (Resolve-Path "..\native-dist\Duckbench-Native_${env:VERSION}_x64-setup.exe").Path
@@ -298,10 +367,17 @@ jobs:
           $exe = Join-Path $dir 'duckbench.exe'
           if (-not (Test-Path $exe)) { throw "installed app not found at $exe" }
           $out = Join-Path $env:RUNNER_TEMP 'selfcheck.json'
+          Remove-Item $out -ErrorAction SilentlyContinue
           $book = (Resolve-Path 'src-tauri\tests\fixtures\book.xlsx').Path
           $p = Start-Process -FilePath $exe -ArgumentList @('--selfcheck', "`"$out`"", "`"$book`"") -Wait -PassThru
           if (Test-Path $out) { Get-Content $out } else { Write-Host 'no report was written' }
           if ($p.ExitCode -ne 0) { throw "self-check failed with exit code $($p.ExitCode)" }
+
+      - name: Self-check report
+        if: always()
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.selfcheck.outcome == 'success' && 'notice' || 'error' }}" "Self-check (Windows): ${{ steps.selfcheck.outcome }}" "$RUNNER_TEMP/selfcheck.json" 8000
 
       - uses: actions/upload-artifact@v4
         with:
@@ -310,10 +386,27 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  verdict:
+    name: All checks passed
+    if: ${{ always() }}
+    needs: [plan, js, rust-linux, smoke-linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every job and every test step to have passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          OUTCOMES: ${{ needs.rust-linux.outputs.tests }} ${{ needs.rust-linux.outputs.standard }} ${{ needs.smoke-linux.outputs.selfcheck }} ${{ needs.smoke-linux.outputs.smoke }} ${{ needs.windows.outputs.tests }} ${{ needs.windows.outputs.selfcheck }}
+        run: |
+          echo "jobs: $RESULTS"
+          echo "steps: $OUTCOMES"
+          for r in $RESULTS $OUTCOMES; do
+            if [ "$r" != success ]; then echo "::error::a check did not pass ($r)"; exit 1; fi
+          done
+
   publish:
     name: Attach to the release
     if: ${{ needs.plan.outputs.publish == 'true' }}
-    needs: [plan, js, rust-linux, smoke-linux, windows]
+    needs: [plan, verdict, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
