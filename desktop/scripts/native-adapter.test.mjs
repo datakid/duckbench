@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 let duck;
 let native;
+let platform;
 let calls;
 let handlers;
 
@@ -31,6 +32,7 @@ before(async () => {
   writeFileSync(libs, out);
   duck = await import(pathToFileURL(join(dir, 'js/engine/duck.js')).href);
   native = await import(pathToFileURL(join(dir, 'js/engine/duck-native.js')).href);
+  platform = await import(pathToFileURL(join(dir, 'js/app/platform.js')).href);
 });
 
 beforeEach(() => {
@@ -184,4 +186,36 @@ test('without the desktop bridge the adapter explains itself', async () => {
   globalThis.window = {};
   await assert.rejects(() => native.init(), /Duckbench Native desktop app/);
   globalThis.window = saved;
+});
+
+test('saving a native export moves the file instead of sending bytes', async () => {
+  handlers['plugin:dialog|save'] = () => 'D:\\out\\result.parquet';
+  handlers.native_move_file = () => null;
+  handlers.save_file = () => null;
+  const blob = new native.NativeFileBlob('C:\\tmp\\export-1.parquet', 99);
+  const res = await platform.saveNative(blob, 'result.parquet', 'application/octet-stream');
+  assert.deepEqual(res, { path: 'D:\\out\\result.parquet' });
+  const moved = calls.filter((c) => c.command === 'native_move_file');
+  assert.deepEqual(moved.map((c) => c.args), [{ from: 'C:\\tmp\\export-1.parquet', to: 'D:\\out\\result.parquet' }]);
+  assert.equal(calls.filter((c) => c.command === 'save_file').length, 0);
+});
+
+test('saving an ordinary blob still sends its bytes', async () => {
+  handlers['plugin:dialog|save'] = () => '/home/a/out.csv';
+  handlers.native_move_file = () => null;
+  handlers.save_file = () => null;
+  const res = await platform.saveNative(new Blob(['a,b\n1,2\n']), 'out.csv', 'text/csv');
+  assert.deepEqual(res, { path: '/home/a/out.csv' });
+  assert.equal(calls.filter((c) => c.command === 'native_move_file').length, 0);
+  const sent = calls.find((c) => c.command === 'save_file');
+  assert.equal(new TextDecoder().decode(sent.args), 'a,b\n1,2\n');
+  assert.equal(sent.options.headers.path, encodeURIComponent('/home/a/out.csv'));
+});
+
+test('cancelling the save dialog leaves a native export alone', async () => {
+  handlers['plugin:dialog|save'] = () => null;
+  handlers.native_move_file = () => null;
+  const res = await platform.saveNative(new native.NativeFileBlob('/tmp/e.csv', 1), 'e.csv', 'text/csv');
+  assert.deepEqual(res, { cancelled: true });
+  assert.equal(calls.filter((c) => c.command === 'native_move_file').length, 0);
 });

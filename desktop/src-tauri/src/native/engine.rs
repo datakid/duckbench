@@ -57,6 +57,7 @@ impl Engine {
         }
     }
 
+    #[cfg(test)]
     pub fn run_dir(&self) -> &Path {
         &self.run_dir
     }
@@ -453,7 +454,7 @@ mod tests {
         e.register("sales.csv", &csv).unwrap();
         let v = rows(&e, "SELECT count(*) AS n, sum(amount) AS total FROM read_csv('sales.csv', header=true)");
         assert_eq!(v["columns"][0], json!([2]));
-        assert_eq!(v["columns"][1], json!([42]));
+        assert_eq!(v["columns"][1], json!([42.0]));
         let v = rows(&e, "SELECT region FROM read_csv('sales.csv', header=true) ORDER BY region");
         assert_eq!(v["columns"][0], json!(["جنوب", "شمال"]));
         e.drop_file("sales.csv");
