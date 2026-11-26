@@ -1,0 +1,33 @@
+{
+  "productName": "Duckbench Native",
+  "identifier": "app.duckbench.desktop.native",
+  "build": {
+    "beforeDevCommand": "node scripts/prepare.mjs --native",
+    "beforeBuildCommand": "node scripts/prepare.mjs --native"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Duckbench Native",
+        "url": "index.html",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "dragDropEnabled": false,
+        "backgroundColor": "#111111"
+      }
+    ]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "shortDescription": "Local data-prep workbench on a native DuckDB engine",
+    "longDescription": "Clean, reshape, join and export CSV, Excel, JSON and Parquet files on your own computer. Visual steps and SQL run on a native DuckDB engine in the app itself; nothing is uploaded.",
+    "resources": {
+      "native-resources/excel.duckdb_extension": "extensions/excel.duckdb_extension"
+    }
+  }
+}

@@ -35,7 +35,7 @@ const duckFiles = new Map();
 
 function engineLabel() {
   const st = duck.duckStatus();
-  if (st === 'ready') return `DuckDB ${duck.duckVersion()}`;
+  if (st === 'ready') return `DuckDB ${duck.duckVersion()}${duck.duckNative() ? ' native' : ''}`;
   if (st === 'loading') return 'Loading DuckDB…';
   if (st === 'failed') return 'DuckDB offline';
   return client.mode === 'worker' ? 'Local engine' : 'Inline engine';
@@ -655,14 +655,14 @@ function renderMast() {
 function duckMenu(anchor) {
   const st = duck.duckStatus();
   menu(anchor, [
-    { header: st === 'ready' ? `DuckDB ${duck.duckVersion()} · ready` : st === 'loading' ? 'DuckDB · loading' : st === 'failed' ? 'DuckDB · failed to load' : 'DuckDB · not loaded' },
+    { header: st === 'ready' ? `DuckDB ${duck.duckVersion()}${duck.duckNative() ? ' native' : ''} · ready` : st === 'loading' ? 'DuckDB · loading' : st === 'failed' ? 'DuckDB · failed to load' : 'DuckDB · not loaded' },
     st !== 'ready' ? { label: st === 'failed' ? 'Retry' : 'Load DuckDB', icon: 'zap', disabled: st === 'loading', onClick: async () => { try { await duck.ensureDuck(); toast(`DuckDB ${duck.duckVersion()} ready`, { kind: 'success' }); } catch (e) { toast(e.message, { kind: 'error' }); } } } : null,
     { label: 'SQL console…', icon: 'terminal', hint: kbd('⌘J'), onClick: () => openConsole() },
     { label: 'Open large file…', icon: 'database', onClick: () => openWithDuck(!store.state.queries.length) },
     store.activeQuery() ? { label: 'Add SQL step', icon: 'plus', onClick: () => { if ($('#workbench').hidden) return; addStep('sql'); } } : null,
     store.activeQuery() ? { label: 'Summarize this query with DuckDB', icon: 'chart', onClick: () => openSummarize() } : null,
     '-',
-    { header: `Storage · ${duck.duckStorage() === 'opfs' ? 'browser disk (OPFS)' : duck.duckStorage() === 'memory' ? 'memory' : duck.opfsAvailable() ? (duck.opfsPreference() ? 'OPFS on next load' : 'memory on next load') : 'memory'}` },
+    { header: `Storage · ${duck.duckStorage() === 'native' ? 'local disk (native engine)' : duck.duckStorage() === 'opfs' ? 'browser disk (OPFS)' : duck.duckStorage() === 'memory' ? 'memory' : duck.opfsAvailable() ? (duck.opfsPreference() ? 'OPFS on next load' : 'memory on next load') : 'memory'}` },
     duck.opfsAvailable() ? { label: duck.opfsPreference() ? 'Keep DuckDB tables in memory' : 'Store DuckDB tables on disk (OPFS)', icon: 'database', onClick: () => { duck.setOpfsPreference(!duck.opfsPreference()); toast(st === 'off' || st === 'failed' ? 'Applies when DuckDB loads' : 'Applies after a reload', { action: st === 'ready' ? 'Reload' : null, onAction: async () => { await saveSessionNow(); location.reload(); } }); } } : null,
   ], { align: 'end' });
 }

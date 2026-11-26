@@ -17,6 +17,10 @@ export async function saveNative(blob, filename, mime) {
   const t = tauri();
   const path = await t.core.invoke('plugin:dialog|save', { options: { defaultPath: filename, filters: filterFor(filename, mime) } });
   if (!path) return { cancelled: true };
+  if (blob.nativePath) {
+    await t.core.invoke('native_move_file', { from: blob.nativePath, to: path });
+    return { path };
+  }
   const bytes = new Uint8Array(await blob.arrayBuffer());
   await t.core.invoke('save_file', bytes, { headers: { path: encodeURIComponent(path) } });
   return { path };

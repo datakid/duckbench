@@ -8,6 +8,10 @@ rust-version = "1.77.2"
 name = "duckbench_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+native-duckdb = ["dep:duckdb", "serde_json/preserve_order"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -20,6 +24,7 @@ tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 percent-encoding = "2"
+duckdb = { version = "=1.20000.2", features = ["bundled", "json", "parquet"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

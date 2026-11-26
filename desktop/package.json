@@ -8,7 +8,12 @@
     "icons": "tauri icon app-icon.svg",
     "dev": "tauri dev",
     "build": "tauri build",
-    "check": "node scripts/prepare.mjs && cd src-tauri && cargo test"
+    "check": "node scripts/prepare.mjs && cd src-tauri && cargo test",
+    "prepare:native": "node scripts/prepare.mjs --native",
+    "dev:native": "tauri dev --features native-duckdb --config src-tauri/tauri.native.conf.json",
+    "build:native": "tauri build --features native-duckdb --config src-tauri/tauri.native.conf.json",
+    "test:native-js": "node --test scripts/native-adapter.test.mjs",
+    "check:native": "node scripts/prepare.mjs --native && node --test scripts/native-adapter.test.mjs && cd src-tauri && cargo test --features native-duckdb"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.5.0",
