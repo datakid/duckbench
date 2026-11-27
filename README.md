@@ -4,7 +4,7 @@ A data-prep workbench that runs entirely on your machine. Clean, reshape, join a
 
 ![Duckbench showing a sales table, the ribbon and the applied steps](docs/screenshot.png)
 
-**Try it:** https://duckbench2.vercel.app · **Desktop:** in preview, see [Desktop](#desktop)
+**Try it:** https://duckbench2.vercel.app · **Desktop:** in preview, see [Desktop](#desktop), with an optional [native DuckDB build](#native-duckdb-build-windows)
 
 Duckbench uses two engines. A fast JavaScript engine handles everyday files. [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview) handles SQL and files too large for memory.
 
@@ -82,6 +82,7 @@ Sessions are saved in the browser:
 
 - **No framework, no build step for the web app.** Plain ES modules, a columnar `Frame` engine in a Web Worker, and self-hosted fonts.
 - **DuckDB-WASM 1.33.1-dev114.0 (DuckDB 2.0.0)** for SQL and large files, loaded on demand from jsDelivr (bundled in the desktop app).
+- **Native DuckDB 2.0.0** through the `duckdb` Rust crate (1.20000.2, bundled build with the Parquet and JSON extensions) in the optional native desktop build. Query results cross from Rust to the interface as JSON converted from Apache Arrow batches.
 - **hyparquet 1**, **hyparquet-compressors 1** and **hyparquet-writer 0** for reading and writing Parquet, loaded from jsDelivr on first use.
 - **SheetJS 0.20.3** for Excel and OpenDocument files, vendored in `vendor/`.
 - **Fonts:** Geist and Geist Mono, with Instrument Sans and JetBrains Mono as fallbacks.
@@ -128,6 +129,34 @@ npm run build
 
 `npm run dev` opens a development window. `npm run build` writes installers to `desktop/src-tauri/target/release/bundle/`. See [`desktop/README.md`](desktop/README.md) for signing and releases.
 
+#### Native DuckDB build (Windows)
+
+A second Windows installer, **Duckbench Native**, runs DuckDB as a native engine inside the app instead of DuckDB-WASM in the web view. The interface, the visual steps, the JavaScript engine for everyday files, recipes, share links and the SQL console are the same. It is attached to a release next to the standard installer, which is unchanged, and it installs beside it with its own settings.
+
+What the native engine changes:
+- DuckDB is not limited by browser memory. It uses a work database on disk, so large sorts, joins and group-bys can spill to disk.
+- Files chosen in the native Open dialog are read in place by DuckDB, with no copy and no byte-range protocol.
+- Full-file exports (Parquet, CSV, JSON, JSON Lines) are written to disk by DuckDB and moved to the place you choose. The data never passes through the web view.
+- A running query can be cancelled. The engine interrupts it and stays usable.
+- The Parquet, JSON and Excel extensions work offline. Parquet and JSON are built in; the Excel extension is bundled with the installer.
+
+What it does not change or does not do:
+- It is Windows only. There is no macOS or Linux build of the native engine, and no auto-update.
+- The installer is unsigned, so Windows SmartScreen shows a warning.
+- DuckDB runs inside the app process, with your user's file permissions. SQL steps are checked by the app before they reach DuckDB (read-only statements, no file functions), as in the web build. The native engine adds no second sandbox.
+- Results and the grid are the same as in the standard build. Timestamps keep millisecond precision and decimals arrive as numbers, to match the web engine.
+
+Build it yourself with Rust 1.88 or newer (the `duckdb` crate needs it):
+
+```bash
+cd desktop
+npm install
+npm run build:native
+npm run check:native
+```
+
+`build:native` compiles DuckDB from source, which takes several minutes on the first run. See [`desktop/README.md`](desktop/README.md) for how it is built, tested and attached to a release.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
@@ -171,7 +200,7 @@ js/io/                Excel worker core, ZIP
 js/tests/             self-test and parity suites
 vendor/               SheetJS
 fonts/                Geist, Geist Mono (+ Instrument Sans, JetBrains Mono fallbacks)
-desktop/              Tauri 2 project
+desktop/              Tauri 2 project (src-tauri/src/native/ is the native DuckDB engine)
 ```
 
 ## Testing
@@ -181,6 +210,14 @@ Open `tests.html` to run the engine self-test, and `parity.html` to compare SQL-
 ```bash
 cd desktop && cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+The native engine has its own tests, which run against the real DuckDB:
+
+```bash
+cd desktop && npm run check:native
+```
+
+They cover the JavaScript adapter (`desktop/scripts/native-adapter.test.mjs`, run with a mocked Tauri bridge) and the Rust engine: value conversion, large results, truncation, registered files, exports, cancel, concurrent queries and the Excel extension.
 
 ## Roadmap
 

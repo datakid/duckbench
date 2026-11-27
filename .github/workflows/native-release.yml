@@ -1,0 +1,457 @@
+name: Native DuckDB build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to add the native Windows installer to (empty uses the latest release)
+        required: false
+        default: ''
+        type: string
+      publish:
+        description: Attach the installer to the release. Off builds and tests only.
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches: [native-duckdb]
+    paths:
+      - '.github/workflows/native-release.yml'
+      - '.github/scripts/native_smoke_linux.py'
+      - 'desktop/**'
+      - 'js/engine/duck.js'
+      - 'js/engine/duck-native.js'
+      - 'js/engine/libs.js'
+      - 'js/app/platform.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Check the tag
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+      publish: ${{ steps.ver.outputs.publish }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_TAG: ${{ inputs.tag }}
+      INPUT_PUBLISH: ${{ inputs.publish }}
+      EVENT: ${{ github.event_name }}
+      MESSAGE: ${{ github.event.head_commit.message }}
+    steps:
+      - name: Resolve the tag, the version and whether to publish
+        id: ver
+        run: |
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release list --repo "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')"
+          fi
+          VERSION="${TAG#v}"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Tag '$TAG' is not a valid version (expected e.g. v2.4.0-alpha.4)" >&2
+            exit 1
+          fi
+          PUBLISH=false
+          if [ "$EVENT" = workflow_dispatch ] && [ "$INPUT_PUBLISH" = true ]; then PUBLISH=true; fi
+          if [ "$EVENT" = push ] && printf '%s' "$MESSAGE" | grep -q '\[publish-native\]'; then PUBLISH=true; fi
+          gh release view "$TAG" --repo "${{ github.repository }}" --json tagName,isDraft --jq '"release " + .tagName + " draft=" + (.isDraft | tostring)'
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Native build::tag $TAG, publish $PUBLISH"
+
+  js:
+    name: Adapter tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Run the native adapter tests
+        run: |
+          node --test desktop/scripts/native-adapter.test.mjs
+
+  rust-linux:
+    name: Engine tests (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      tests: ${{ steps.tests.outcome }}
+      standard: ${{ steps.standard.outcome }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          key: native-tests
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev patchelf
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Prepare the native bundle
+        run: |
+          node scripts/prepare.mjs --native
+
+      - name: Compile the engine tests
+        working-directory: desktop/src-tauri
+        run: cargo test --features native-duckdb --no-run
+
+      - name: Engine and conversion tests with the real DuckDB
+        id: tests
+        continue-on-error: true
+        working-directory: desktop/src-tauri
+        env:
+          DUCKBENCH_TEST_EXCEL_EXT: ${{ github.workspace }}/desktop/src-tauri/native-resources/excel.duckdb_extension
+          DUCKBENCH_TEST_XLSX: ${{ github.workspace }}/desktop/src-tauri/tests/fixtures/book.xlsx
+        run: |
+          set -o pipefail
+          cargo test --features native-duckdb -- --nocapture --test-threads=4 2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      - name: Test log
+        if: always()
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.tests.outcome == 'success' && 'notice' || 'error' }}" "Rust tests (Linux): ${{ steps.tests.outcome }}" "$RUNNER_TEMP/tests.log" 45000
+
+      - name: The web-engine build still compiles and passes
+        id: standard
+        continue-on-error: true
+        working-directory: desktop/src-tauri
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee "$RUNNER_TEMP/standard.log"
+
+      - name: Standard build log
+        if: always()
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.standard.outcome == 'success' && 'notice' || 'error' }}" "Rust tests, standard build: ${{ steps.standard.outcome }}" "$RUNNER_TEMP/standard.log" 4000
+
+      - name: Keep the resolved lock file
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: desktop/src-tauri/Cargo.lock
+
+  smoke-linux:
+    name: Packaged app smoke test (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      selfcheck: ${{ steps.selfcheck.outcome }}
+      smoke: ${{ steps.smoke.outcome }}
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+      WEBKIT_DISABLE_COMPOSITING_MODE: '1'
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      GDK_BACKEND: x11
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          key: native-smoke
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config file xz-utils zstd libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev patchelf xvfb python3-venv
+          sudo apt-get install -y webkit2gtk-driver || sudo apt-get install -y webkitgtk-webdriver
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Build the native .deb
+        run: npx tauri build --bundles deb --features native-duckdb --config src-tauri/tauri.native.conf.json
+
+      - name: Check what the package contains
+        run: |
+          DEB="$(ls src-tauri/target/release/bundle/deb/*.deb | head -1)"
+          ls -la "$DEB"
+          dpkg-deb -c "$DEB" | grep -E 'excel.duckdb_extension|/usr/bin/'
+          dpkg-deb -c "$DEB" | grep -q 'excel.duckdb_extension'
+
+      - name: Restore tauri-driver
+        id: driver
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-ubuntu-24.04-v1
+
+      - name: Install tauri-driver
+        if: steps.driver.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+
+      - name: Install the package and the test tools
+        run: |
+          sudo apt-get install -y ./src-tauri/target/release/bundle/deb/*.deb
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install selenium duckdb
+          mkdir -p /tmp/probe
+          /tmp/venv/bin/python - <<'PY'
+          import duckdb
+          c = duckdb.connect()
+          q = "SELECT range AS id, 'name_' || range AS name, random() AS v FROM range(250000)"
+          c.execute(f"COPY ({q}) TO '/tmp/probe/big.csv' (HEADER)")
+          c.execute(f"COPY ({q}) TO '/tmp/probe/data.parquet' (FORMAT PARQUET)")
+          c.execute(f"COPY ({q}) TO '/tmp/probe/data.jsonl' (FORMAT JSON)")
+          PY
+          cp src-tauri/tests/fixtures/book.xlsx /tmp/probe/book.xlsx
+          echo "127.0.0.1 extensions.duckdb.org cdn.jsdelivr.net" | sudo tee -a /etc/hosts
+          sudo cp ~/.cargo/bin/tauri-driver /usr/local/bin/tauri-driver
+          which duckbench
+
+      - name: Headless self-check of the installed binary
+        id: selfcheck
+        continue-on-error: true
+        run: |
+          rm -f /tmp/selfcheck.json
+          /usr/bin/duckbench --selfcheck /tmp/selfcheck.json /tmp/probe/book.xlsx || true
+          cat /tmp/selfcheck.json
+          grep -q '"passed": true' /tmp/selfcheck.json
+
+      - name: Self-check report
+        if: always()
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.selfcheck.outcome == 'success' && 'notice' || 'error' }}" "Self-check (Linux): ${{ steps.selfcheck.outcome }}" /tmp/selfcheck.json 8000
+
+      - name: Smoke-test the installed app
+        id: smoke
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          xvfb-run -a --server-args="-screen 0 1280x800x24" /tmp/venv/bin/python .github/scripts/native_smoke_linux.py "$(which duckbench)" 2>&1 | tee /tmp/smoke.log
+
+      - name: Smoke report
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          node .github/scripts/annotate.mjs "${{ steps.smoke.outcome == 'success' && 'notice' || 'error' }}" "Smoke test (Linux): ${{ steps.smoke.outcome }}" /tmp/smoke.log 30000
+
+  windows:
+    name: Native installer (Windows)
+    needs: plan
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: desktop
+    outputs:
+      tests: ${{ steps.tests.outcome }}
+      selfcheck: ${{ steps.selfcheck.outcome }}
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          key: native-windows
+
+      - name: Stamp the version into the app config
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const f = 'src-tauri/tauri.conf.json';
+            const c = JSON.parse(fs.readFileSync(f, 'utf8'));
+            c.version = process.env.VERSION;
+            fs.writeFileSync(f, JSON.stringify(c, null, 2) + '\n');
+          "
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Prepare the native bundle
+        run: |
+          node scripts/prepare.mjs --native
+
+      - name: Check the Excel extension was bundled
+        shell: bash
+        run: test -s src-tauri/native-resources/excel.duckdb_extension
+
+      - name: Compile the engine tests
+        working-directory: desktop/src-tauri
+        run: cargo test --features native-duckdb --no-run
+
+      - name: Engine and conversion tests with the real DuckDB
+        id: tests
+        continue-on-error: true
+        shell: bash
+        working-directory: desktop/src-tauri
+        env:
+          DUCKBENCH_TEST_EXCEL_EXT: ${{ github.workspace }}/desktop/src-tauri/native-resources/excel.duckdb_extension
+          DUCKBENCH_TEST_XLSX: ${{ github.workspace }}/desktop/src-tauri/tests/fixtures/book.xlsx
+        run: |
+          set -o pipefail
+          cargo test --features native-duckdb -- --nocapture --test-threads=4 2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      - name: Test log
+        if: always()
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.tests.outcome == 'success' && 'notice' || 'error' }}" "Rust tests (Windows): ${{ steps.tests.outcome }}" "$RUNNER_TEMP/tests.log" 45000
+
+      - name: Build the installer
+        run: npx tauri build --bundles nsis --features native-duckdb --config src-tauri/tauri.native.conf.json
+
+      - name: Collect the installer and checksum
+        shell: bash
+        run: |
+          mkdir -p ../native-dist
+          for f in src-tauri/target/release/bundle/nsis/*.exe; do
+            cp "$f" "../native-dist/Duckbench-Native_${VERSION}_x64-setup.exe"
+          done
+          cd ../native-dist
+          sha256sum "Duckbench-Native_${VERSION}_x64-setup.exe" > "Duckbench-Native_${VERSION}_x64-setup.exe.sha256"
+          ls -la
+
+      - name: Install it silently and run the self-check on the installed app
+        id: selfcheck
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "..\native-dist\Duckbench-Native_${env:VERSION}_x64-setup.exe").Path
+          Start-Process -FilePath $installer -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Duckbench Native'
+          Get-ChildItem -Recurse $dir | Select-Object -First 40 FullName, Length | Format-Table -AutoSize
+          $exe = Join-Path $dir 'duckbench.exe'
+          if (-not (Test-Path $exe)) { throw "installed app not found at $exe" }
+          $out = Join-Path $env:RUNNER_TEMP 'selfcheck.json'
+          Remove-Item $out -ErrorAction SilentlyContinue
+          $book = (Resolve-Path 'src-tauri\tests\fixtures\book.xlsx').Path
+          $p = Start-Process -FilePath $exe -ArgumentList @('--selfcheck', "`"$out`"", "`"$book`"") -Wait -PassThru
+          if (Test-Path $out) { Get-Content $out } else { Write-Host 'no report was written' }
+          if ($p.ExitCode -ne 0) { throw "self-check failed with exit code $($p.ExitCode)" }
+
+      - name: Self-check report
+        if: always()
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/.github/scripts/annotate.mjs" "${{ steps.selfcheck.outcome == 'success' && 'notice' || 'error' }}" "Self-check (Windows): ${{ steps.selfcheck.outcome }}" "$RUNNER_TEMP/selfcheck.json" 8000
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-windows
+          path: native-dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  verdict:
+    name: All checks passed
+    if: ${{ always() }}
+    needs: [plan, js, rust-linux, smoke-linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every job and every test step to have passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          OUTCOMES: ${{ needs.rust-linux.outputs.tests }} ${{ needs.rust-linux.outputs.standard }} ${{ needs.smoke-linux.outputs.selfcheck }} ${{ needs.smoke-linux.outputs.smoke }} ${{ needs.windows.outputs.tests }} ${{ needs.windows.outputs.selfcheck }}
+        run: |
+          echo "jobs: $RESULTS"
+          echo "steps: $OUTCOMES"
+          for r in $RESULTS $OUTCOMES; do
+            if [ "$r" != success ]; then echo "::error::a check did not pass ($r)"; exit 1; fi
+          done
+
+  publish:
+    name: Attach to the release
+    if: ${{ needs.plan.outputs.publish == 'true' }}
+    needs: [plan, verdict, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-windows
+          path: native-dist
+
+      - name: Attach the installer
+        run: |
+          gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null
+          for f in native-dist/*; do
+            name="$(basename "$f")"
+            case "$name" in
+              Duckbench-Native_*) ;;
+              *) echo "refusing to upload $name" >&2; exit 1 ;;
+            esac
+          done
+          gh release upload "$TAG" native-dist/* --repo "${{ github.repository }}" --clobber
+
+      - name: Describe it in the release notes
+        run: |
+          BODY="$(gh release view "$TAG" --repo "${{ github.repository }}" --json body --jq .body)"
+          if printf '%s' "$BODY" | grep -q '^## Native DuckDB engine'; then
+            echo "The release notes already describe the native build."
+            exit 0
+          fi
+          cat > native-notes.md <<'NOTES'
+          ## Native DuckDB engine (Windows, pre-alpha)
+
+          `Duckbench-Native___VERSION___x64-setup.exe` is a second Windows installer, with a `.sha256` file. The other assets of this release are unchanged.
+
+          It is the same Duckbench interface, but DuckDB runs as a native engine inside the app instead of DuckDB-WASM in the web view, so it is not limited by browser memory. It installs next to the standard build as **Duckbench Native** and the two do not share settings.
+
+          - **What differs from the standard build.** DuckDB 2.0.0 runs natively with the Parquet and JSON extensions built in. The Excel extension is bundled, so Excel files open with DuckDB offline. Files are read in place from disk. Full-file exports are written to disk by DuckDB and moved to the place you choose, without passing through the browser. Running queries can be cancelled.
+          - **What is the same.** The interface, the visual steps, the JavaScript engine for everyday files, recipes, share links and the SQL console.
+          - **Tested before this was attached.** The engine tests run against the real DuckDB on Linux and Windows, including type conversion, large results, cancel, exports and the Excel extension. The Windows installer is installed silently on a runner and the installed app runs a headless self-check of DuckDB, Parquet export and the bundled Excel extension. The same build is packaged as a `.deb` on Linux and driven through the app with WebDriver over a 250,000-row CSV, Parquet and JSON Lines file, joins, group by, cancel, exports and Excel, with the network blocked.
+          - **Not tested.** The Windows window itself (clicking through the interface), the native Open and Save dialogs on Windows, drag and drop, and speed on multi-gigabyte files. Expect rough edges.
+          - **Limits.** The installer is unsigned, so Windows SmartScreen shows a warning (choose *More info*, then *Run anyway*). There is no auto-update. There is no macOS or Linux build of the native engine. SQL steps are checked by the app before they reach DuckDB, and DuckDB runs with your user's file permissions.
+          NOTES
+          sed -i "s/__VERSION__/$VERSION/g" native-notes.md
+          { printf '%s\n\n' "$BODY"; cat native-notes.md; } > notes-all.md
+          gh release edit "$TAG" --repo "${{ github.repository }}" --notes-file notes-all.md

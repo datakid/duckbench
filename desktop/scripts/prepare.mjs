@@ -2,11 +2,14 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, rea
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktop = resolve(here, '..');
 const web = resolve(desktop, '..');
 const dist = join(desktop, 'dist');
+const NATIVE = process.argv.includes('--native');
+const NATIVE_PLATFORMS = { 'win32-x64': 'windows_amd64', 'linux-x64': 'linux_amd64', 'darwin-arm64': 'osx_arm64', 'darwin-x64': 'osx_amd64' };
 
 const WEB_ENTRIES = ['index.html', 'demo.html', 'tests.html', 'parity.html', 'selftest.html', 'favicon.svg', 'css', 'fonts', 'js', 'vendor'];
 const DUCKDB_VERSION = '2.0.0';
@@ -40,8 +43,13 @@ function copyWeb() {
 function patchLibs() {
   const file = join(dist, 'js/engine/libs.js');
   const src = readFileSync(file, 'utf8');
-  const out = src.replace('export const LOCAL_LIBS = false;', 'export const LOCAL_LIBS = true;');
+  let out = src.replace('export const LOCAL_LIBS = false;', 'export const LOCAL_LIBS = true;');
   if (out === src) fail('could not switch js/engine/libs.js to bundled libraries');
+  if (NATIVE) {
+    const native = out.replace('export const NATIVE_DUCK = false;', 'export const NATIVE_DUCK = true;');
+    if (native === out) fail('could not switch js/engine/libs.js to the native DuckDB engine');
+    out = native;
+  }
   writeFileSync(file, out);
 }
 
@@ -68,16 +76,18 @@ async function bundleLibs() {
   const hpOut = join(vendor, 'hyparquet');
   mkdirSync(duckOut, { recursive: true });
   mkdirSync(hpOut, { recursive: true });
-  const duckDir = pkgDir('@duckdb/duckdb-wasm');
   const bundle = (contents, outfile) => esbuild.build({
     stdin: { contents, resolveDir: desktop, loader: 'js' },
     bundle: true, format: 'esm', platform: 'browser', target: 'es2020', minify: true, legalComments: 'none', outfile, logLevel: 'warning',
   });
-  await bundle(`export * from ${JSON.stringify(join(duckDir, 'dist/duckdb-browser.mjs').replace(/\\/g, '/'))};`, join(duckOut, 'duckdb.mjs'));
-  for (const f of ['duckdb-base.wasm', 'duckdb-browser-base.worker.js']) {
-    const src = join(duckDir, 'dist', f);
-    if (!existsSync(src)) fail(`DuckDB file missing: ${f}`);
-    cpSync(src, join(duckOut, f));
+  if (!NATIVE) {
+    const duckDir = pkgDir('@duckdb/duckdb-wasm');
+    await bundle(`export * from ${JSON.stringify(join(duckDir, 'dist/duckdb-browser.mjs').replace(/\\/g, '/'))};`, join(duckOut, 'duckdb.mjs'));
+    for (const f of ['duckdb-base.wasm', 'duckdb-browser-base.worker.js']) {
+      const src = join(duckDir, 'dist', f);
+      if (!existsSync(src)) fail(`DuckDB file missing: ${f}`);
+      cpSync(src, join(duckOut, f));
+    }
   }
   await bundle("export * from 'hyparquet';", join(hpOut, 'hyparquet.mjs'));
   await bundle("export * from 'hyparquet-compressors';", join(hpOut, 'hyparquet-compressors.mjs'));
@@ -95,6 +105,21 @@ async function bundleExtensions() {
     if (!res?.ok) { console.warn(`prepare: could not fetch ${url}; the DuckDB ${name} extension will be unavailable offline`); continue; }
     writeFileSync(target, Buffer.from(await res.arrayBuffer()));
   }
+}
+
+async function fetchNativeExtension() {
+  const platform = NATIVE_PLATFORMS[`${process.platform}-${process.arch}`];
+  if (!platform) fail(`no native DuckDB extension build for ${process.platform}-${process.arch}`);
+  const dir = join(desktop, 'src-tauri/native-resources');
+  const target = join(dir, 'excel.duckdb_extension');
+  mkdirSync(dir, { recursive: true });
+  if (existsSync(target) && statSync(target).size > 0) return;
+  const url = `https://extensions.duckdb.org/v${DUCKDB_VERSION}/${platform}/excel.duckdb_extension.gz`;
+  const res = await fetch(url).catch(() => null);
+  if (!res?.ok) fail(`could not download ${url}; the native build bundles the Excel extension so it works offline`);
+  const bytes = gunzipSync(Buffer.from(await res.arrayBuffer()));
+  if (!bytes.length) fail(`${url} was empty`);
+  writeFileSync(target, bytes);
 }
 
 function ensureIcons() {
@@ -120,6 +145,7 @@ copyWeb();
 patchLibs();
 patchCsp();
 await bundleLibs();
-await bundleExtensions();
+if (NATIVE) await fetchNativeExtension();
+else await bundleExtensions();
 ensureIcons();
-console.log(`prepare: desktop/dist ready (${(sizeOf(dist) / 1048576).toFixed(1)} MB, libraries bundled for offline use)`);
+console.log(`prepare: desktop/dist ready (${(sizeOf(dist) / 1048576).toFixed(1)} MB, ${NATIVE ? 'native DuckDB engine' : 'libraries bundled for offline use'})`);

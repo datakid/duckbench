@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — native DuckDB build (Windows)
+
+- **Duckbench Native.** A second Windows installer runs DuckDB 2.0.0 as a native engine inside the app instead of DuckDB-WASM in the web view. It is attached to a release next to the standard installer, which is unchanged, and installs beside it with its own settings. Same interface, steps, JavaScript engine, recipes, share links and SQL console.
+- **What the native engine gives.** DuckDB is no longer limited by browser memory and keeps its work database on disk. Files from the native Open dialog are read in place. Full-file exports are written to disk by DuckDB and moved to the chosen path without passing through the web view. Running queries can be cancelled. Parquet, JSON and Excel work offline: Parquet and JSON are built in and the Excel extension is bundled.
+- **How it is built.** A `native-duckdb` Cargo feature, `tauri.native.conf.json`, `prepare.mjs --native` and a `NATIVE_DUCK` switch in `js/engine/libs.js`. With the switch off, which is the default, `js/engine/duck.js` behaves exactly as before. Results are converted from Arrow to the same column shapes the web engine produces, including exact text for integers beyond 53 bits.
+- **Tests.** 18 JavaScript adapter tests with a mocked Tauri bridge, including saving a native export. Rust tests against the real DuckDB for value types, large results, truncation, registered files, Parquet, JSON and CSV exports, cancel, concurrent queries, staged files and reading an `.xlsx` file with the bundled extension, on Linux and Windows. A packaged `.deb` is installed and driven through the app with WebDriver with the network blocked. The Windows installer is installed silently on a runner and its `--selfcheck` mode checks the engine and the bundled Excel extension.
+- **Not covered.** Clicking through the Windows window, the native dialogs on Windows, drag and drop and multi-gigabyte files are not tested. The installer is unsigned and has no auto-update. There is no macOS or Linux release of the native engine.
+
 ## 2.4.0 — DuckDB 2.0 and show your work
 
 - **DuckDB 2.0.0.** The engine moves from DuckDB 1.4.3 (DuckDB-WASM 1.32.0) to DuckDB 2.0.0 (DuckDB-WASM 1.33.1-dev114.0). DuckDB-WASM publishes 2.0.0 builds on its `next` channel, so the version is pinned exactly. The desktop build now bundles the single `base` DuckDB-WASM bundle and mirrors only the `wasm_eh` Excel extension.

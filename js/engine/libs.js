@@ -1,4 +1,5 @@
 export const LOCAL_LIBS = false;
+export const NATIVE_DUCK = false;
 
 const CDN = {
   duckdb: 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev114.0/+esm',

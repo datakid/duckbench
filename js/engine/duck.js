@@ -1,4 +1,5 @@
-import { libUrl, duckBundles, LOCAL_LIBS, libSource } from './libs.js';
+import { libUrl, duckBundles, LOCAL_LIBS, NATIVE_DUCK, libSource } from './libs.js';
+import * as nd from './duck-native.js';
 
 const DUCKDB_VERSION = '1.33.1-dev114.0';
 const DUCKDB_DENY = new Set(['1.29.2']);
@@ -17,11 +18,13 @@ export function duckStatus() {
 
 export function duckVersion() { return state?.engineVersion || DUCKDB_VERSION; }
 export function duckStorage() { return state?.storage || null; }
+export function duckNative() { return NATIVE_DUCK; }
 
 const OPFS_PREFIX = 'duckbench_work_';
 const OPENED_FLAGS = { query: { castDecimalToDouble: true, castTimestampToDate: true } };
 
 export function opfsAvailable() {
+  if (NATIVE_DUCK) return false;
   try { return typeof navigator !== 'undefined' && !!navigator.storage && typeof navigator.storage.getDirectory === 'function'; } catch { return false; }
 }
 
@@ -76,6 +79,12 @@ export async function ensureDuck() {
   notify();
   state.promise = (async () => {
     try {
+      if (NATIVE_DUCK) {
+        const info = await nd.init();
+        Object.assign(state, { native: true, ready: true, engineVersion: String(info.version).replace(/^v/, ''), storage: 'native' });
+        notify();
+        return state;
+      }
       const duckdb = await import(libUrl('duckdb'));
       const bundle = await duckdb.selectBundle(LOCAL_LIBS ? duckBundles() : duckdb.getJsDelivrBundles());
       const workerUrl = LOCAL_LIBS ? null : URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
@@ -95,6 +104,7 @@ export async function ensureDuck() {
       lastError = e?.message || String(e);
       state = null;
       notify();
+      if (NATIVE_DUCK) throw new Error(`The native DuckDB engine could not start (${lastError}).`);
       throw new Error(`DuckDB could not be loaded from ${libSource()} (${lastError}).`);
     }
   })();
@@ -126,10 +136,11 @@ function csvCell(v, dt) {
 }
 
 let fileSeq = 0;
+const send = (s, sql) => (NATIVE_DUCK ? nd.exec(sql) : s.conn.query(sql));
 export async function putColumns(table, fields, columns, { append = false } = {}) {
   const s = await ensureDuck();
   if (!fields.length) {
-    await s.conn.query(`CREATE OR REPLACE TABLE ${qi(table)} AS SELECT NULL AS ${qi('_')} WHERE false`);
+    await send(s, `CREATE OR REPLACE TABLE ${qi(table)} AS SELECT NULL AS ${qi('_')} WHERE false`);
     return;
   }
   const n = columns[0]?.length ?? 0;
@@ -142,30 +153,40 @@ export async function putColumns(table, fields, columns, { append = false } = {}
     parts[r + 1] = line;
   }
   const fname = `__put_${++fileSeq}.csv`;
-  await s.db.registerFileText(fname, parts.join('\n') + '\n');
+  const csvText = parts.join('\n') + '\n';
+  if (NATIVE_DUCK) await nd.stageBytes(fname, new TextEncoder().encode(csvText), false);
+  else await s.db.registerFileText(fname, csvText);
   const spec = fields.map((f, c) => `${sqlStr(f.name)}: ${sqlStr(types[c])}`).join(', ');
   const reader = `read_csv(${sqlStr(fname)}, header=true, delim=',', quote='"', escape='"', nullstr=${sqlStr(NULL_TOKEN)}, allow_quoted_nulls=false, columns={${spec}}, auto_detect=false)`;
   try {
-    if (append) await s.conn.query(`INSERT INTO ${qi(table)} SELECT * FROM ${reader}`);
-    else await s.conn.query(`CREATE OR REPLACE TABLE ${qi(table)} AS SELECT * FROM ${reader}`);
+    if (append) await send(s, `INSERT INTO ${qi(table)} SELECT * FROM ${reader}`);
+    else await send(s, `CREATE OR REPLACE TABLE ${qi(table)} AS SELECT * FROM ${reader}`);
   } finally {
-    await s.db.dropFile(fname).catch(() => {});
+    if (NATIVE_DUCK) await nd.dropFile(fname).catch(() => {});
+    else await s.db.dropFile(fname).catch(() => {});
   }
 }
 
 export async function registerFile(name, file) {
   const s = await ensureDuck();
+  if (NATIVE_DUCK) { await nd.stageFile(name, file); return; }
   await s.db.registerFileHandle(name, file, s.duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
 }
 
 export async function registerUrl(name, url) {
   const s = await ensureDuck();
+  if (NATIVE_DUCK) {
+    const path = nd.pathFromUrl(url);
+    if (!path) throw new Error('The native DuckDB engine can only open files from disk.');
+    await nd.register(name, path);
+    return;
+  }
   await s.db.registerFileURL(name, url, s.duckdb.DuckDBDataProtocol.HTTP, false);
 }
 
 export async function dropFile(name) {
   if (!state?.ready) return;
-  try { await state.db.dropFile(name); } catch {}
+  try { await (NATIVE_DUCK ? nd.dropFile(name) : state.db.dropFile(name)); } catch {}
 }
 
 const LOCAL_EXTENSIONS = new URL('../../vendor/duckdb/extensions', import.meta.url).href;
@@ -173,6 +194,7 @@ const LOCAL_EXTENSIONS = new URL('../../vendor/duckdb/extensions', import.meta.u
 let excelReady = null;
 export function ensureExcel() {
   if (!excelReady) excelReady = (async () => {
+    if (NATIVE_DUCK) { await ensureDuck(); await nd.loadExcel(); return true; }
     if (LOCAL_LIBS) await exec(`SET custom_extension_repository = ${sqlStr(LOCAL_EXTENSIONS)}`);
     await exec('INSTALL excel'); await exec('LOAD excel'); return true;
   })().catch((e) => { excelReady = null; throw new Error(`The DuckDB Excel extension could not be loaded (${e.message.split('\n')[0]}). Import the file normally, or save the sheet as CSV.`); });
@@ -203,7 +225,7 @@ export function readerFor(name, format, options = {}) {
 
 export async function exec(sql) {
   const s = await ensureDuck();
-  return s.conn.query(sql);
+  return send(s, sql);
 }
 
 export async function createView(name, sql) { await exec(`CREATE OR REPLACE TEMP VIEW ${qi(name)} AS ${sql}`); }
@@ -382,6 +404,7 @@ function convertBatch(batch, fields, limit = Infinity) {
 
 export async function runQuery(sql, { maxRows = Infinity } = {}) {
   const s = await ensureDuck();
+  if (NATIVE_DUCK) return nd.query(sql, maxRows);
   const t0 = performance.now();
   const limited = Number.isFinite(maxRows) ? `SELECT * FROM (${sql}) LIMIT ${Math.floor(maxRows) + 1}` : sql;
   const res = await s.conn.query(limited);
@@ -403,6 +426,7 @@ export async function runQuery(sql, { maxRows = Infinity } = {}) {
 
 export async function schemaOf(sql) {
   const s = await ensureDuck();
+  if (NATIVE_DUCK) return nd.schema(sql);
   const res = await s.conn.query(`SELECT * FROM (${sql}) LIMIT 0`);
   return res.schema.fields.map(fieldInfo).map(f => ({ name: f.name, type: f.type }));
 }
@@ -414,22 +438,24 @@ function planRows(res) {
   return out;
 }
 
+const planLines = async (s, text) => (NATIVE_DUCK ? nd.plan(text) : planRows(await s.conn.query(text)));
+
 export async function explain(sql, { analyze = false } = {}) {
   const s = await ensureDuck();
   const t0 = performance.now();
   if (analyze) {
     try {
-      const res = await s.conn.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`);
+      const lines = await planLines(s, `EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`);
       const ms = performance.now() - t0;
-      const json = JSON.parse(planRows(res).join(''));
+      const json = JSON.parse(lines.join(''));
       const prof = profileFromJson(json);
       if (prof.ops.length) return { text: prof.text, ms, analyze, timings: prof };
     } catch {}
   }
   const t1 = performance.now();
-  const res = await s.conn.query(`EXPLAIN ${analyze ? 'ANALYZE ' : ''}${sql}`);
+  const lines = await planLines(s, `EXPLAIN ${analyze ? 'ANALYZE ' : ''}${sql}`);
   const ms = performance.now() - t1;
-  return { text: planRows(res).join('\n'), ms, analyze, timings: null };
+  return { text: lines.join('\n'), ms, analyze, timings: null };
 }
 
 export function profileFromJson(json) {
@@ -463,6 +489,7 @@ export async function queryColumns(sql, limit = Infinity) {
 
 export async function countRows(sql) {
   const s = await ensureDuck();
+  if (NATIVE_DUCK) return Number(await nd.count(sql));
   const res = await s.conn.query(`SELECT COUNT(*) AS n FROM (${sql})`);
   return Number(res.getChildAt(0).get(0));
 }
@@ -478,6 +505,7 @@ export async function copyTo(sql, format) {
   const s = await ensureDuck();
   const opt = COPY_OPTIONS[format];
   if (!opt) throw new Error(`DuckDB can’t write ${format}.`);
+  if (NATIVE_DUCK) return nd.copyBytes(sql, format);
   const out = `__out_${Date.now()}_${++fileSeq}.${format === 'jsonl' ? 'jsonl' : format}`;
   await s.conn.query(`COPY (${sql}) TO ${sqlStr(out)} ${opt}`);
   try { return await s.db.copyFileToBuffer(out); }
@@ -499,6 +527,7 @@ export async function copyToBlob(sql, format) {
   const s = await ensureDuck();
   const opt = COPY_OPTIONS[format];
   if (!opt) throw new Error(`DuckDB can’t write ${format}.`);
+  if (NATIVE_DUCK) { const out = await nd.copyFile(sql, format); return new nd.NativeFileBlob(out.path, out.size); }
   if (state?.storage !== 'opfs') return new Blob([await copyTo(sql, format)]);
   if (lastExport) { const old = lastExport; lastExport = null; await removeOpfsExport(old); }
   const name = `${OPFS_PREFIX}export_${Date.now().toString(36)}_${++fileSeq}.${format}`;
@@ -525,6 +554,7 @@ export async function copyToBlob(sql, format) {
 
 export async function cancelDuck() {
   if (!state?.ready) return false;
+  if (NATIVE_DUCK) { try { return await nd.cancel(); } catch { return false; } }
   try { return await state.conn.cancelSent(); } catch { return false; }
 }
 

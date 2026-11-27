@@ -4,13 +4,16 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tauri::http::{header, Request, Response, StatusCode};
 
-fn header_str(req: &tauri::ipc::Request<'_>, key: &str) -> Result<String, String> {
+#[cfg(feature = "native-duckdb")]
+mod native;
+
+pub(crate) fn header_str(req: &tauri::ipc::Request<'_>, key: &str) -> Result<String, String> {
     let v = req.headers().get(key).ok_or(format!("missing {key}"))?;
     let s = v.to_str().map_err(|e| e.to_string())?;
     Ok(percent_decode_str(s).decode_utf8_lossy().into_owned())
 }
 
-fn body_bytes<'a>(req: &'a tauri::ipc::Request<'_>) -> Result<&'a [u8], String> {
+pub(crate) fn body_bytes<'a>(req: &'a tauri::ipc::Request<'_>) -> Result<&'a [u8], String> {
     match req.body() {
         tauri::ipc::InvokeBody::Raw(b) => Ok(b),
         _ => Err("expected raw bytes".into()),
@@ -128,15 +131,55 @@ fn serve_file(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[cfg(feature = "native-duckdb")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(pos) = args.iter().position(|a| a == "--selfcheck") {
+            std::process::exit(native::selfcheck(&args[pos + 1..]));
+        }
+    }
+
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .register_uri_scheme_protocol("dbfile", |_ctx, req| serve_file(&req))
-        .invoke_handler(tauri::generate_handler![save_file, save_into_dir, file_meta, reveal_path])
-        .run(tauri::generate_context!())
-        .expect("error while running Duckbench");
+        .register_uri_scheme_protocol("dbfile", |_ctx, req| serve_file(&req));
+
+    #[cfg(feature = "native-duckdb")]
+    let builder = builder.manage(native::new_engine()).invoke_handler(tauri::generate_handler![
+        save_file,
+        save_into_dir,
+        file_meta,
+        reveal_path,
+        native::duck_init,
+        native::duck_query,
+        native::duck_schema,
+        native::duck_count,
+        native::duck_plan,
+        native::duck_exec,
+        native::duck_register,
+        native::duck_drop_file,
+        native::duck_stage,
+        native::duck_copy_bytes,
+        native::duck_copy_file,
+        native::duck_cancel,
+        native::duck_load_excel,
+        native::native_move_file
+    ]);
+
+    #[cfg(not(feature = "native-duckdb"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![save_file, save_into_dir, file_meta, reveal_path]);
+
+    let app = builder.build(tauri::generate_context!()).expect("error while building Duckbench");
+    app.run(|_handle, _event| {
+        #[cfg(feature = "native-duckdb")]
+        {
+            if let tauri::RunEvent::Exit = _event {
+                native::shutdown(_handle);
+            }
+        }
+    });
 }
 
 #[cfg(test)]
