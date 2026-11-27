@@ -54,6 +54,10 @@ function hideTip() {
   tipNode?.classList.remove('is-on');
 }
 
+function stillHovered(n) {
+  try { return n.matches(':hover'); } catch { return true; }
+}
+
 export function installTips() {
   const over = (e) => {
     const t = e.target;
@@ -62,9 +66,10 @@ export function installTips() {
     if (!n) { if (tipOwner) hideTip(); return; }
     const text = claim(n);
     if (!text) { hideTip(); return; }
+    if (e.pointerType === 'touch') { if (tipOwner) hideTip(); return; }
     if (n === tipOwner) return;
     hideTip();
-    tipTimer = setTimeout(() => { if (document.contains(n)) showTip(n, text); }, TIP_DELAY);
+    tipTimer = setTimeout(() => { if (document.contains(n) && stillHovered(n)) showTip(n, text); }, TIP_DELAY);
   };
   document.addEventListener('pointerover', over, true);
   document.addEventListener('pointermove', over, true);

@@ -113,6 +113,8 @@ export function parseDateSql(src, order = 'auto') {
 
 const jsRound = (n) => bind(n, (x) => `CASE WHEN ${x} - floor(${x}) >= 0.5 THEN ceil(${x}) ELSE floor(${x}) END`);
 
+const safeBigint = (n) => bind(n, (x) => `CASE WHEN abs(${x}) <= 9007199254740991 THEN CAST(${x} AS BIGINT) END`);
+
 function convertExpr(name, from, to, d) {
   const c = qi(name);
   if (to === 'text') {
@@ -129,7 +131,7 @@ function convertExpr(name, from, to, d) {
       n = d.lenient !== false ? lenientNumber(t, d.decimal || '.') : `CASE WHEN regexp_full_match(${t}, ${sqlStr(NUM)}) THEN TRY_CAST(${t} AS DOUBLE) END`;
     } else return null;
     if (to === 'number') return `CAST(${n} AS DOUBLE)`;
-    return from === 'number' ? `TRY_CAST(trunc(${c}) AS BIGINT)` : from === 'text' ? `TRY_CAST(${jsRound(n)} AS BIGINT)` : `CAST(${n} AS BIGINT)`;
+    return from === 'number' ? safeBigint(`trunc(${c})`) : from === 'text' ? safeBigint(jsRound(n)) : `CAST(${n} AS BIGINT)`;
   }
   if (to === 'boolean') {
     if (isNumeric(from)) return `(${c} <> 0)`;

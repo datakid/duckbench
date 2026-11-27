@@ -734,3 +734,23 @@ body.is-resizing{cursor:col-resize;user-select:none}
   .toast{max-width:none}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.001ms!important;animation-duration:.001ms!important}}
+@media (max-width:640px){
+  .tb-group{flex-wrap:wrap;max-width:100%}
+  .left-rail{max-height:none;overflow:visible}
+  .queries-panel{max-height:26vh}
+  .steps-panel{flex:none;max-height:36vh}
+  body:has(#rightRail:not([hidden])) .toast-host{bottom:calc(74vh + 20px)}
+}
+@media (pointer:coarse){
+  .btn-sm{height:36px}
+  .btn-xs{height:32px}
+  .icon-btn-sm{width:36px;height:36px}
+  .icon-btn-xs{width:32px;height:32px}
+  .tb-group .btn{height:32px}
+  .rb-small{height:32px}
+  .input-sm{height:36px}
+  .engine-pill{height:34px}
+  .toast-x{padding:10px}
+  .hf-link{padding:9px 4px}
+  .project-name{padding:6px 0}
+}

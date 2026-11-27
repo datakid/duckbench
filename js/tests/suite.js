@@ -1,7 +1,7 @@
 import { Engine } from '../engine/engine.js';
 import { TRANSFORMS, migrateStep } from '../core/transforms.js';
 import { parseCSV, csvEscape } from '../core/csv.js';
-import { inferColumnType, parseDateString, parseNumberString, formatValue } from '../core/types.js';
+import { inferColumnType, parseDateString, parseNumberString, formatValue, convertValue } from '../core/types.js';
 import { evaluateFormula } from '../core/formula.js';
 import { Frame } from '../core/frame.js';
 import { distinctValues } from '../core/profile.js';
@@ -84,6 +84,7 @@ export const TESTS = [
   ['rename — multi + v1 migration', () => { const r = run([{ type: 'rename_columns', data: { mapping: { customer: 'client', region: 'area' } } }, { type: 'rename_column', data: { column: 'client', newName: 'buyer' } }]); ok(r.names.includes('buyer') && r.names.includes('area')); }],
   ['change_type — v1 DOUBLE → number', () => { eq(run([{ type: 'change_type', data: { column: 'quantity', targetType: 'DOUBLE' } }]).types.quantity, 'number'); }],
   ['change_type — text → integer reports failures', () => { const r = run([{ type: 'change_type', data: { columns: ['customer'], type: 'integer' } }]); ok(r.col('customer').every(v => v == null)); ok(r.res.diag[0].warn.length > 0); }],
+  ['change_type — whole numbers beyond the safe range fail instead of losing digits', () => { eq(convertValue('1234567890123456789', 'integer', { lenient: true }), undefined); eq(convertValue(1e19, 'integer'), undefined); eq(convertValue('9007199254740991', 'integer', { lenient: true }), 9007199254740991); eq(convertValue('2.5', 'integer', { lenient: true }), 3); eq(convertValue(-2.7, 'integer'), -2); }],
   ['fill down', () => { const r = run([{ type: 'fill', data: { columns: ['customer'], direction: 'down' } }]); eq(r.col('customer')[3], 'Quinn Brooks'); }],
   ['replace empty values', () => { const r = run([{ type: 'replace_nulls', data: { columns: ['discount'], value: '0' } }]); ok(r.col('discount').every(v => v != null)); eq(r.types.discount, 'number'); }],
   ['split — columns', () => { const r = run([{ type: 'split_column', data: { column: 'customer', delimiter: ' ', mode: 'columns' } }]); ok(r.names.includes('customer_1') && r.names.includes('customer_2')); eq(r.col('customer_1')[0], 'Sam'); }],
