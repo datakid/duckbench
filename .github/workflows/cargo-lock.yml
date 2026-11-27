@@ -33,9 +33,11 @@ jobs:
         run: |
           SUM="$(sha256sum Cargo.lock | cut -c1-16)"
           xz -9e -c Cargo.lock | base64 -w0 > "$RUNNER_TEMP/lock.b64"
-          split -b 30000 -d "$RUNNER_TEMP/lock.b64" "$RUNNER_TEMP/lock.part."
+          split -b 3900 -d -a 3 "$RUNNER_TEMP/lock.b64" "$RUNNER_TEMP/lock.part."
           i=0
           for f in "$RUNNER_TEMP"/lock.part.*; do
-            node "${{ github.workspace }}/.github/scripts/annotate.mjs" notice "lock $SUM part $i" "$f" 30000
+            if [ "$i" -lt 10 ]; then level=notice; elif [ "$i" -lt 20 ]; then level=warning; else level=error; fi
+            node "${{ github.workspace }}/.github/scripts/annotate.mjs" "$level" "lock $SUM part $i" "$f" 4000
             i=$((i + 1))
           done
+          echo "parts: $i"
