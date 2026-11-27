@@ -153,6 +153,8 @@ export function inferColumnType(values) {
   return sawValue ? state : 'text';
 }
 
+const safeInteger = (n) => (Number.isSafeInteger(n) ? n : undefined);
+
 export function convertValue(v, type, opts = {}) {
   if (v == null) return null;
   switch (type) {
@@ -161,11 +163,11 @@ export function convertValue(v, type, opts = {}) {
       return formatValue(v, opts.fromType || guessJsType(v));
     }
     case 'integer': {
-      if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : null;
+      if (typeof v === 'number') return Number.isFinite(v) ? safeInteger(Math.trunc(v)) : null;
       if (typeof v === 'boolean') return v ? 1 : 0;
       if (typeof v === 'string' && v.trim() === '') return null;
       const n = parseNumberString(v, opts.lenient, opts.decimal);
-      return n == null ? undefined : Math.round(n);
+      return n == null ? undefined : safeInteger(Math.round(n));
     }
     case 'number': {
       if (typeof v === 'number') return Number.isFinite(v) ? v : null;

@@ -23,7 +23,10 @@ const LOOSE_R = 'name,code,info\nalice smith,a-1,first\nBOB JONES,B-2,second\nca
 const LOOSE_N = 'id,name,n\n1,Zoë,1\n2,zoe,2\n3,ÉLAN,3\n4,elan,4\n5,plain,5\n';
 const LOOSE_M = 'name,info\nzoe,a\nelan,b\nPLAIN,c\n';
 
+const BIGN = 'id,t,n\n1,12345678901234567890,1e19\n2,9007199254740991,9007199254740991\n3,2.5,-2.5\n4,abc,9.9\n5,-9007199254740993,-1e19\n';
 const CASES = [
+  ['change_type huge text→integer', 'bn', { type: 'change_type', data: { columns: ['t'], type: 'integer', lenient: true } }],
+  ['change_type huge number→integer', 'bn', { type: 'change_type', data: { columns: ['n'], type: 'integer' } }],
   ['trim_clean', 'x', { type: 'trim_clean', data: {} }],
   ['replace whole text', 's', { type: 'replace_values', data: { columns: ['status'], match: 'whole', find: 'Pending', replace: 'Open', caseSensitive: true } }],
   ['replace contains', 's', { type: 'replace_values', data: { columns: ['product'], match: 'contains', find: 'e', replace: '3', caseSensitive: true } }],
@@ -299,9 +302,10 @@ try {
   e.loadText({ id: 'll', name: 'll.csv', text: LOOSE_L, format: 'csv' });
   e.loadText({ id: 'lr', name: 'lr.csv', text: LOOSE_R, format: 'csv' });
   e.loadText({ id: 'ln', name: 'ln.csv', text: LOOSE_N, format: 'csv' });
+  e.loadText({ id: 'bn', name: 'bn.csv', text: BIGN, format: 'csv' });
   e.loadText({ id: 'lm', name: 'lm.csv', text: LOOSE_M, format: 'csv' });
   const base = {};
-  for (const id of ['s', 'r', 'x', 'p', 'w', 'z', 'jl', 'jr', 'll', 'lr', 'ln', 'lm']) {
+  for (const id of ['s', 'r', 'x', 'p', 'w', 'z', 'jl', 'jr', 'll', 'lr', 'ln', 'lm', 'bn']) {
     e.setQueries({ queries: [{ id, name: id, source: { kind: 'file', sourceId: id }, steps: [] }] });
     const r = e.evaluate({ queryId: id, pageSize: 1e6 });
     const cols = r.fields.map((_, c) => r.page.rows.map(row => row[c]));
