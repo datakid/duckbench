@@ -268,7 +268,7 @@ export function columnPicker(fields, selected, onChange, { ordered = false } = {
   };
   search.addEventListener('input', draw);
   draw();
-  box.append(fields.length > 6 ? el('div', { class: 'col-picker-head' }, search, tools) : el('div', { class: 'col-picker-head' }, tools), list, ordered ? el('div', { class: 'col-chips-wrap' }, el('span', { class: 'f-help' }, 'Order (drag to reorder):'), chips) : null);
+  put(box, fields.length > 6 ? el('div', { class: 'col-picker-head' }, search, tools) : el('div', { class: 'col-picker-head' }, tools), list, ordered ? el('div', { class: 'col-chips-wrap' }, el('span', { class: 'f-help' }, 'Order (drag to reorder):'), chips) : null);
   return box;
 }
 
@@ -305,7 +305,7 @@ function valueSet(v, column, ctx, set) {
   };
   let t;
   search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 180); });
-  box.append(mode, el('div', { class: 'vs-head' }, search,
+  put(box, mode, el('div', { class: 'vs-head' }, search,
     el('button', { class: 'link-btn', type: 'button', onclick: () => { const cur = new Set(state.list.map(String)); for (const x of values) if (!cur.has(String(x.value))) state.list.push(x.value); emit(); } }, 'All'),
     el('button', { class: 'link-btn', type: 'button', onclick: () => { state.list = []; emit(); } }, 'None')), list, meta);
   load();

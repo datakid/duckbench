@@ -871,7 +871,7 @@ async function openInspector(stepId) {
     commit(`Edit ${t.label}`);
     if (meta.key === 'rightSource' || (step.type === 'sql' && meta.key === 'tables')) setTimeout(() => openInspector(stepId), 320);
   });
-  clear(rail).append(
+  put(clear(rail),
     el('header', { class: 'rail-head' },
       el('span', { class: `step-code${step.type === 'sql' ? ' is-sql' : ''}` }, t?.code || '??'),
       el('div', { class: 'rail-title' }, el('h2', {}, step.name || t?.label || step.type), el('span', {}, `Step ${idx + 1} · input ${input.rowCount == null ? (q.source?.kind === 'duck' ? 'full file' : '—') : `${fmtCount(input.rowCount)} rows`} × ${fields.length} cols${step.type === 'sql' ? ' · DuckDB' : ''}`)),
@@ -908,7 +908,7 @@ async function renderProfile(column) {
   const fv = (v) => (v == null ? '—' : typeof v === 'number' ? formatValue(Math.round(v * 1e6) / 1e6, p.type) : String(v));
   const maxTop = Math.max(1, ...p.top.map(t => t.count));
   const hist = p.histogram ? el('div', { class: 'histogram', role: 'img', 'aria-label': 'Value distribution' }, (() => { const m = Math.max(...p.histogram.map(h => h.count)); return p.histogram.map(h => el('span', { class: 'hbar', style: { height: `${Math.max(2, (h.count / m) * 100)}%` }, title: `${fv(h.from)} – ${fv(h.to)}: ${h.count}` })); })()) : null;
-  clear(rail).append(
+  put(clear(rail),
     el('header', { class: 'rail-head' }, el('span', { class: `type-badge type-${p.type}` }, TYPE_LABELS[p.type]), el('div', { class: 'rail-title' }, el('h2', {}, column), el('span', {}, 'Column profile · all rows')), el('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: closeRight }, icon('x', 16))),
     el('div', { class: 'rail-body' },
       el('div', { class: 'quality-bar' }, el('span', { class: 'gq-valid', style: { width: pct(p.valid) } }), el('span', { class: 'gq-empty', style: { width: pct(p.empty) } })),
@@ -1693,7 +1693,7 @@ function openConsole(initial, { autorun = false } = {}) {
     if (!t) { timingBar.hidden = true; return; }
     const parts = [['DuckDB load', t.load], ['Prepare inputs', t.prepare], ['Query', t.run]].filter(([, v]) => v > 0.5);
     const total = Math.max(1, parts.reduce((a, [, v]) => a + v, 0));
-    clear(timingBar).append(
+    put(clear(timingBar),
       el('div', { class: 'ct-track' }, parts.map(([k, v], i) => el('span', { class: `ct-seg ct-${i}`, style: { width: `${Math.max(2, (v / total) * 100)}%` }, title: `${k}: ${fmtMs(v)}` }))),
       el('div', { class: 'ct-legend' }, parts.map(([k, v], i) => el('span', { class: 'ct-item' }, el('span', { class: `ct-dot ct-${i}` }), `${k} ${fmtMs(v)}`)), el('span', { class: 'ct-item ct-total' }, `Total ${fmtMs(t.total)}`)),
       ops && ops.length ? el('div', { class: 'ct-ops' }, ops.slice().sort((a, b) => b.seconds - a.seconds).slice(0, 8).map(o => el('span', { class: 'ct-op' }, el('code', {}, o.name), `${fmtMs(o.seconds * 1000)}`))) : null);
@@ -1832,7 +1832,7 @@ client.onBusy((n, label) => {
     const t0 = performance.now();
     busyTimer = setTimeout(() => {
       bar.hidden = false;
-      clear(bar).append(el('span', { class: 'job-dot' }), el('span', { class: 'job-label' }, `${label || 'Working'}…`), el('span', { class: 'job-time' }), client.canCancel ? el('button', { class: 'btn btn-ghost btn-xs', onclick: async () => { await sql.cancel(); await client.cancel(); await sql.reset(); bar.hidden = true; toast('Cancelled'); refresh(); } }, 'Cancel') : null, el('span', { class: 'job-progress', style: { width: '0%' } }));
+      put(clear(bar), el('span', { class: 'job-dot' }), el('span', { class: 'job-label' }, `${label || 'Working'}…`), el('span', { class: 'job-time' }), client.canCancel ? el('button', { class: 'btn btn-ghost btn-xs', onclick: async () => { await sql.cancel(); await client.cancel(); await sql.reset(); bar.hidden = true; toast('Cancelled'); refresh(); } }, 'Cancel') : null, el('span', { class: 'job-progress', style: { width: '0%' } }));
       bar._tick = setInterval(() => { const t = bar.querySelector('.job-time'); if (t) t.textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`; }, 200);
     }, 450);
   } else {

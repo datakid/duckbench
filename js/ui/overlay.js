@@ -1,4 +1,4 @@
-import { el, $, clear } from './dom.js';
+import { el, $, clear, put } from './dom.js';
 import { icon } from './icons.js';
 
 const stack = [];
@@ -53,7 +53,7 @@ export function modal({ title, body, footer, width = 520, className = '', onClos
     el('h2', { class: 'modal-title' }, title),
     dismissable ? el('button', { class: 'icon-btn modal-x', 'aria-label': 'Close', onclick: () => entry.close() }, icon('x', 16)) : null) : null;
   const content = el('div', { class: 'modal-body' });
-  if (body) content.append(...[].concat(body));
+  if (body) put(content, [].concat(body));
   const foot = footer ? el('footer', { class: 'modal-foot' }, ...[].concat(footer)) : null;
   box.append(...[head, content, foot].filter(Boolean));
   const backdrop = el('div', { class: 'modal-backdrop' }, box);
@@ -143,7 +143,7 @@ function placeNear(node, anchor, { align = 'start', side = 'bottom', offset = 4,
 
 export function popover(anchor, content, opts = {}) {
   const node = el('div', { class: `popover ${opts.className || ''}`, role: opts.role || 'dialog' });
-  node.append(...[].concat(content));
+  put(node, [].concat(content));
   placeNear(node, anchor, opts);
   let closed = false;
   const entry = {
